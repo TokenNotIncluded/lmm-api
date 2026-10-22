@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -57,19 +58,29 @@ def mapped(rows, factors=None, source_sha256=SOURCE_SHA256, **options):
 
 
 def target_contract(**options):
-    return {**MODULE.current_contract(), "catalog_fingerprint_sha256": "c" * 64, **options}
+    return {**MODULE.current_contract(), "catalog_fingerprint_sha256": "c" * 64,
+            "allow_initialized_core_seed": True, "initialized_core_seed_contract": MODULE.CORE_SEED_CONTRACT,
+            "initialized_core_seed_sha256": "d" * 64,
+            "trust_policy_seed": {
+                "singleton": True, "revision": 1, "spec": deepcopy(MODULE.DEFAULT_TRUST_POLICY),
+                "source_digest": hashlib.sha256(b"core-native-trust-policy-v1").hexdigest(),
+                "source_cutoff": 1791763200, "native_user_floor": 1,
+                "native_since": "2026-10-12T00:00:00+00:00"}, **options}
 
 
 def manifest_for(plan, **changes):
     return {"format_version": 2, "scope": "identity-only", "source_archive_sha256": SOURCE_SHA256,
             "identity_contract": MODULE.identity_contract(), "developer_access_policy": MODULE.DEVELOPER_POLICY,
             "initialized_core_seed_contract": MODULE.CORE_SEED_CONTRACT, "source_export_sha256": "d" * 64,
+            "import_tool_sha256": MODULE.sha256_file(SCRIPT),
+            "import_contract_sha256": hashlib.sha256(MODULE.canonical(MODULE.current_contract()).encode()).hexdigest(),
             "source_baseline_proof_sha256": "e" * 64, "source_target_id_map_sha256": hashlib.sha256(MODULE.id_map_bytes(plan["records"]).encode()).hexdigest(),
             "mapping_sha256": plan["mapping_sha256"], "summary": plan["summary"], **changes}
 
 
 def target_identity(**changes):
     return {"database": "synthetic_database", "role": "synthetic_owner", "database_owner": "synthetic_owner",
+            "session_user": "synthetic_installer", "effective_role_can_login": False,
             "database_oid": 12345, "port": 55432, "server_version_num": "180006",
             "postmaster_started_at": "2026-10-12 00:00:00+00", "server_instance_nonce": "synthetic-identity-fixture", **changes}
 
@@ -496,6 +507,68 @@ class DeveloperAccessTests(unittest.TestCase):
 
 
 class IdentityContractTests(unittest.TestCase):
+    def test_core26_assembly_uses_exact_concat_lf_and_telegram_alias(self):
+        schemas = MODULE.component_schemas()
+        self.assertEqual(len(schemas), 26)
+        root = MODULE.ROOT / "services/core/schema"
+        self.assertEqual(schemas["trust-pricing"], (root / "trust_pricing.sql").read_bytes()
+                         + b"\n" + (root / "image_trust_extension.sql").read_bytes())
+        self.assertEqual(schemas["telegram-auth"], (root / "telegram_auth.sql").read_bytes())
+        self.assertEqual(hashlib.sha256(MODULE.installer_metadata()).hexdigest(),
+                         MODULE.current_contract()["installer_contract_sha256"])
+
+    def test_unreviewed_component_bytes_and_installer_metadata_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(MODULE.ROOT / "services/core/src", root / "services/core/src")
+            shutil.copytree(MODULE.ROOT / "services/core/schema", root / "services/core/schema")
+            for name in ("trust_pricing.sql", "image_trust_extension.sql", "telegram_auth.sql",
+                         "core_upgrade.sql", "component_upgrade.sql", "events.sql"):
+                path = root / "services/core/schema" / name
+                original = path.read_bytes()
+                with self.subTest(name=name):
+                    path.write_bytes(original + b"\n")
+                    with self.assertRaises(MODULE.MappingError):
+                        MODULE.current_contract(root)
+                path.write_bytes(original)
+
+    def test_duplicate_unknown_modified_and_comment_shadowed_constants_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(MODULE.ROOT / "services/core/src", root / "services/core/src")
+            shutil.copytree(MODULE.ROOT / "services/core/schema", root / "services/core/schema")
+            mutations = (
+                ("core_schema.rs", '("trust-pricing", crate::billing::trust_pricing::SCHEMA),', ""),
+                ("core_schema.rs", '("trust-pricing", crate::billing::trust_pricing::SCHEMA),',
+                 '("trust-pricing", crate::billing::trust_pricing::SCHEMA),\n("trust-pricing", crate::billing::trust_pricing::SCHEMA),'),
+                ("core_schema.rs", "crate::billing::trust_pricing::SCHEMA", "crate::billing::unknown::SCHEMA"),
+                ("billing/trust_pricing.rs", '"\\n",', '"\\n ",'),
+                ("billing/trust_pricing.rs", '"\\n",', '"\\r\\n",'),
+                ("identity/mod.rs", "pub(crate) use telegram::SCHEMA as TELEGRAM_AUTH_SCHEMA;",
+                 "/* pub(crate) use telegram::SCHEMA as TELEGRAM_AUTH_SCHEMA; */"),
+                ("identity/mod.rs", "pub(crate) use telegram::SCHEMA as TELEGRAM_AUTH_SCHEMA;",
+                 "pub(crate) use missing::SCHEMA as TELEGRAM_AUTH_SCHEMA;"),
+                ("identity/telegram.rs", 'include_str!("../../schema/telegram_auth.sql")',
+                 'include_str!("../../schema/telegram_auth.sql ")'),
+            )
+            for name, before, after in mutations:
+                path = root / "services/core/src" / name
+                original = path.read_text()
+                self.assertIn(before, original)
+                with self.subTest(file=name, replacement=after):
+                    path.write_text(original.replace(before, after))
+                    with self.assertRaises(MODULE.MappingError):
+                        MODULE.current_contract(root)
+                path.write_text(original)
+
+    def test_constant_normalization_preserves_literal_whitespace(self):
+        expected = 'concat!(include_str!("../schema/a.sql"),"\\n",include_str!("../schema/b.sql"))'
+        MODULE._reviewed_constant('const SCHEMA: &str = ' + expected + ';', "SCHEMA", expected)
+        for bad in (expected.replace('"\\n"', '"\\n "'), expected.replace('a.sql', 'a .sql'),
+                    expected + ';\nconst SCHEMA: &str = ' + expected):
+            with self.subTest(expression=bad), self.assertRaises(MODULE.MappingError):
+                MODULE._reviewed_constant('const SCHEMA: &str = ' + bad + ';', "SCHEMA", expected)
+
     def test_oauth_catalog_query_changes_invalidate_frozen_contract(self):
         contract = MODULE.current_contract()
         original = Path.read_text
@@ -504,7 +577,8 @@ class IdentityContractTests(unittest.TestCase):
             source = original(path, *args, **kwargs)
             return source.replace('SELECT d FROM definitions', 'SELECT d||chr(32) AS d FROM definitions') if path == grants else source
         with patch.object(Path, "read_text", changed):
-            self.assertNotEqual(MODULE.current_contract()["oauth_catalog_query_sha256"], contract["oauth_catalog_query_sha256"])
+            with self.assertRaisesRegex(MODULE.MappingError, "^oauth_catalog_contract_changed$"):
+                MODULE.current_contract()
             with self.assertRaisesRegex(MODULE.MappingError, "^oauth_catalog_contract_changed$"):
                 MODULE.oauth_seed_guard_sql(contract)
 
@@ -519,9 +593,8 @@ class IdentityContractTests(unittest.TestCase):
         source = (MODULE.ROOT / "services/core/src/core_schema.rs").read_text()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "services/core/src").mkdir(parents=True)
-            (root / "services/core/schema").symlink_to(MODULE.ROOT / "services/core/schema", target_is_directory=True)
-            # Use real schema bytes, but preserve the helper's resolved-path guard.
+            shutil.copytree(MODULE.ROOT / "services/core/src", root / "services/core/src")
+            shutil.copytree(MODULE.ROOT / "services/core/schema", root / "services/core/schema")
             for name in ("identity", "commerce", "abuse", "history"):
                 self.assertIn('(\"' + name + '\", include_str!', source)
             for component in ("abuse", "history"):
@@ -531,12 +604,12 @@ class IdentityContractTests(unittest.TestCase):
                     changed = source.replace(original, replacement)
                     (root / "services/core/src/core_schema.rs").write_text(changed)
                     with patch.object(MODULE, "ROOT", root):
-                        with self.assertRaisesRegex(MODULE.MappingError, "^component_contract_incomplete$"):
+                        with self.assertRaisesRegex(MODULE.MappingError, "^component_rust_source_fingerprint_mismatch$"):
                             MODULE.current_contract()
 
     def test_current_source_raw_bytes_and_rust_version_match_pinned_review(self):
         contract = MODULE.identity_contract()
-        self.assertEqual(contract, {"identity_version": 4,
+        self.assertEqual(contract, {"identity_version": 5,
             "identity_fingerprint_sha256": hashlib.sha256(MODULE.IDENTITY_SCHEMA.read_bytes()).hexdigest()})
         self.assertEqual(contract["identity_fingerprint_sha256"], MODULE.IDENTITY_FINGERPRINT)
 
@@ -549,8 +622,8 @@ class IdentityContractTests(unittest.TestCase):
                     MODULE.identity_contract()
 
     def test_old_future_missing_or_duplicate_source_versions_are_rejected(self):
-        for contents in ("const VERSION: i32 = 2;", "const VERSION: i32 = 3;", "const VERSION: i32 = 5;", "",
-                         "const VERSION: i32 = 4;\nconst VERSION: i32 = 4;"):
+        for contents in ("const VERSION: i32 = 2;", "const VERSION: i32 = 4;", "const VERSION: i32 = 6;", "",
+                         "const VERSION: i32 = 5;\nconst VERSION: i32 = 5;"):
             with self.subTest(contents=contents), tempfile.TemporaryDirectory() as temporary:
                 rust = Path(temporary) / "schema.rs"
                 rust.write_text(contents)
@@ -573,6 +646,95 @@ class ImportSqlTests(unittest.TestCase):
             changes["manifest"] = {**options["manifest"], **changes["manifest"]}
         options.update(changes)
         return MODULE.build_import_sql(plan, **options), plan
+
+    def test_owner_login_and_missing_installer_are_rejected_before_sql(self):
+        for login in (None, "synthetic_owner", ""):
+            with self.subTest(login=login), self.assertRaisesRegex(MODULE.MappingError, "target_independent_installer_required"):
+                self.sql(target_identity=target_identity(session_user=login))
+        sql, _ = self.sql()
+        for privilege in ("rolcanlogin", "rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication", "rolbypassrls"):
+            self.assertIn(privilege, sql)
+        self.assertIn("pg_has_role(session_user,current_user,'MEMBER')", sql)
+
+    def test_fresh26_trust_seed_all_fields_and_dynamic_snapshot_are_bound(self):
+        contract = target_contract(allow_initialized_core_seed=True, initialized_core_seed_contract=MODULE.CORE_SEED_CONTRACT)
+        for field, value in (("singleton", False), ("revision", 2), ("source_digest", "f" * 64),
+                             ("source_cutoff", False), ("native_user_floor", 2), ("native_since", "2026-10-12")):
+            changed = deepcopy(contract)
+            changed["trust_policy_seed"][field] = value
+            with self.subTest(field=field), self.assertRaises(MODULE.MappingError):
+                self.sql(target_contract=changed)
+        for mutate in (
+            lambda spec: spec.update(paid_activation_enabled=False),
+            lambda spec: spec.update(decay_period_days=89),
+            lambda spec: spec["tiers"][2]["discount"].update(numerator=96),
+            lambda spec: spec["tiers"][4].update(min_paid_credits=99999999),
+            lambda spec: spec["admin_discount"].update(denominator=11),
+            lambda spec: spec["superadmin_discount"].update(numerator=8),
+            lambda spec: spec.update(extra_field=True),
+        ):
+            changed = deepcopy(contract)
+            mutate(changed["trust_policy_seed"]["spec"])
+            with self.assertRaisesRegex(MODULE.MappingError, "trust_seed_receipt_not_default"):
+                self.sql(target_contract=changed)
+        missing = deepcopy(contract)
+        del missing["initialized_core_seed_sha256"]
+        with self.assertRaisesRegex(MODULE.MappingError, "target_seed_hash_required"):
+            self.sql(target_contract=missing)
+        sql, _ = self.sql(target_contract=contract)
+        self.assertIn("non-canonical initialized trust seed", sql)
+        self.assertIn("initialized seed receipt mismatch", sql)
+        self.assertIn("initialized seed receipt changed", sql)
+        self.assertIn("seed_before->'trust_policy' IS DISTINCT FROM", sql)
+        code = without_literals_and_comments(do_block(sql)[1])
+        self.assertNotRegex(code, r"(?i)\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+core_trust_pricing")
+        self.assertNotIn("AND NOT (n.nspname='core_telegram_auth'", sql)
+        self.assertNotIn("c.relname IN ('user_bases'", sql)
+
+    def test_upgrade_receipts_all_sequences_and_end_catalog_are_checked(self):
+        sql, _ = self.sql()
+        for marker in ("fresh target has upgrade receipts", "fresh target upgrade receipts changed",
+                       "non-canonical sequence definition", "non-canonical unused sequence state",
+                       "non-import sequence changed", "identity sequence readback mismatch", "target catalog changed"):
+            self.assertIn(marker, sql)
+        self.assertIn("core_meta.schema_upgrades,core_meta.component_upgrades", sql)
+
+    def test_sequence_rows_are_serialized_explicitly_in_seed_and_guards(self):
+        seed_query = MODULE.fresh_seed_hash_query()
+        self.assertIn("jsonb_build_object('last_value',t.last_value,'log_cnt',t.log_cnt,'is_called',t.is_called)", seed_query)
+        self.assertNotIn("jsonb_agg(to_jsonb(t) ORDER BY last_value)", seed_query)
+        sql, _ = self.sql()
+        self.assertNotIn("SELECT to_jsonb(s) FROM core_billing.ledger_accounts_id_seq", sql)
+        self.assertNotIn("SELECT to_jsonb(s) FROM %I.%I s", sql)
+        self.assertEqual(sql.count("SELECT jsonb_build_object('last_value',s.last_value,'log_cnt',s.log_cnt,'is_called',s.is_called) FROM core_billing.ledger_accounts_id_seq"), 2)
+        self.assertEqual(sql.count("SELECT jsonb_build_object(''last_value'',s.last_value,''log_cnt'',s.log_cnt,''is_called'',s.is_called) FROM %I.%I s"), 2)
+        # Data and definition defenses remain on both sides of the import.
+        for marker in ("non-canonical sequence definition", "non-canonical unused sequence state",
+                       "non-import sequence changed", "identity sequence readback mismatch", "target catalog changed"):
+            self.assertIn(marker, sql)
+
+    def test_seed_capture_and_import_share_explicit_utc_contract(self):
+        sql, _ = self.sql()
+        self.assertIn("SET LOCAL timezone='UTC';", do_block(sql)[0])
+        seed_query, trust_query = MODULE.fresh_seed_hash_query(), MODULE.trust_policy_seed_query()
+        self.assertIn("t.created_at AT TIME ZONE 'UTC'", seed_query)
+        self.assertIn("t.native_since AT TIME ZONE 'UTC'", seed_query)
+        self.assertIn("p.native_since AT TIME ZONE 'UTC'", trust_query)
+        for query in (seed_query, trust_query):
+            self.assertIn("#>> '{}') || '+00:00'", query)
+            self.assertNotIn("set_config", query)
+            self.assertNotIn("date_trunc", query)
+
+    def test_old_receipt_cannot_be_reused_by_only_changing_identity_version(self):
+        plan = mapped([user()])
+        old = manifest_for(plan)
+        for field in ("import_tool_sha256", "import_contract_sha256"):
+            old.pop(field)
+        with self.assertRaisesRegex(MODULE.MappingError, "identity_manifest_mismatch"):
+            MODULE.validate_import_material(plan, SOURCE_SHA256, old)
+        for field in ("import_tool_sha256", "import_contract_sha256"):
+            with self.subTest(field=field), self.assertRaisesRegex(MODULE.MappingError, "identity_manifest_mismatch"):
+                MODULE.validate_import_material(plan, SOURCE_SHA256, manifest_for(plan, **{field: "f" * 64}))
 
     def test_quotes_backslashes_controls_and_unicode_roundtrip_as_data(self):
         original = user(username="模型 O'Reilly\\fixture", setting="quote ' \\ newline\n tab\t 雪")
@@ -651,14 +813,13 @@ class ImportSqlTests(unittest.TestCase):
                 self.sql(**changes)
 
     def test_core_seed_exception_requires_literal_boolean_opt_in(self):
-        default, _ = self.sql()
         base = target_contract()
         for value in (False, None, 0, 1, "true"):
-            with self.subTest(value=value):
-                sql, _ = self.sql(target_contract={**base, "allow_initialized_core_seed": value})
-                self.assertEqual(sql, default)
-        self.assertNotIn("non-canonical initialized core seed", default)
-        self.assertNotIn("non-canonical initialized ledger seed", default)
+            with self.subTest(value=value), self.assertRaisesRegex(MODULE.MappingError, "target_fresh26_seed_contract_required"):
+                self.sql(target_contract={**base, "allow_initialized_core_seed": value})
+        del base["allow_initialized_core_seed"]
+        with self.assertRaisesRegex(MODULE.MappingError, "target_fresh26_seed_contract_required"):
+            self.sql(target_contract=base)
 
     def test_core_seed_opt_in_requires_the_explicit_reviewed_seed_contract(self):
         for seed in (None, "", True, "ledger-zero-events-empty-routing-unset-v0", "ledger-zero-events-empty-routing-unset-v1", "ledger-zero-events-empty-routing-unset-abuse-default-v2"):
@@ -666,9 +827,9 @@ class ImportSqlTests(unittest.TestCase):
                 self.sql(target_contract=target_contract(allow_initialized_core_seed=True,
                     initialized_core_seed_contract=seed))
 
-    def test_version_four_and_exact_fingerprint_are_bound_to_sql(self):
+    def test_version_five_and_exact_fingerprint_are_bound_to_sql(self):
         sql, _ = self.sql()
-        self.assertIn("singleton AND version=4 AND encode(fingerprint,'hex')='" + MODULE.IDENTITY_FINGERPRINT + "'", sql)
+        self.assertIn("singleton AND version=5 AND encode(fingerprint,'hex')='" + MODULE.IDENTITY_FINGERPRINT + "'", sql)
         self.assertNotIn("version=2", sql)
 
     def test_developer_rows_are_atomic_counted_and_exactly_read_back(self):
@@ -723,13 +884,8 @@ class ImportSqlTests(unittest.TestCase):
 
     def test_ledger_only_seed_permission_does_not_allow_event_or_routing_seed(self):
         contract = target_contract(allow_initialized_zero_ledger_seed=True)
-        sql, _ = self.sql(target_contract=contract)
-        self.assertIn("non-canonical initialized ledger seed", sql)
-        self.assertNotIn("non-canonical initialized core seed", sql)
-        self.assertNotIn("AND NOT (n.nspname='public' AND c.relname='routing_active_release')", sql)
-        self.assertNotIn("AND NOT (n.nspname='core_events' AND c.relname='capacity')", sql)
-        self.assertNotIn("AND NOT (n.nspname='core_abuse' AND c.relname='settings')", sql)
-        self.assertNotIn("AND NOT (n.nspname='core_oauth' AND c.relname='contract')", sql)
+        with self.assertRaisesRegex(MODULE.MappingError, "target_fresh26_seed_contract_required"):
+            self.sql(target_contract=contract)
 
     def test_target_emptiness_scope_includes_public_and_other_application_schemas(self):
         sql, _ = self.sql()
@@ -1132,7 +1288,8 @@ class SourceExportGuardTests(unittest.TestCase):
             "status": "initialized-empty-identity-target", "registry_provisioned": True,
             "application_or_worker_started": False, "migration_id": "synthetic-unknown-commit",
             "source_archive_sha256": self.receipt["archive"]["sha256"],
-            "connection": {"database": target["database"], "role": target["role"], "port": target["port"]},
+            "connection": {"database": target["database"], "role": target["role"], "port": target["port"],
+                           "login_role": target["session_user"], "set_role": target["role"]},
             "instance_identity": {**target, "listen_addresses": ""}, "contract": target_contract(),
         }))
         target_path.chmod(0o600)
@@ -1273,7 +1430,7 @@ class RealIdentityTransactionTests(unittest.TestCase):
 
     The private receipt must attest status=initialized-empty-identity-fixture,
     synthetic_only=true, registry_provisioned=true, and no app/worker started.
-    It supplies connection, instance_identity, and the reviewed schema-4 contract
+    It supplies connection, instance_identity, and the reviewed schema-5 Core26 contract
     with allow_initialized_core_seed=true and initialized_core_seed_contract.
     Never use an application database here.
     Every database response and error stays in a new private Backups directory.
@@ -1286,6 +1443,12 @@ class RealIdentityTransactionTests(unittest.TestCase):
         self.assertTrue(receipt.get("synthetic_only") is True, "fixture_synthetic_attestation_missing")
         self.assertTrue(receipt.get("registry_provisioned") is True, "fixture_registry_missing")
         self.assertTrue(receipt.get("application_or_worker_started") is False, "fixture_application_started")
+        from test_financial_import_pg import verify_compiled_fixture
+        verify_compiled_fixture(receipt, expected_status="initialized-empty-identity-fixture")
+        self.assertTrue(receipt.get("initialized_by") == "core-init-db"
+                        and receipt.get("init_binary_sha256") == receipt["verified_binary"]["sha256"]
+                        and receipt.get("schema_manifest_sha256") == receipt["schema_manifest"]["sha256"],
+                        "fixture_core_init_proof_missing")
         contract = receipt.get("contract", {})
         self.assertTrue(contract.get("allow_initialized_core_seed") is True, "fixture_seed_permission_missing")
         self.assertTrue(contract.get("initialized_core_seed_contract") == MODULE.CORE_SEED_CONTRACT, "fixture_seed_contract_mismatch")
@@ -1294,6 +1457,8 @@ class RealIdentityTransactionTests(unittest.TestCase):
         private_dir = Path(tempfile.mkdtemp(prefix="identity-transaction-test-", dir=output_parent))
         MODULE.private_backup_path(private_dir, directory=True)
         connection = dict(receipt.get("connection", {}))
+        self.assertTrue(connection.get("login_role") != connection.get("role")
+                        and connection.get("set_role") == connection.get("role"), "fixture_independent_installer_required")
         if not connection.get("pgpass_file"):
             connection["pgpass_file"] = str(MODULE.write_private(private_dir, "fixture-empty.pgpass", ""))
 
@@ -1302,8 +1467,36 @@ class RealIdentityTransactionTests(unittest.TestCase):
             MODULE.write_private(private_dir, label + ".response.private.jsonl", response)
             return response
 
-        identity = json.loads(query("BEGIN READ ONLY;\n" + MODULE.IDENTITY_SQL + "\nCOMMIT;", "fixture-identity"))
+        identity = json.loads(query("BEGIN READ ONLY; SET LOCAL timezone='UTC';\n" + MODULE.IDENTITY_SQL + "\nCOMMIT;", "fixture-identity"))
+        self.assertTrue(180000 <= int(identity["server_version_num"]) < 190000, "fixture_pg18_required")
         MODULE.verify_instance(identity, connection, receipt.get("instance_identity", {}), source=False)
+        # This owned fixture deliberately uses a non-UTC database default.
+        # A new raw connection must observe it; generated A2 SQL pins its own
+        # transaction, while standalone seed captures normalize exact instants.
+        original_timezone = json.loads(query("""SELECT jsonb_build_object('timezone',(
+ SELECT substr(setting,strpos(setting,'=')+1) FROM pg_db_role_setting r,
+ LATERAL unnest(r.setconfig) setting WHERE r.setdatabase=(SELECT oid FROM pg_database WHERE datname=current_database())
+ AND r.setrole=0 AND lower(split_part(setting,'=',1))='timezone'));""", "fixture-original-database-timezone"))["timezone"]
+        database_name = '"' + connection["database"] + '"'
+        restore_timezone = "ALTER DATABASE " + database_name + (" RESET timezone;" if original_timezone is None
+            else " SET timezone TO " + MODULE.sql_literal(original_timezone) + ";")
+        self.addCleanup(query, restore_timezone, "fixture-restore-database-timezone", readonly=False)
+        query("ALTER DATABASE " + database_name + " SET timezone TO 'Asia/Shanghai';", "fixture-nonutc-database-default", readonly=False)
+        self.assertEqual(query("SHOW timezone;", "fixture-raw-nonutc-default").strip(), "Asia/Shanghai")
+        capture_sql = "SELECT jsonb_build_object('seed_sha256',(" + MODULE.fresh_seed_hash_query() + "),'trust_policy',(" + MODULE.trust_policy_seed_query() + "));"
+        captured_default = json.loads(query(capture_sql, "fixture-seed-default-timezone"))
+        captured_utc = json.loads(query("BEGIN READ ONLY; SET LOCAL timezone='UTC';\n" + capture_sql + "\nROLLBACK;", "fixture-seed-utc"))
+        self.assertEqual(captured_default, captured_utc, "standalone_seed_capture_depends_on_session_timezone")
+        self.assertEqual(captured_utc["seed_sha256"], contract["initialized_core_seed_sha256"])
+        self.assertEqual(captured_utc["trust_policy"], contract["trust_policy_seed"])
+        self.assertTrue(captured_utc["trust_policy"]["native_since"].endswith("+00:00"))
+        timestamp_sql = "SELECT jsonb_agg(jsonb_build_object('canonical'," + MODULE.utc_timestamp_text_sql("sample.instant") + ", 'raw',to_jsonb(sample.instant)) ORDER BY sample.instant) FROM (VALUES ('2026-10-22 08:09:10.123456+08'::timestamptz),('2026-10-22 08:09:10.123+08'::timestamptz),('2026-10-22 08:09:10+08'::timestamptz)) sample(instant);"
+        timestamps_default = json.loads(query(timestamp_sql, "fixture-canonical-nonutc-timestamps"))
+        timestamps_utc = json.loads(query("BEGIN READ ONLY; SET LOCAL timezone='UTC';\n" + timestamp_sql + "\nROLLBACK;", "fixture-canonical-utc-timestamps"))
+        self.assertEqual([row["canonical"] for row in timestamps_default], [row["raw"] for row in timestamps_utc])
+        self.assertTrue(all(row["canonical"] == row["raw"] for row in timestamps_utc))
+        self.assertNotEqual([row["raw"] for row in timestamps_default], [row["raw"] for row in timestamps_utc])
+        self.assertEqual([row["canonical"] for row in timestamps_utc], ["2026-10-22T00:09:10+00:00", "2026-10-22T00:09:10.123+00:00", "2026-10-22T00:09:10.123456+00:00"])
         names = json.loads(query("""BEGIN READ ONLY;
 SELECT json_build_object(
  'tables',(SELECT json_agg(c.relname ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core_identity' AND c.relkind IN ('r','p')),
@@ -1333,7 +1526,7 @@ COMMIT;
             parts = name.split(".")
             self.assertTrue(len(parts) == 2 and all(MODULE.IDENTIFIER.fullmatch(part) for part in parts), "fixture_sequence_identifier_invalid")
             relation = ".".join('"' + part + '"' for part in parts)
-            return "(SELECT jsonb_build_object('last_value',last_value,'is_called',is_called,'start_value',(SELECT seqstart FROM pg_sequence WHERE seqrelid=" + MODULE.sql_literal(name) + "::regclass),'definition',(SELECT to_jsonb(s) FROM pg_sequence s WHERE seqrelid=" + MODULE.sql_literal(name) + "::regclass)) FROM " + relation + ")"
+            return "(SELECT jsonb_build_object('last_value',last_value,'log_cnt',log_cnt,'is_called',is_called,'start_value',(SELECT seqstart FROM pg_sequence WHERE seqrelid=" + MODULE.sql_literal(name) + "::regclass),'definition',(SELECT to_jsonb(s) FROM pg_sequence s WHERE seqrelid=" + MODULE.sql_literal(name) + "::regclass)) FROM " + relation + ")"
 
         global_tables = []
         for entry in names["all_tables"]:
@@ -1350,6 +1543,7 @@ COMMIT;
             return "(" + " || ".join("jsonb_build_object(" + ",".join(arguments[start:start + 80]) + ")" for start in range(0, len(arguments), 80)) + ")"
 
         state_sql = """BEGIN READ ONLY;
+SET LOCAL timezone='UTC';
 SELECT jsonb_build_object(
  'all_tables',""" + object_sql(global_tables) + """,
  'all_sequences',""" + object_sql(all_sequences) + """,
@@ -1400,8 +1594,16 @@ SELECT jsonb_build_object(
             unauthorized = receipt.get("unauthorized_connection", {})
             self.assertTrue(unauthorized.get("role") == connection["role"] and unauthorized.get("set_role") == connection["role"]
                             and unauthorized.get("database") == connection["database"] and unauthorized.get("login_role") != connection["login_role"], "nonmember_fixture_contract_missing")
-            with self.assertRaises(MODULE.MappingError):
-                MODULE.psql(unauthorized, sql, readonly=False, private_dir=private_dir, label="nonmember-role-startup")
+            nonmember = unauthorized["login_role"]
+            self.assertRegex(nonmember, MODULE.IDENTIFIER)
+            # Grant only CONNECT for this negative role-switch check, then
+            # restore the offline fence before any import can be attempted.
+            query('GRANT CONNECT ON DATABASE "' + connection["database"] + '" TO "' + nonmember + '";', "nonmember-connect", readonly=False)
+            try:
+                with self.assertRaises(MODULE.MappingError):
+                    MODULE.psql(unauthorized, sql, readonly=False, private_dir=private_dir, label="nonmember-role-startup")
+            finally:
+                query('REVOKE CONNECT ON DATABASE "' + connection["database"] + '" FROM "' + nonmember + '";', "nonmember-disconnect", readonly=False)
             self.assertTrue("permission denied to set role" in (private_dir / "nonmember-role-startup.stderr.private.txt").read_text(), "nonmember_not_rejected_at_role_authority")
             self.assertTrue(state("state-after-nonmember") == before, "nonmember_changed_state")
 
@@ -1453,8 +1655,45 @@ SELECT jsonb_build_object(
             ("wrong-oauth-ddl", "UPDATE core_oauth.contract SET ddl_fingerprint=decode(repeat('aa',32),'hex');", "non-canonical initialized OAuth seed"),
             ("wrong-oauth-catalog", "UPDATE core_oauth.contract SET catalog_fingerprint=decode(repeat('aa',32),'hex');", "non-canonical initialized OAuth seed"),
             ("missing-oauth-seed", "DELETE FROM core_oauth.contract;", "non-canonical initialized OAuth seed"),
+            ("trust-seed-revision", "UPDATE core_trust_pricing.policies SET revision=2;", "non-canonical initialized trust seed"),
+            ("trust-seed-discount", "UPDATE core_trust_pricing.policies SET spec=jsonb_set(spec,'{tiers,2,discount,numerator}','96');", "non-canonical initialized trust seed"),
+            ("trust-seed-fence", "UPDATE core_trust_pricing.policies SET native_user_floor=2;", "non-canonical initialized trust seed"),
+            ("trust-seed-time", "UPDATE core_trust_pricing.policies SET native_since=native_since-interval '1 second';", "non-canonical initialized trust seed"),
+            ("trust-seed-cutoff", "UPDATE core_trust_pricing.policies SET source_cutoff=source_cutoff-1;", "non-canonical initialized trust seed"),
+            ("trust-seed-digest", "UPDATE core_trust_pricing.policies SET source_digest=decode(repeat('ab',32),'hex');", "non-canonical initialized trust seed"),
+            ("trust-seed-missing", "DELETE FROM core_trust_pricing.policies;", "non-canonical initialized trust seed"),
+            ("gift-seed-randomized", "UPDATE core_gift.risk_key SET secret=decode(repeat('ab',32),'hex');", "initialized seed receipt mismatch"),
+            ("telegram-not-empty", "INSERT INTO core_telegram_auth.assertions(digest) VALUES(decode(repeat('ab',32),'hex'));", "target business table is not empty"),
+            ("sequence-not-fresh", "ALTER SEQUENCE core_events.outbox_id_seq RESTART WITH 9;", "non-canonical unused sequence state"),
+            ("sequence-definition", "ALTER SEQUENCE core_events.outbox_id_seq CACHE 2;", "non-canonical sequence definition"),
+            ("identity-sequence-not-fresh", "ALTER SEQUENCE core_identity.users_id_seq RESTART WITH 9;", "non-canonical identity sequence state"),
+            ("unexpected-public-grant", "GRANT SELECT ON core_telegram_auth.assertions TO PUBLIC;", "target schema ownership or public privileges mismatch"),
         ):
             rejected(sql.replace("SELECT pg_advisory_xact_lock", mutation + "\nSELECT pg_advisory_xact_lock", 1), label, message, before)
+
+        # Insert structurally valid old-upgrade receipts; a catalog match alone
+        # must not misclassify an upgraded/history-bearing target as fresh.
+        base_upgrade = {
+            "upgrade_id": "synthetic-old-upgrade", "request_sha256": "\\x" + "ab" * 32,
+            "predecessor_manifest_sha256": "\\x" + "ab" * 32,
+            "predecessor_catalog_sha256": "\\x" + "ab" * 32,
+            "successor_manifest_sha256": "\\x" + "ab" * 32,
+            "successor_catalog_sha256": "\\x" + "ab" * 32,
+            "database_system_identifier": "123", "database_oid": int(identity["database_oid"]),
+            "database_name": identity["database"], "installer_role": identity["session_user"],
+            "owner_role": identity["role"], "runtime_role": "synthetic_runtime",
+            "extensions_role": "synthetic_extensions", "recorded_at": "2026-10-12T00:00:00+00:00",
+        }
+        for table, extra in (
+            ("schema_upgrades", {"procedure": "core-24-to-25-trust-pricing-v1", "image_definition_changes": [{}, {}]}),
+            ("component_upgrades", {"procedure": "core-additive-components-v1", "predecessor_components": 25,
+                "successor_components": 26, "delta_components": ["telegram-auth"], "added_catalog_entries": ["synthetic"],
+                "preserved_data_sha256": "\\x" + "ab" * 32, "preserved_permissions_sha256": "\\x" + "ab" * 32}),
+        ):
+            relation = "core_meta." + table
+            mutation = "INSERT INTO " + relation + " SELECT * FROM jsonb_populate_record(NULL::" + relation + "," + MODULE.sql_literal(MODULE.canonical({**base_upgrade, **extra})) + "::jsonb);"
+            rejected(sql.replace("SELECT pg_advisory_xact_lock", mutation + "\nSELECT pg_advisory_xact_lock", 1),
+                     "nonempty-" + table, "fresh target has upgrade receipts", before)
 
         preceding, commit, trailing = sql.rpartition("COMMIT;")
         self.assertTrue(bool(commit) and not trailing.strip(), "fixture_plan_commit_boundary_invalid")
@@ -1540,6 +1779,8 @@ SELECT jsonb_build_object(
             "other_business_rows_and_sequences_unchanged": True,
             "explicit_nologin_owner_login_member_contract_verified": "login_role" in connection,
             "wrong_session_owner_and_no_membership_rejected": "login_role" in connection,
+            "nonutc_database_default": "Asia/Shanghai", "standalone_seed_capture_timezone_invariant": True,
+            "utc_serialization_preserves_full_timestamp_precision": True,
         }) + "\n")
 
 

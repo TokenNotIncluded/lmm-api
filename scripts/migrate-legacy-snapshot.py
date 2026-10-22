@@ -51,18 +51,55 @@ MIGRATION_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")
 # This deliberately accepts only the format the Rust verifier currently uses.
 ARGON2 = re.compile(r"\$argon2id\$v=19\$m=19456,t=2,p=1\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)\Z")
 TABLES = ("accounts", "users", "user_profiles", "password_logins", "developer_access")
-IDENTITY_VERSION = 4
+IDENTITY_VERSION = 5
 # Bind this importer to the reviewed DDL, rather than trusting a caller's hash.
-IDENTITY_FINGERPRINT = "38e020822b4e986fd7b77ddb7a79925b4f05e2abdc0a0ce99222bb1c6df75e82"
+IDENTITY_FINGERPRINT = "c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9"
 IDENTITY_SCHEMA = Path(__file__).resolve().parents[1] / "services/core/schema/identity.sql"
 IDENTITY_SCHEMA_RUST = Path(__file__).resolve().parents[1] / "services/core/src/identity/schema.rs"
 ROOT = Path(__file__).resolve().parents[1]
-CORE_SEED_CONTRACT = "fresh24-ledger-zero-events-routing-abuse-oauth-humangrant-gift-credit-v4"
-CORE_COMPONENTS = frozenset({
-    "identity", "oauth-grants", "ledger", "payments", "charging", "routing",
-    "events", "charging-ledger", "migration", "console", "model-gateway",
-    "commerce", "abuse", "history", "humangrant", "assistant-model", "tool-market", "gift", "image", "market-oauth", "tool-market-credit", "assistant-tools", "wallet", "bounties",
-})
+CORE_SEED_CONTRACT = "fresh26-identity5-trust-policy-telegram-empty-v1"
+# Reviewed against 3e02d13435447181675f2d4c23fd7f6496339593. Byte changes require
+# a new review, never a caller-provided replacement fingerprint. Order is DDL order.
+REVIEWED_COMPONENTS = {
+    'humangrant': ('include_str!("../schema/humangrant.sql")', '7d9437a2ee485bc7491c76e755ca481a7a722c4ea9ae7322fe32ac5f8f0090bc'),
+    'identity': ('include_str!("../schema/identity.sql")', 'c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9'),
+    'ledger': ('include_str!("../schema/ledger.sql")', '50a7290ce860b676c38a2cf291f90e73a6d4422e3c7830ca904c6fbc6713e8ce'),
+    'payments': ('include_str!("../schema/payments.sql")', '9579afddbe5aeb4deb67984e731bcdc6ca405dc619ceede8d92505ecc43f7d39'),
+    'charging': ('include_str!("../schema/charging.sql")', '08f0a99e3cc7729627f782ec0341c31353008926b8ec8584c555a6c10dcb53de'),
+    'routing': ('include_str!("../schema/routing.sql")', 'd8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e'),
+    'events': ('include_str!("../schema/events.sql")', '99b3f6e9daa36c97fd18d515c8654310945612c0d992297b816a0405c17d5f22'),
+    'charging-ledger': ('include_str!("../schema/charging_ledger.sql")', 'a06370899332ece92cf54fe0fa24df70ea532480b09a19abf99a52a30a7d24de'),
+    'migration': ('include_str!("../schema/migration.sql")', '4f6264d3edff1bd7a1f80289595a9e4dea596e325be7c6f4db568d03e738c78c'),
+    'console': ('include_str!("../schema/console.sql")', 'cacb96580221513624075ed28a6afa45268197b6f8e2b83740cffb9f1cff7f56'),
+    'model-gateway': ('include_str!("../schema/model_gateway.sql")', '3550655d1318c7b33e1877d6eb5b98eb47f045a9c4cfb801d23331fcccb00be4'),
+    'commerce': ('include_str!("../schema/commerce.sql")', 'b7f9d07c4112623b34679b3043a1d315a4155ebe32688c2f878071a16f59b4c9'),
+    'tool-market': ('include_str!("../schema/tool_market.sql")', '404a5a6f6a459bca2eeeaf19be312324933e81999ef160b4befa796668c4d11c'),
+    'abuse': ('include_str!("../schema/abuse.sql")', 'b1c838d88f748c6bb3d885c4b39f112587bc8b7d38400c26ec43b3597110cec6'),
+    'oauth-grants': ('include_str!("../schema/oauth_grants.sql")', 'e515ba3deca6d5b0b170fc5a7fa32cf40a42301b683b62e8bb80bc23683b16f3'),
+    'history': ('include_str!("../schema/history.sql")', '9359e86f0f262e3f24bb9f8db70e32caab85cde515af6f2e5fdd1a66b4f83656'),
+    'assistant-model': ('include_str!("../schema/assistant_model.sql")', 'c3960ce7ac307b6d4aecc0abccd0c97614220eeb7c20f960177bb53a3c2c3f6b'),
+    'gift': ('include_str!("../schema/gift.sql")', '845cb755dd1ba92d9e5608f638d46367af3565bc3c5f383bb1aabc64929410d2'),
+    'image': ('include_str!("../schema/image.sql")', '5ec9f1e4ea14093285de9bd34fecef5660b10e73ac2828de41f3c2c26f013d11'),
+    'market-oauth': ('include_str!("../schema/market_oauth.sql")', '29819097b5470b4ecc8b1a7d7581d5abdc6b120df239edd6f4d373330086797e'),
+    'tool-market-credit': ('include_str!("../schema/tool_market_credit.sql")', '59b861b2a316b79bf0842ab13c07d0570b07bf3b84945f4edf8957ace4cc733f'),
+    'wallet': ('include_str!("../schema/wallet.sql")', '0b75972ef1aaa6b8b09b2d5e84636ba90aa8affcb4c1c30fbb7de18a9a9b95ad'),
+    'bounties': ('include_str!("../schema/bounties.sql")', '965aa476d684fcfb0c72b6d58b7bb801d37135414f3c73f2a08c688e88143e06'),
+    'assistant-tools': ('include_str!("../schema/assistant_tools.sql")', '9839e06cc0854c9efa60f30fef9c84a922dc18003b6317898df38a16c366aab4'),
+    'trust-pricing': ('crate::billing::trust_pricing::SCHEMA', '93e0e16b04c312d9e1f27a0ae8dc25f16da4e7c044571cc14310b81de8cf1915'),
+    'telegram-auth': ('crate::identity::TELEGRAM_AUTH_SCHEMA', 'd4734912cf68cdc8083356dc4301670cec27ec522e2c5ecaf2653a6a7d292510'),
+}
+CORE_COMPONENTS = frozenset(REVIEWED_COMPONENTS)
+CATALOG_QUERY_SHA256 = "7537b9a1dfd8e813d2aa5103467b8a7e3a444e134dd02617ef622117f0d647a3"
+OAUTH_CATALOG_QUERY_SHA256 = "39f6af7c6f19226a9daf794a5b897c630ca87670be3c1059f406fd8b4884cbca"
+INSTALLER_CONTRACT_SHA256 = "6aea904bb49fae92928ffbbac9550dd969ecc8d904874f0c72a649d240511481"
+REVIEWED_RUST_FILES = {
+    'services/core/src/core_schema.rs': 'd7bced696a25d4e3428783a146fb86570f178125507823afc4b9c855357326bc',
+    'services/core/src/identity/schema.rs': '37a1f70d63bba63bea18d18729772e4678499f2874cce74efd510917c3823343',
+    'services/core/src/identity/grants.rs': 'f54840add7d997dc90e6a4f6f817f61b1fc1ff0acb6c8f5a29d6ae1f19f8b060',
+    'services/core/src/identity/mod.rs': 'dd25f2848e46fa018e4aa55aa5d80b9fcf4bf766be2773de204f891637b9cefd',
+    'services/core/src/identity/telegram.rs': '2dd9950fa5052230155ebc512dd12038adbeeab90bd7963bb8cbf3ca145bb5eb',
+    'services/core/src/billing/trust_pricing.rs': 'c4c5f47d372fde4e5f7afd854a7a4691ef1b31ff74c1695d4242f0ab5133312f',
+}
 DEVELOPER_POLICY = "legacy-explicit-override-before-manual-v1-paid-unproven"
 
 
@@ -87,37 +124,120 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def identity_contract() -> dict:
+def identity_contract(root: Path | None = None) -> dict:
     """Only the reviewed schema/version may generate or execute an import."""
-    versions = re.findall(r"^const VERSION: i32 = ([0-9]+);$", IDENTITY_SCHEMA_RUST.read_text(), re.MULTILINE)
+    rust = IDENTITY_SCHEMA_RUST if root is None else root / "services/core/src/identity/schema.rs"
+    schema = IDENTITY_SCHEMA if root is None else root / "services/core/schema/identity.sql"
+    source = rust.read_text(encoding="utf-8")
+    versions = re.findall(r"^const VERSION: i32 = ([0-9]+);$", source, re.MULTILINE)
     require(versions == [str(IDENTITY_VERSION)], "identity_source_version_mismatch")
-    fingerprint = sha256_file(IDENTITY_SCHEMA)
+    _reviewed_constant(source, "SCHEMA", 'include_str!("../../schema/identity.sql")')
+    require(sha256_file(rust) == REVIEWED_RUST_FILES["services/core/src/identity/schema.rs"],
+            "identity_rust_source_fingerprint_mismatch")
+    fingerprint = sha256_file(schema)
     require(fingerprint == IDENTITY_FINGERPRINT, "identity_source_fingerprint_mismatch")
     return {"identity_version": IDENTITY_VERSION, "identity_fingerprint_sha256": fingerprint}
 
 
-def current_contract() -> dict:
-    """Extract the exact assembled installer; unknown syntax fails closed."""
-    expected = identity_contract()
-    path = ROOT / "services/core/src/core_schema.rs"
-    source = path.read_text(encoding="utf-8")
-    match = re.search(r"const COMPONENTS:\s*&\[\(&str,\s*&str\)\]\s*=\s*&\[(.*?)\];", source, re.S)
-    require(match is not None, "component_contract_syntax_unknown")
-    entries = re.compile(r'\(\s*"([a-z][a-z-]*)"\s*,\s*include_str!\("(\.\./schema/[a-z_]+\.sql)"\)\s*,?\s*\)')
-    require(re.fullmatch(r"[\s,]*", entries.sub("", match[1])) is not None, "component_contract_syntax_unknown")
+def _reviewed_constant(source: str, name: str, expression: str) -> None:
+    declarations = re.findall(r"(?:pub(?:\(crate\))?\s+)?const\s+" + re.escape(name) +
+                              r"\s*:\s*&str\s*=\s*(.*?);", source, re.S)
+    def normalize(value):
+        # Whitespace inside Rust strings is part of the compiled SQL/path.
+        return re.sub(r'"(?:\\.|[^"\\])*"|\s+',
+                      lambda match: match[0] if match[0].startswith('"') else "", value)
+    require(len(declarations) == 1 and normalize(declarations[0]) == normalize(expression),
+            "component_constant_not_reviewed")
+
+
+def _reviewed_rust(root: Path, relative: str) -> str:
+    path = root / relative
+    require(sha256_file(path) == REVIEWED_RUST_FILES[relative], "component_rust_source_fingerprint_mismatch")
+    return path.read_text(encoding="utf-8")
+
+
+def component_schemas(root: Path | None = None) -> dict[str, bytes]:
+    """Resolve only the reviewed includes, trust concat and Telegram alias.
+
+    This is intentionally not a Rust evaluator. Unknown expressions, duplicate
+    declarations, changed order, changed raw SQL and unresolved aliases fail.
+    The same function supplies test fixtures with the exact assembled bytes.
+    """
+    root = ROOT if root is None else Path(root)
+    path = root / "services/core/src/core_schema.rs"
+    source = _reviewed_rust(root, "services/core/src/core_schema.rs")
+    blocks = re.findall(r"const COMPONENTS:\s*&\[\(&str,\s*&str\)\]\s*=\s*&\[(.*?)\];", source, re.S)
+    require(len(blocks) == 1, "component_contract_syntax_unknown")
+    entries = re.compile(r'\(\s*"([a-z][a-z-]*)"\s*,\s*(include_str!\("\.\./schema/[a-z_]+\.sql"\)|[a-zA-Z_][a-zA-Z_0-9:]*)\s*,?\s*\)')
+    require(re.fullmatch(r"[\s,]*", entries.sub("", blocks[0])) is not None, "component_contract_syntax_unknown")
+    parsed = entries.findall(blocks[0])
+    names = [name for name, _ in parsed]
+    require(len(names) == len(set(names)), "component_contract_duplicate")
+    require(names == list(REVIEWED_COMPONENTS), "component_contract_incomplete")
     components = {}
-    for entry in entries.finditer(match[1]):
-        name, relative = entry.groups()
-        schema = (path.parent / relative).resolve()
-        require(schema.parent == (ROOT / "services/core/schema").resolve() and name not in components, "component_contract_invalid")
-        components[name] = sha256_file(schema)
-    require(components.get("identity") == expected["identity_fingerprint_sha256"]
-            and set(components) == CORE_COMPONENTS, "component_contract_incomplete")
+    for name, expression in parsed:
+        expected_expression, expected_digest = REVIEWED_COMPONENTS[name]
+        require(expression == expected_expression, "component_expression_not_reviewed")
+        if name == "trust-pricing":
+            trust = _reviewed_rust(root, "services/core/src/billing/trust_pricing.rs")
+            _reviewed_constant(trust, "SCHEMA", 'concat!(include_str!("../../schema/trust_pricing.sql"),"\\n",include_str!("../../schema/image_trust_extension.sql"))')
+            data = (root / "services/core/schema/trust_pricing.sql").read_bytes() + b"\n" + (root / "services/core/schema/image_trust_extension.sql").read_bytes()
+        elif name == "telegram-auth":
+            identity = _reviewed_rust(root, "services/core/src/identity/mod.rs")
+            aliases = re.findall(r"pub(?:\(crate\))?\s+use\s+([^;]*?)\s+as\s+TELEGRAM_AUTH_SCHEMA\s*;", identity)
+            require(aliases == ["telegram::SCHEMA"], "component_alias_not_reviewed")
+            telegram = _reviewed_rust(root, "services/core/src/identity/telegram.rs")
+            _reviewed_constant(telegram, "SCHEMA", 'include_str!("../../schema/telegram_auth.sql")')
+            data = (root / "services/core/schema/telegram_auth.sql").read_bytes()
+        else:
+            relative = re.fullmatch(r'include_str!\("([^"\\]+)"\)', expression)[1]
+            schema = (path.parent / relative).resolve()
+            require(schema.parent == (root / "services/core/schema").resolve(), "component_contract_invalid")
+            data = schema.read_bytes()
+        require(hashlib.sha256(data).hexdigest() == expected_digest, "component_source_fingerprint_mismatch")
+        components[name] = data
+    return components
+
+
+def installer_metadata(root: Path | None = None) -> bytes:
+    """Exact reviewed metadata DDL; callers may inspect, never auto-install it."""
+    root = ROOT if root is None else Path(root)
+    source = _reviewed_rust(root, "services/core/src/core_schema.rs")
+    contracts = re.findall(r'^const CONTRACT: &str = "([^"\\]*)";$', source, re.M)
+    require(len(contracts) == 1, "installer_contract_syntax_unknown")
+    _reviewed_constant(source, "UPGRADE_METADATA", 'include_str!("../schema/core_upgrade.sql")')
+    _reviewed_constant(source, "ADDITIVE_UPGRADE_METADATA", 'include_str!("../schema/component_upgrade.sql")')
+    data = contracts[0].encode("utf-8") + (root / "services/core/schema/core_upgrade.sql").read_bytes() + (root / "services/core/schema/component_upgrade.sql").read_bytes()
+    require(hashlib.sha256(data).hexdigest() == INSTALLER_CONTRACT_SHA256, "installer_source_fingerprint_mismatch")
+    return data
+
+
+def current_contract(root: Path | None = None) -> dict:
+    """Bind every compiled component, identity version and catalog query."""
+    root = ROOT if root is None else Path(root)
+    expected = identity_contract(root)
+    for path in REVIEWED_RUST_FILES:
+        _reviewed_rust(root, path)
+    components = {name: hashlib.sha256(data).hexdigest() for name, data in component_schemas(root).items()}
+    source = _reviewed_rust(root, "services/core/src/core_schema.rs")
     catalogs = re.findall(r'const CATALOG:\s*&str\s*=\s*r#"(.*?)"#;', source, re.S)
     require(len(catalogs) == 1, "catalog_contract_syntax_unknown")
+    require(hashlib.sha256(catalogs[0].encode()).hexdigest() == CATALOG_QUERY_SHA256, "catalog_source_fingerprint_mismatch")
+    paths = {"services/core/src/core_schema.rs", "services/core/src/identity/schema.rs",
+             "services/core/src/identity/grants.rs", "services/core/src/identity/mod.rs",
+             "services/core/src/identity/telegram.rs", "services/core/src/billing/trust_pricing.rs",
+             "services/core/schema/core_upgrade.sql", "services/core/schema/component_upgrade.sql",
+             "services/core/schema/trust_pricing.sql", "services/core/schema/image_trust_extension.sql",
+             "services/core/schema/telegram_auth.sql"}
+    for expression, _ in REVIEWED_COMPONENTS.values():
+        include = re.fullmatch(r'include_str!\("\.\./schema/([a-z_]+\.sql)"\)', expression)
+        if include:
+            paths.add("services/core/schema/" + include[1])
     return {**expected, "component_fingerprints": components,
-            "catalog_query_sha256": hashlib.sha256(catalogs[0].encode()).hexdigest(), "catalog_query": catalogs[0],
-            "oauth_catalog_query_sha256": hashlib.sha256(oauth_catalog_query().encode()).hexdigest()}
+            "catalog_query_sha256": CATALOG_QUERY_SHA256, "catalog_query": catalogs[0],
+            "installer_contract_sha256": hashlib.sha256(installer_metadata(root)).hexdigest(),
+            "oauth_catalog_query_sha256": hashlib.sha256(oauth_catalog_query(root).encode()).hexdigest(),
+            "source_file_hashes": {path: sha256_file(root / path) for path in sorted(paths)}}
 
 
 def catalog_hash_sql(contract: dict) -> str:
@@ -125,11 +245,13 @@ def catalog_hash_sql(contract: dict) -> str:
     return "SELECT encode(sha256(coalesce(string_agg(int8send(octet_length(convert_to(definition,'UTF8'))::bigint)||convert_to(definition,'UTF8'),''::bytea ORDER BY definition COLLATE \"C\"),''::bytea)),'hex') FROM (" + contract["catalog_query"] + ") catalog_definitions"
 
 
-def oauth_catalog_query() -> str:
-    source = (ROOT / "services/core/src/identity/grants.rs").read_text(encoding="utf-8")
+def oauth_catalog_query(root: Path | None = None) -> str:
+    root = ROOT if root is None else Path(root)
+    source = _reviewed_rust(root, "services/core/src/identity/grants.rs")
     catalogs = re.findall(r'const CATALOG:\s*&str\s*=\s*r#"(.*?)"#;', source, re.S)
     require(len(catalogs) == 1, "oauth_catalog_contract_syntax_unknown")
     require('VALUES (1,$1,$2)' in source, "oauth_seed_version_unknown")
+    require(hashlib.sha256(catalogs[0].encode()).hexdigest() == OAUTH_CATALOG_QUERY_SHA256, "oauth_catalog_contract_changed")
     return catalogs[0]
 
 
@@ -149,6 +271,101 @@ def oauth_seed_guard_sql(contract: dict) -> str:
             " AND encode(catalog_fingerprint,'hex')=(" + actual + "))")
 
 
+DEFAULT_TRUST_POLICY = {
+    "version": 1, "paid_activation_enabled": True, "decay_period_days": 90,
+    "tiers": [
+        {"level": 0, "min_paid_credits": 0, "discount": {"numerator": 1, "denominator": 1}},
+        {"level": 1, "min_paid_credits": 500000, "discount": {"numerator": 1, "denominator": 1}},
+        {"level": 2, "min_paid_credits": 5000000, "discount": {"numerator": 97, "denominator": 100}},
+        {"level": 3, "min_paid_credits": 25000000, "discount": {"numerator": 94, "denominator": 100}},
+        {"level": 4, "min_paid_credits": 100000000, "discount": {"numerator": 9, "denominator": 10}},
+    ],
+    "admin_discount": {"numerator": 9, "denominator": 10},
+    "superadmin_discount": {"numerator": 9, "denominator": 10},
+}
+
+
+def utc_timestamp_text_sql(column: str) -> str:
+    """Match PostgreSQL UTC JSON timestamp text without losing fractional digits.
+
+    The caller supplies a reviewed SQL column expression. Converting to UTC
+    before JSON serialization also makes standalone readbacks independent of
+    session/database TimeZone, without changing settings inside a SELECT.
+    """
+    return "(to_jsonb(" + column + " AT TIME ZONE 'UTC') #>> '{}') || '+00:00'"
+
+
+def trust_policy_seed_query() -> str:
+    """Owner captures the exact UTC readback before approving a fresh26 import."""
+    return ("SELECT to_jsonb(p)||jsonb_build_object('source_digest',encode(source_digest,'hex'),"
+            "'native_since'," + utc_timestamp_text_sql("p.native_since") + ") "
+            "FROM core_trust_pricing.policies p")
+
+
+def validate_trust_policy_seed(seed: dict) -> None:
+    fixed = {"singleton": True, "revision": 1, "spec": DEFAULT_TRUST_POLICY,
+             "source_digest": hashlib.sha256(b"core-native-trust-policy-v1").hexdigest(),
+             "native_user_floor": 1}
+    require(isinstance(seed, dict) and set(seed) == set(fixed) | {"source_cutoff", "native_since"},
+            "trust_seed_receipt_invalid")
+    # Canonical JSON comparison distinguishes booleans from integers and covers
+    # every nested policy field. No caller-chosen policy is a fresh seed.
+    require(all(canonical(seed[key]) == canonical(value) for key, value in fixed.items()),
+            "trust_seed_receipt_not_default")
+    require(type(seed["source_cutoff"]) is int and 0 < seed["source_cutoff"] <= 253402300799
+            and isinstance(seed["native_since"], str), "trust_seed_receipt_invalid")
+    try:
+        since = datetime.fromisoformat(seed["native_since"])
+        valid = since.tzinfo is not None and since.timestamp() >= seed["source_cutoff"]
+    except (ValueError, OverflowError):
+        valid = False
+    require(valid, "trust_seed_receipt_invalid")
+
+
+def trust_policy_seed_guard_sql(contract: dict) -> str:
+    seed = contract.get("trust_policy_seed")
+    validate_trust_policy_seed(seed)
+    return ("(SELECT count(*) FROM core_trust_pricing.policies)<>1 OR (" +
+            trust_policy_seed_query() + ") IS DISTINCT FROM " + sql_literal(canonical(seed)) + "::jsonb")
+
+
+def upgrade_receipts_guard_sql() -> str:
+    return ("EXISTS(SELECT 1 FROM core_meta.schema_upgrades) "
+            "OR EXISTS(SELECT 1 FROM core_meta.component_upgrades)")
+
+
+def fresh_seed_hash_query() -> str:
+    """Bind all seed fields in UTC, including the physical sequence row fields."""
+    relations = {
+        "ledger_accounts": ("core_billing.ledger_accounts", "id"),
+        "balance_state": ("core_billing.balance_state", "ledger_account_id"),
+        "ledger_sequence": ("core_billing.ledger_accounts_id_seq", "last_value"),
+        "event_capacity": ("core_events.capacity", "singleton"),
+        "routing_release": ("public.routing_active_release", "singleton"),
+        "abuse_settings": ("core_abuse.settings", "singleton"),
+        "oauth_contract": ("core_oauth.contract", "singleton"),
+        "human_grant_gate": ("core_humangrant.human_grant_gate", "id"),
+        "gift_risk_key": ("core_gift.risk_key", "singleton"),
+        "gift_policy": ("core_gift.policy", "singleton"),
+        "credit_policy": ("core_tool_market.credit_policy", "singleton"),
+        "trust_policy": ("core_trust_pricing.policies", "singleton"),
+    }
+    fields = []
+    for key, (relation, order) in relations.items():
+        # PostgreSQL sequences have no composite row type for to_jsonb(t).
+        # Keep the same physical fields that the old whole-row intent covered.
+        row_json = ("jsonb_build_object('last_value',t.last_value,'log_cnt',t.log_cnt,'is_called',t.is_called)"
+                    if key == "ledger_sequence" else "to_jsonb(t)")
+        # These are the only TIMESTAMPTZ columns in the pinned fresh26 seeds.
+        # Keep every other column and the original UTC JSON representation.
+        timestamp = {"ledger_accounts": "created_at", "trust_policy": "native_since"}.get(key)
+        if timestamp:
+            row_json += "||jsonb_build_object(" + sql_literal(timestamp) + "," + utc_timestamp_text_sql("t." + timestamp) + ")"
+        fields.append(sql_literal(key) + ",COALESCE((SELECT jsonb_agg(" + row_json + " ORDER BY " +
+                      order + ") FROM " + relation + " t),'[]'::jsonb)")
+    return "SELECT encode(sha256(convert_to(jsonb_build_object(" + ",".join(fields) + ")::text,'UTF8')),'hex')"
+
+
 def id_map_bytes(records: list[dict]) -> str:
     return "".join(canonical({"source_user_id": row["user_id"], "target_user_id": row["user_id"],
                               "target_personal_account_id": row["account_id"]}) + "\n" for row in records)
@@ -164,6 +381,8 @@ def validate_import_material(plan: dict, source_sha256: str, manifest: dict) -> 
             and manifest.get("scope") == "identity-only" and manifest.get("source_archive_sha256") == source_sha256
             and manifest.get("identity_contract") == identity_contract() and manifest.get("developer_access_policy") == DEVELOPER_POLICY
             and manifest.get("initialized_core_seed_contract") == CORE_SEED_CONTRACT
+            and manifest.get("import_tool_sha256") == sha256_file(Path(__file__).resolve())
+            and manifest.get("import_contract_sha256") == hashlib.sha256(canonical(current_contract()).encode()).hexdigest()
             and manifest.get("mapping_sha256") == plan["mapping_sha256"] and manifest.get("summary") == plan.get("summary")
             and manifest.get("source_target_id_map_sha256") == hashlib.sha256(id_map_bytes(records).encode()).hexdigest(), "identity_manifest_mismatch")
     require(all(isinstance(manifest.get(field), str) and HEX.fullmatch(manifest[field]) for field in
@@ -525,11 +744,12 @@ def export_source(receipt: dict, output: Path) -> tuple[dict, list[dict], list[d
     require(len(baseline_users) == 1 and type(baseline_users[0]) is int and baseline_users[0] >= 0, "source_row_baseline_invalid")
     # The snapshot owner records this identity after creating the readonly role.
     expected = dict(receipt.get("source_instance_identity", {}))
-    identity = json.loads(psql(reader, "BEGIN READ ONLY;\n" + IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="source-identity"))
+    identity = json.loads(psql(reader, "BEGIN READ ONLY; SET LOCAL timezone='UTC';\n" + IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="source-identity"))
     verify_instance(identity, reader, expected, source=True)
     # Fetch complete original user objects, not a lossy selected-field projection.
     # Secrets in these private objects must never reach stdout, fixtures or Git.
     sql = f"""BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL timezone='UTC';
 SET LOCAL row_security=off;
 SELECT json_build_object('kind','identity','row',({IDENTITY_SQL.removesuffix(';').removeprefix('SELECT ')}));
 SELECT json_build_object('kind','schema_identity','row',json_build_object('schema',nspname,'schema_owner',pg_get_userbyid(nspowner))) FROM pg_namespace WHERE nspname='{schema}';
@@ -593,7 +813,8 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
     require(isinstance(target_contract, dict) and all(target_contract.get(key) == value for key, value in expected_contract.items()), "target_contract_invalid")
     require(type(target_contract.get("identity_version")) is int, "target_contract_invalid")
     contract = current_contract()
-    for key in ("component_fingerprints", "catalog_query_sha256", "oauth_catalog_query_sha256"):
+    for key in ("component_fingerprints", "catalog_query_sha256", "oauth_catalog_query_sha256",
+                "installer_contract_sha256", "source_file_hashes"):
         require(target_contract.get(key) == contract[key], "target_assembled_contract_invalid")
     catalog_hash = target_contract.get("catalog_fingerprint_sha256", "")
     require(isinstance(catalog_hash, str) and HEX.fullmatch(catalog_hash) is not None, "target_catalog_hash_invalid")
@@ -607,12 +828,19 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
         require(isinstance(target_identity.get(key), str) and bool(target_identity[key]) and "\0" not in target_identity[key], "target_identity_incomplete")
     require(IDENTIFIER.fullmatch(target_identity["database"]) is not None and IDENTIFIER.fullmatch(target_identity["role"]) is not None
             and target_identity["database_owner"] == target_identity["role"], "target_identity_invalid")
-    login = target_identity.get("session_user", target_identity["role"])
-    require(isinstance(login, str) and IDENTIFIER.fullmatch(login) is not None, "target_login_identity_invalid")
+    login = target_identity.get("session_user")
+    require(isinstance(login, str) and IDENTIFIER.fullmatch(login) is not None
+            and login != target_identity["role"], "target_independent_installer_required")
     role_guard = f"""
  IF current_user<>{sql_literal(target_identity['role'])} OR session_user<>{sql_literal(login)}
  OR (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database())<>{sql_literal(target_identity['role'])}
- {"OR EXISTS(SELECT 1 FROM pg_roles WHERE rolname=" + sql_literal(target_identity['role']) + " AND rolcanlogin)" if login != target_identity['role'] else ""} THEN
+ OR EXISTS(SELECT 1 FROM pg_roles WHERE rolname={sql_literal(target_identity['role'])}
+  AND (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
+ OR NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname={sql_literal(login)} AND rolcanlogin
+  AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
+ OR EXISTS(SELECT 1 FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname<>session_user
+  AND has_database_privilege(oid,current_database(),'CONNECT'))
+ OR NOT pg_has_role(session_user,current_user,'MEMBER') THEN
   RAISE EXCEPTION 'target session or effective owner mismatch';
  END IF;
 """
@@ -634,13 +862,22 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
         sql_body_digest_placeholder += "X"
     privileged_count = sum(1 for row in plan["records"] if row["platform_role"] in ("admin", "superadmin"))
     allow_core_seed = target_contract.get("allow_initialized_core_seed") is True
+    # There is only one supported target here: the complete fresh Core26
+    # installer. Deleting its seeds cannot opt into an older empty/ledger-only
+    # contract, even if its catalog definition hash still matches.
+    require(allow_core_seed and "allow_initialized_zero_ledger_seed" not in target_contract,
+            "target_fresh26_seed_contract_required")
     if allow_core_seed:
         require(target_contract.get("initialized_core_seed_contract") == CORE_SEED_CONTRACT, "target_seed_contract_invalid")
+        require(isinstance(target_contract.get("initialized_core_seed_sha256"), str)
+                and HEX.fullmatch(target_contract["initialized_core_seed_sha256"]) is not None,
+                "target_seed_hash_required")
     allow_seed = target_contract.get("allow_initialized_zero_ledger_seed") is True or allow_core_seed
     seed_exclusion = "AND NOT (n.nspname='core_billing' AND c.relname IN ('ledger_accounts','balance_state'))" if allow_seed else ""
     if allow_core_seed:
         seed_exclusion += " AND NOT (n.nspname='core_events' AND c.relname='capacity') AND NOT (n.nspname='public' AND c.relname='routing_active_release') AND NOT (n.nspname='core_abuse' AND c.relname='settings') AND NOT (n.nspname='core_oauth' AND c.relname='contract')"
         seed_exclusion += " AND NOT (n.nspname='core_humangrant' AND c.relname='human_grant_gate') AND NOT (n.nspname='core_gift' AND c.relname IN ('risk_key','policy')) AND NOT (n.nspname='core_tool_market' AND c.relname='credit_policy')"
+        seed_exclusion += " AND NOT (n.nspname='core_trust_pricing' AND c.relname='policies')"
     seed_guard = """
  IF (SELECT count(*) FROM core_billing.ledger_accounts)<>2
  OR (SELECT count(*) FROM core_billing.balance_state)<>2
@@ -655,7 +892,7 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
  END IF;
  SELECT jsonb_build_object('accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM core_billing.ledger_accounts a),
   'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b),
-  'ledger_sequence',(SELECT to_jsonb(s) FROM core_billing.ledger_accounts_id_seq s)) INTO seed_before;
+  'ledger_sequence',(SELECT jsonb_build_object('last_value',s.last_value,'log_cnt',s.log_cnt,'is_called',s.is_called) FROM core_billing.ledger_accounts_id_seq s)) INTO seed_before;
 """ if allow_seed else ""
     if allow_core_seed:
         seed_guard += """
@@ -687,11 +924,14 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
   'credit_policy',(SELECT to_jsonb(c) FROM core_tool_market.credit_policy c));
 """
         seed_guard += " IF " + oauth_seed_guard_sql(contract) + " THEN RAISE EXCEPTION 'non-canonical initialized OAuth seed'; END IF;\n"
+        seed_guard += " IF " + trust_policy_seed_guard_sql(target_contract) + " THEN RAISE EXCEPTION 'non-canonical initialized trust seed'; END IF;\n"
+        seed_guard += " IF (" + fresh_seed_hash_query() + ") IS DISTINCT FROM " + sql_literal(target_contract["initialized_core_seed_sha256"]) + " THEN RAISE EXCEPTION 'initialized seed receipt mismatch'; END IF;\n"
+        seed_guard += " seed_before := seed_before || jsonb_build_object('trust_policy',(" + trust_policy_seed_query() + "));\n"
     seed_readback = """
- IF seed_before - ARRAY['event_capacity','routing_release','abuse_settings','oauth_contract','human_grant_gate','gift_risk_key','gift_policy','credit_policy'] IS DISTINCT FROM jsonb_build_object(
+ IF seed_before - ARRAY['event_capacity','routing_release','abuse_settings','oauth_contract','human_grant_gate','gift_risk_key','gift_policy','credit_policy','trust_policy'] IS DISTINCT FROM jsonb_build_object(
   'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM core_billing.ledger_accounts a),
   'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b),
-  'ledger_sequence',(SELECT to_jsonb(s) FROM core_billing.ledger_accounts_id_seq s)) THEN
+  'ledger_sequence',(SELECT jsonb_build_object('last_value',s.last_value,'log_cnt',s.log_cnt,'is_called',s.is_called) FROM core_billing.ledger_accounts_id_seq s)) THEN
   RAISE EXCEPTION 'initialized ledger seed changed';
  END IF;
 """ if allow_seed else ""
@@ -708,10 +948,13 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
   RAISE EXCEPTION 'initialized core seed changed';
  END IF;
 """
+        seed_readback += " IF seed_before->'trust_policy' IS DISTINCT FROM (" + trust_policy_seed_query() + ") THEN RAISE EXCEPTION 'initialized trust seed changed'; END IF;\n"
+        seed_readback += " IF (" + fresh_seed_hash_query() + ") IS DISTINCT FROM " + sql_literal(target_contract["initialized_core_seed_sha256"]) + " THEN RAISE EXCEPTION 'initialized seed receipt changed'; END IF;\n"
     application_tables = "c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema','core_meta','core_migration') AND left(n.nspname,3)<>'pg_'"
     # No persistent DDL and no finance writes. Lock all owned business tables so
     # emptiness, inserts, readback and receipt are one SERIALIZABLE transaction.
     sql = f"""BEGIN ISOLATION LEVEL SERIALIZABLE;
+SET LOCAL timezone='UTC';
 SET LOCAL synchronous_commit=on;
 SET LOCAL standard_conforming_strings=on;
 SET LOCAL row_security=off;
@@ -726,6 +969,10 @@ DECLARE payload JSONB := {payload}::jsonb;
  occupied BOOLEAN;
  expected_count BIGINT := jsonb_array_length(payload);
  seed_before JSONB;
+ sequence_before JSONB := '{{}}'::jsonb;
+ sequence_after JSONB;
+ sequence_value JSONB;
+ sequence_row RECORD;
  actual_catalog TEXT;
 BEGIN
  {role_guard}
@@ -735,26 +982,61 @@ BEGIN
  OR pg_postmaster_start_time()<>{sql_literal(target_identity['postmaster_started_at'])}::timestamptz
  OR current_setting('server_version_num')<>{sql_literal(str(target_identity['server_version_num']))}
  OR current_setting('lmm.migration_instance_nonce',true) IS DISTINCT FROM {sql_literal(target_identity['server_instance_nonce'])}
- OR current_setting('port')::int<>{target_identity['port']} OR inet_server_addr() IS NOT NULL THEN
+ OR current_setting('port')::int<>{target_identity['port']} OR inet_server_addr() IS NOT NULL
+ OR current_setting('listen_addresses')<>'' THEN
   RAISE EXCEPTION 'target instance identity mismatch';
  END IF;
  IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid()) THEN
   RAISE EXCEPTION 'target has other database clients';
  END IF;
- LOCK TABLE core_meta.schema_contract,core_meta.component_contract,core_meta.runtime_contract,core_migration.import_runs IN ACCESS EXCLUSIVE MODE;
- IF NOT EXISTS (SELECT 1 FROM core_meta.schema_contract WHERE singleton AND version={IDENTITY_VERSION} AND encode(fingerprint,'hex')={sql_literal(fingerprint)}) THEN
+ LOCK TABLE core_meta.schema_contract,core_meta.component_contract,core_meta.runtime_contract,core_meta.schema_upgrades,core_meta.component_upgrades,core_migration.import_runs IN ACCESS EXCLUSIVE MODE;
+ IF (SELECT count(*) FROM core_meta.schema_contract)<>1 OR NOT EXISTS (SELECT 1 FROM core_meta.schema_contract WHERE singleton AND version={IDENTITY_VERSION} AND encode(fingerprint,'hex')={sql_literal(fingerprint)}) THEN
   RAISE EXCEPTION 'identity contract mismatch';
+ END IF;
+ IF {upgrade_receipts_guard_sql()} THEN
+  RAISE EXCEPTION 'fresh target has upgrade receipts';
+ END IF;
+ IF EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'
+  AND c.relkind IN ('r','p','S','v','m','f') AND pg_get_userbyid(c.relowner)<>current_user) THEN
+  RAISE EXCEPTION 'target object owner mismatch';
+ END IF;
+ IF EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema','public')
+  AND left(n.nspname,3)<>'pg_' AND pg_get_userbyid(n.nspowner)<>current_user)
+ OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'
+  AND pg_get_userbyid(p.proowner)<>current_user)
+ OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace,
+  LATERAL aclexplode(c.relacl) a WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+  AND left(n.nspname,3)<>'pg_' AND a.grantee=0) THEN
+  RAISE EXCEPTION 'target schema ownership or public privileges mismatch';
  END IF;
  FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
   WHERE {application_tables} ORDER BY n.nspname,c.relname
  LOOP EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE',table_row.nspname,table_row.relname); END LOOP;
  SELECT ({catalog_hash_sql(contract)}) INTO actual_catalog;
  IF actual_catalog<>{sql_literal(catalog_hash)}
+ OR (SELECT count(*) FROM core_meta.runtime_contract)<>1
  OR NOT EXISTS(SELECT 1 FROM core_meta.runtime_contract WHERE singleton AND encode(catalog_fingerprint,'hex')=actual_catalog)
  OR (SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract) IS DISTINCT FROM {sql_literal(canonical(contract['component_fingerprints']))}::jsonb THEN
   RAISE EXCEPTION 'installed core contract or actual catalog mismatch';
  END IF;
  {seed_guard}
+ FOR sequence_row IN SELECT n.nspname,c.relname,q.* FROM pg_sequence q JOIN pg_class c ON c.oid=q.seqrelid
+  JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'
+  ORDER BY n.nspname,c.relname
+ LOOP
+  IF sequence_row.seqtypid<>'bigint'::regtype OR sequence_row.seqstart<>1 OR sequence_row.seqincrement<>1
+   OR sequence_row.seqmin<>1 OR sequence_row.seqmax<>9223372036854775807 OR sequence_row.seqcache<>1 OR sequence_row.seqcycle THEN
+   RAISE EXCEPTION 'non-canonical sequence definition';
+  END IF;
+  EXECUTE format('SELECT jsonb_build_object(''last_value'',s.last_value,''log_cnt'',s.log_cnt,''is_called'',s.is_called) FROM %I.%I s',sequence_row.nspname,sequence_row.relname) INTO sequence_value;
+  sequence_before := sequence_before || jsonb_build_object(sequence_row.nspname||'.'||sequence_row.relname,sequence_value);
+  IF sequence_row.nspname||'.'||sequence_row.relname NOT IN ('core_identity.accounts_id_seq','core_identity.users_id_seq','core_billing.ledger_accounts_id_seq')
+   AND ((sequence_value->>'last_value')::bigint<>1 OR (sequence_value->>'is_called')::boolean) THEN
+   RAISE EXCEPTION 'non-canonical unused sequence state';
+  END IF;
+ END LOOP;
  SELECT * INTO previous FROM core_migration.import_runs WHERE migration_id={run_id} FOR UPDATE;
  IF FOUND THEN
   IF previous.source_archive_sha256<>{source_hash} OR previous.mapping_sha256<>{mapping_hash} OR previous.manifest<>{run_manifest}::jsonb THEN
@@ -763,6 +1045,10 @@ BEGIN
  ELSE
   IF EXISTS(SELECT 1 FROM core_migration.import_runs) THEN
    RAISE EXCEPTION 'target already belongs to another migration';
+  END IF;
+  IF (SELECT last_value<>1 OR is_called FROM core_identity.accounts_id_seq)
+   OR (SELECT last_value<>1 OR is_called FROM core_identity.users_id_seq) THEN
+   RAISE EXCEPTION 'non-canonical identity sequence state';
   END IF;
   FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
    WHERE {application_tables}
@@ -870,6 +1156,27 @@ BEGIN
   RAISE EXCEPTION 'privileged import facts mismatch';
  END IF;
  {seed_readback}
+ sequence_after := '{{}}'::jsonb;
+ FOR sequence_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE c.relkind='S' AND n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'
+ LOOP
+  EXECUTE format('SELECT jsonb_build_object(''last_value'',s.last_value,''log_cnt'',s.log_cnt,''is_called'',s.is_called) FROM %I.%I s',sequence_row.nspname,sequence_row.relname) INTO sequence_value;
+  sequence_after := sequence_after || jsonb_build_object(sequence_row.nspname||'.'||sequence_row.relname,sequence_value);
+ END LOOP;
+ IF sequence_before - ARRAY['core_identity.accounts_id_seq','core_identity.users_id_seq'] IS DISTINCT FROM
+    sequence_after - ARRAY['core_identity.accounts_id_seq','core_identity.users_id_seq'] THEN
+  RAISE EXCEPTION 'non-import sequence changed';
+ END IF;
+ IF (SELECT last_value<>COALESCE((SELECT max((r->>'account_id')::bigint)+1 FROM jsonb_array_elements(payload) r),1) OR is_called FROM core_identity.accounts_id_seq)
+ OR (SELECT last_value<>COALESCE((SELECT max((r->>'user_id')::bigint)+1 FROM jsonb_array_elements(payload) r),1) OR is_called FROM core_identity.users_id_seq) THEN
+  RAISE EXCEPTION 'identity sequence readback mismatch';
+ END IF;
+ IF {upgrade_receipts_guard_sql()} THEN RAISE EXCEPTION 'fresh target upgrade receipts changed'; END IF;
+ IF ({catalog_hash_sql(contract)}) IS DISTINCT FROM actual_catalog THEN RAISE EXCEPTION 'target catalog changed'; END IF;
+ PERFORM pg_stat_clear_snapshot();
+ IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid()) THEN
+  RAISE EXCEPTION 'target has other database clients';
+ END IF;
  {role_guard}
 END $lmm_identity_import$;
 SELECT json_build_object('status','identity-import-verified','migration_id',{run_id},'mapped_user_count',{len(plan['records'])});
@@ -897,7 +1204,7 @@ COMMIT;
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source-receipt", type=Path, required=True)
-    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned private receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses}; contract={identity_version:4,identity_fingerprint_sha256:reviewed-exact-raw-SQL-SHA256,component_fingerprints:exact-current-compiled-components,catalog_query_sha256:current-Rust-query-SHA,catalog_fingerprint_sha256:owner-verified-actual-catalog,allow_initialized_core_seed:true,initialized_core_seed_contract:ledger-zero-events-empty-routing-unset-abuse-default-oauth-contract-v3}; application_or_worker_started:false; registry_provisioned:true")
+    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned fresh26 receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role:NOLOGIN-owner,login_role:independent-installer,set_role:owner,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses:empty}; contract=current_contract() plus catalog_fingerprint_sha256, allow_initialized_core_seed:true, initialized_core_seed_contract:CORE_SEED_CONTRACT, initialized_core_seed_sha256:fresh_seed_hash_query() result, trust_policy_seed:trust_policy_seed_query() result; application_or_worker_started:false; registry_provisioned:true. Capture and review fresh values; never relabel an old receipt.")
     parser.add_argument("--output", type=Path, required=True, help="New private directory under ~/Backups; must not already exist")
     parser.add_argument("--migration-id", required=True)
     parser.add_argument("--apply", action="store_true", help="Explicitly execute the private SQL plan against the matching empty initialized target")
@@ -908,6 +1215,7 @@ def main() -> int:
     try:
         require(MIGRATION_ID.fullmatch(args.migration_id) is not None, "migration_id_invalid")
         expected_contract = identity_contract()
+        current_contract()  # Reject any unsupported assembled source before I/O.
         require(args.output.is_absolute() and args.output.resolve().is_relative_to(BACKUP_ROOT.resolve()), "private_artifact_outside_backups")
         private_backup_path(args.output.parent, directory=True)
         args.output.mkdir(mode=0o700)
@@ -923,6 +1231,8 @@ def main() -> int:
         manifest = {"format_version": 2, "scope": "identity-only", "source_archive_sha256": source_hash,
                     "identity_contract": expected_contract, "developer_access_policy": DEVELOPER_POLICY,
                     "initialized_core_seed_contract": CORE_SEED_CONTRACT,
+                    "import_tool_sha256": sha256_file(Path(__file__).resolve()),
+                    "import_contract_sha256": hashlib.sha256(canonical(current_contract()).encode()).hexdigest(),
                     "source_export_sha256": sha256_file(output / "source-identity-export.private.jsonl"),
                     "source_baseline_proof_sha256": sha256_file(output / "source-baseline-proof.private.json"),
                     "source_target_id_map_sha256": sha256_file(id_map_path),
@@ -952,7 +1262,7 @@ def main() -> int:
                                   mapping_file_sha256=mapping_file_sha256,
                                   target_contract=target.get("contract", {}), manifest=manifest,
                                   target_identity=sql_identity)
-            target_identity = json.loads(psql(connection, "BEGIN READ ONLY;\n" + IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="target-identity"))
+            target_identity = json.loads(psql(connection, "BEGIN READ ONLY; SET LOCAL timezone='UTC';\n" + IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="target-identity"))
             verify_instance(target_identity, connection, target.get("instance_identity", {}), source=False)
             require((target_identity["database_oid"], target_identity["postmaster_started_at"]) != (source_identity["database_oid"], source_identity["postmaster_started_at"]), "source_target_same_database")
             for key in ("datcollate", "datctype", "datcollversion"):

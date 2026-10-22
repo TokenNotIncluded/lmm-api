@@ -31,7 +31,7 @@ IDENTITY = PLANNER.IDENTITY
 Error = IDENTITY.MappingError
 require = IDENTITY.require
 SCOPE = "financial-opening-only-v1"
-SEED = "identity-bound-zero-ledger-v1"
+SEED = "identity-bound-fresh26-zero-ledger-v2"
 FENCE = 741803121  # Shared with the offline identity importer.
 TABLE_FILTER = "n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'"
 CHANGED_TABLES = (
@@ -42,6 +42,15 @@ CHANGED_TABLES = (
 )
 SOURCE_FILES = frozenset({"archive", "source_receipt", "financial_plan", "source_export",
     "source_export_proof", "identity_map", "identity_manifest", "source_review", "reservations"})
+FRESH_EMPTY_TABLES = (
+    "core_meta.schema_upgrades", "core_meta.component_upgrades",
+    "core_trust_pricing.user_bases", "core_trust_pricing.legacy_paid_orders",
+    "core_telegram_auth.bindings", "core_telegram_auth.flows", "core_telegram_auth.assertions",
+)
+CONTRACT_FIELDS = (
+    "identity_version", "identity_fingerprint_sha256", "component_fingerprints",
+    "catalog_query_sha256", "oauth_catalog_query_sha256", "installer_contract_sha256", "source_file_hashes",
+)
 CHANGED_SEQUENCES = (
     "core_billing.ledger_accounts_id_seq", "core_billing.ledger_journals_id_seq",
 )
@@ -92,7 +101,7 @@ def validate_inventory(inventory: dict) -> None:
         require(type(values) is list and values == sorted(set(values)), "invalid_inventory")
         for name in values:
             relation(name)
-    require(set(CHANGED_TABLES) | {"core_migration.import_runs", "core_identity.users"}
+    require(set(CHANGED_TABLES) | set(FRESH_EMPTY_TABLES) | {"core_migration.import_runs", "core_identity.users", "core_trust_pricing.policies"}
             <= set(inventory["tables"]), "incomplete_inventory")
     require(set(CHANGED_SEQUENCES) <= set(inventory["sequences"]), "incomplete_inventory")
 
@@ -150,6 +159,7 @@ def snapshot_sql(inventory: dict, migration_id: str) -> str:
         "),'catalog_fingerprint_sha256',(" + IDENTITY.catalog_hash_sql(contract) + \
         "),'ownership_sha256',(" + ownership_sql() + \
         "),'component_fingerprints',(SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract)," + \
+        "'trust_policy_seed',(" + IDENTITY.trust_policy_seed_query() + ")," + \
         "'state',(" + state_sql(inventory, migration_id) + ")," + \
         "'native_users',(SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'personal_account_id',personal_account_id) ORDER BY id),'[]'::jsonb) FROM core_identity.users)," + \
         "'import_runs',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY migration_id),'[]'::jsonb) FROM core_migration.import_runs r));\nCOMMIT;\n"
@@ -191,16 +201,18 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
             "target_contains_other_source")
     contract = IDENTITY.current_contract()
     require(all(target_contract.get(key) == contract[key] for key in
-                ("identity_version", "identity_fingerprint_sha256", "component_fingerprints", "catalog_query_sha256")),
+                CONTRACT_FIELDS),
             "target_contract_mismatch")
     require(snapshot["component_fingerprints"] == contract["component_fingerprints"]
             and snapshot["catalog_fingerprint_sha256"] == target_contract.get("catalog_fingerprint_sha256"),
             "target_catalog_mismatch")
+    IDENTITY.validate_trust_policy_seed(snapshot.get("trust_policy_seed"))
+    require(snapshot["trust_policy_seed"] == target_contract.get("trust_policy_seed"), "target_trust_policy_seed_mismatch")
     opening = PLANNER.build_opening_payloads(plan, migration_id=migration_id,
         observation=observation, reservation_reconciliation=reservations)
     counters = PLANNER.build_opening_counter_payloads(plan, opening)
     material = {
-        "format_version": 1, "scope": SCOPE, "seed_contract": SEED,
+        "format_version": 2, "scope": SCOPE, "seed_contract": SEED,
         "migration_id": migration_id, "source_archive_sha256": plan["source_archive_sha256"],
         "mapping_sha256": plan["mapping_sha256"], "identity_map_sha256": plan["identity_map_sha256"],
         "source_review": review, "identity_import": runs[0],
@@ -208,7 +220,8 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
         "source_plan": plan, "source_files": source_files,
         "reservation_evidence_sha256": opening["reservation_review_evidence_sha256"],
         "opening": opening["payloads"], "counters": counters["payloads"],
-        "target": {key: snapshot[key] for key in ("instance", "catalog_fingerprint_sha256", "ownership_sha256", "component_fingerprints")},
+        "target": {**{key: snapshot[key] for key in ("instance", "catalog_fingerprint_sha256", "ownership_sha256", "component_fingerprints", "trust_policy_seed")},
+                   "source_contract": {key: contract[key] for key in CONTRACT_FIELDS}},
         "before_state": snapshot["state"], "runtime_roles": runtime_roles,
         "tool_source_hashes": source_hashes(),
     }
@@ -218,7 +231,7 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
 
 def validate_material(material: dict) -> None:
     require(type(material) is dict and type(material.get("format_version")) is int
-            and material["format_version"] == 1 and material.get("scope") == SCOPE
+            and material["format_version"] == 2 and material.get("scope") == SCOPE
             and material.get("seed_contract") == SEED, "material_contract_invalid")
     require(type(material.get("migration_id")) is str
             and IDENTITY.MIGRATION_ID.fullmatch(material["migration_id"]) is not None, "migration_id_invalid")
@@ -255,6 +268,9 @@ def validate_material(material: dict) -> None:
         checked_hash(target.get(key))
     require(target["component_fingerprints"] == IDENTITY.current_contract()["component_fingerprints"],
             "component_source_changed")
+    contract = IDENTITY.current_contract()
+    require(target.get("source_contract") == {key: contract[key] for key in CONTRACT_FIELDS}, "source_contract_changed")
+    IDENTITY.validate_trust_policy_seed(target.get("trust_policy_seed"))
     roles = material.get("runtime_roles")
     require(type(roles) is list and roles and all(type(role) is str and IDENTITY.IDENTIFIER.fullmatch(role)
             for role in roles) and len(roles) == len(set(roles))
@@ -266,6 +282,8 @@ def validate_material(material: dict) -> None:
     for value in state["tables"].values():
         PLANNER.integer(value.get("rows"), "snapshot_count_invalid", minimum=0)
         checked_hash(value.get("sha256"))
+    require(all(state["tables"][name] == {"rows": 0, "sha256": sha(b"")} for name in FRESH_EMPTY_TABLES),
+            "fresh26_business_or_upgrade_records_not_empty")
     PREFLIGHT.preflight_opening_batch(material["opening"])
     PREFLIGHT.validate_opening_counters(material["opening"], material["counters"])
     require(material["opening"], "empty_opening_not_supported")
@@ -324,10 +342,12 @@ def _guard(material: dict) -> str:
   AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)
  OR NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=session_user AND rolcanlogin AND NOT rolsuper
   AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)
- OR (SELECT count(*) FROM pg_roles WHERE rolname IN ({','.join(literal(r) for r in roles)}) AND NOT rolcanlogin AND NOT rolsuper)<>{len(roles)}
+ OR (SELECT count(*) FROM pg_roles WHERE rolname IN ({','.join(literal(r) for r in roles)}) AND NOT rolcanlogin AND NOT rolsuper
+  AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)<>{len(roles)}
  OR EXISTS(SELECT 1 FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname<>session_user
   AND has_database_privilege(oid,current_database(),'CONNECT'))
  THEN RAISE EXCEPTION 'financial_offline_roles_mismatch'; END IF;
+ IF NOT pg_has_role(session_user,current_user,'MEMBER') THEN RAISE EXCEPTION 'financial_owner_membership_mismatch'; END IF;
  IF EXISTS(SELECT 1 FROM pg_namespace n WHERE {TABLE_FILTER} AND n.nspname<>'public' AND pg_get_userbyid(n.nspowner)<>current_user)
  OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
   WHERE {TABLE_FILTER} AND pg_get_userbyid(c.relowner)<>current_user)
@@ -341,7 +361,10 @@ def _guard(material: dict) -> str:
  OR (SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract)
   IS DISTINCT FROM {literal(target['component_fingerprints'])}::jsonb
  OR ({inventory_sql()}) IS DISTINCT FROM {literal(material['before_state']['inventory'])}::jsonb
+ OR NOT EXISTS(SELECT 1 FROM core_meta.schema_contract WHERE singleton
+  AND version={contract['identity_version']} AND encode(fingerprint,'hex')={literal(contract['identity_fingerprint_sha256'])})
  THEN RAISE EXCEPTION 'financial_target_catalog_mismatch'; END IF;
+ IF {IDENTITY.upgrade_receipts_guard_sql()} THEN RAISE EXCEPTION 'financial_upgrade_receipts_not_empty'; END IF;
 """
 
 
@@ -399,6 +422,7 @@ BEGIN
  {guard}
  LOCK TABLE {locks} IN ACCESS EXCLUSIVE MODE;
  {guard}
+ IF {IDENTITY.trust_policy_seed_guard_sql(material['target'])} THEN RAISE EXCEPTION 'financial_trust_policy_seed_mismatch'; END IF;
  SELECT ({state}) INTO before_state;
  SELECT * INTO previous FROM core_migration.import_runs WHERE migration_id=m->>'migration_id';
  IF FOUND THEN
@@ -463,6 +487,7 @@ BEGIN
     jsonb_build_object('scope',{literal(SCOPE)},'material',m,'post_state',after_state));
  END IF;
  {guard}
+ IF {IDENTITY.trust_policy_seed_guard_sql(material['target'])} THEN RAISE EXCEPTION 'financial_trust_policy_seed_mismatch'; END IF;
 END $lmm_financial$;
 COMMIT;
 SELECT jsonb_build_object('status','COMMITTED','migration_id',{literal(material['migration_id'])},
