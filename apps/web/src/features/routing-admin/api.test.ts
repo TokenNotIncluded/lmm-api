@@ -30,7 +30,11 @@ test('source JSON crosses network without numeric conversion', async () => {
     source = '{"prices":{"input":9007199254740993}}'
   api.post = (async (url, body, config) => {
     assert.equal(url, '/api/core/routing-admin/prices/preview')
-    assert.equal(body.source_json, source)
+    assert.deepEqual(body, {
+      expected: catalog.expected,
+      source_json: source,
+      selections: [{ model: 'model-a', adjustment: 'divide' }],
+    })
     assert.deepEqual(config?.authScope, current)
     assert.equal(config?.skipAuthRefresh, true)
     return { data: { success: true, data: preview } }

@@ -11,6 +11,7 @@ fn contract(provider: EmbeddingProvider) -> ExternalEmbeddingContract {
         max_inline_image_bytes: 5 * 1_048_576,
         default_dimensions: 4,
         dimensions: vec![2, 4],
+        supports_dimension_parameter: true,
         supports_fusion: true,
         allow_remote_media: true,
     }
@@ -90,11 +91,39 @@ fn exact_supplier_content_media_and_dimension_bounds_are_enforced_before_dispatc
         json!({"model":"alias","input":"x","dimensions":4}),
     );
     assert!(fixed.bind(&limits, 2000).is_ok());
+    assert_eq!(
+        fixed.outbound("provider", &limits)["parameters"]["dimension"],
+        4
+    );
+    limits.supports_dimension_parameter = false;
     assert!(
         fixed.outbound("provider", &limits)["parameters"]
             .get("dimension")
             .is_none()
     );
+}
+
+#[test]
+fn one_permitted_dimension_does_not_discard_a_configurable_models_native_parameter() {
+    let mut limits = contract(EmbeddingProvider::AliSeparateInputV1);
+    limits.default_dimensions = 1024;
+    limits.dimensions = vec![1024];
+    for value in [
+        json!({"model":"alias","input":"text","dimensions":1024}),
+        json!({"model":"alias","input":"text"}),
+    ] {
+        let request = parse(Client::OpenAi, value);
+        let bound = request.bind(&limits, 2000).unwrap();
+        assert_eq!(bound.dimensions, 1024);
+        assert_eq!(
+            request.outbound("qwen3-vl-embedding", &limits)["parameters"]["dimension"],
+            1024
+        );
+    }
+    limits.supports_dimension_parameter = false;
+    limits.dimensions.push(2048);
+    let request = parse(Client::OpenAi, json!({"model":"alias","input":"text"}));
+    assert!(request.bind(&limits, 2000).is_err());
 }
 
 #[test]

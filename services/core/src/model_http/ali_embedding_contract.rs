@@ -225,6 +225,7 @@ impl Request {
             || videos > usize::from(contract.max_videos)
             || text_bytes > contract.max_text_bytes as usize
             || !contract.dimensions.contains(&dimensions)
+            || (!contract.supports_dimension_parameter && contract.dimensions.len() != 1)
             || (self.fusion && !contract.supports_fusion)
             || self.items.iter().any(|item| match item {
                 Item::InlineImage(bytes) => *bytes > contract.max_inline_image_bytes as usize,
@@ -264,9 +265,13 @@ impl Request {
     ) -> Value {
         let mut wire = self.wire.clone();
         wire["model"] = json!(mapped_model);
-        // Fixed-dimension models do not support the native dimension field.
-        // Requesting that exact default is still representable without it.
-        if contract.dimensions.len() == 1 {
+        // An administrator may allow only one dimension on a configurable
+        // model. That does not mean the native field is unsupported. Pin the
+        // reviewed default as well as an explicit client selection on the wire.
+        if contract.supports_dimension_parameter {
+            wire["parameters"]["dimension"] =
+                json!(self.dimensions.unwrap_or(contract.default_dimensions));
+        } else {
             wire["parameters"]
                 .as_object_mut()
                 .unwrap()

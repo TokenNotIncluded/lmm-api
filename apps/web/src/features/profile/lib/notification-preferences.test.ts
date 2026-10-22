@@ -122,7 +122,12 @@ test('one successful native save verifies its owner and preserves explicit disab
     assert.equal(path, '/api/user/notifications')
     assert.deepEqual(config?.authScope, scope)
     assert.equal(config?.skipAuthRefresh, true)
-    assert.equal(body.quota_warning_enabled, false)
+    assert.deepEqual(body, {
+      notify_type: 'email',
+      notification_email: '',
+      quota_warning_enabled: false,
+      quota_warning_threshold: 0,
+    })
     return {
       data: {
         success: true,

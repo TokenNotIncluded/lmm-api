@@ -89,6 +89,7 @@ impl Supplier {
                 assert_eq!(headers["authorization"], "Bearer native-test-upstream-key");
                 if kind == Kind::Embedding {
                     assert_eq!(request["model"], "provider-model");
+                    assert_eq!(request["parameters"]["dimension"], 4);
                     assert_eq!(request["parameters"]["enable_fusion"], true);
                     assert_eq!(request["input"]["contents"].as_array().unwrap().len(), 2);
                     assert!(request.get("max_input_tokens").is_none());
@@ -164,7 +165,7 @@ fn gateway(
     let mut context = json!({"upstream_id":1,"upstream_model":"provider-model","protocol":protocol,"endpoint":supplier.endpoint,"max_input_tokens":if kind==Kind::Embedding {1000} else {0},"max_output_tokens":0,"contract_revision":"synthetic-exact-native-v1","missing_cached_tokens_is_zero":true,"missing_cache_creation_tokens_is_zero":true});
     if kind == Kind::Embedding {
         rule["embedding"] = json!({"revision":1,"provider":kind.provider(),"currency":"USD","text_usd_per_million":{"numerator":version,"denominator":10},"image_usd_per_million":{"numerator":258*version,"denominator":1000}});
-        context["embedding"] = json!({"provider":kind.provider(),"contract_revision":"synthetic-modal-partition-v1","max_contents":20,"max_images":5,"max_videos":1,"max_text_bytes":32000,"max_inline_image_bytes":5242880,"default_dimensions":4,"dimensions":[4],"supports_fusion":true,"allow_remote_media":true});
+        context["embedding"] = json!({"provider":kind.provider(),"contract_revision":"synthetic-modal-partition-v1","max_contents":20,"max_images":5,"max_videos":1,"max_text_bytes":32000,"max_inline_image_bytes":5242880,"default_dimensions":4,"dimensions":[4],"supports_dimension_parameter":true,"supports_fusion":true,"allow_remote_media":true});
     } else {
         rule["search"] = json!({"revision":1,"provider":kind.provider(),"unit":"call","currency":"USD","usd_per_unit":{"numerator":version,"denominator":1000}});
         context["search"] = json!({"provider":kind.provider(),"limits":{"calls":1},"contract_revision":"synthetic-one-native-call-v1"});

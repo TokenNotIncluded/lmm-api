@@ -284,7 +284,8 @@ fn priorities_change_only_one_route_preserve_prices_and_allow_equal_tiers() {
     assert_eq!(planned.changes[0]["after"], 0);
     assert!(plan::same_host_contract(&before, &planned.after).unwrap());
     let mut invalid = planned.after;
-    invalid.routing.upstreams[0].endpoint = "https://changed.invalid/v1".try_into().unwrap();
+    invalid.routing.upstreams[0].endpoint =
+        "https://changed.invalid/v1".to_owned().try_into().unwrap();
     assert!(!plan::same_host_contract(&before, &invalid).unwrap());
 }
 #[test]
@@ -459,7 +460,10 @@ async fn runtime_cannot_create_a_forged_initial_baseline_and_owner_bootstrap_is_
         .unwrap();
     authorization.rollback().await.unwrap();
     let mut forged = document();
-    forged.routing.upstreams[0].endpoint = "https://unreviewed.invalid/v1".try_into().unwrap();
+    forged.routing.upstreams[0].endpoint = "https://unreviewed.invalid/v1"
+        .to_owned()
+        .try_into()
+        .unwrap();
     forged.routing.upstreams[0].credential.id = 999;
     let plan = plan::priorities(
         &forged,

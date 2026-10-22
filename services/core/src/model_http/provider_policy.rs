@@ -65,6 +65,8 @@ pub struct ExternalEmbeddingContract {
     pub max_inline_image_bytes: u32,
     pub default_dimensions: u32,
     pub dimensions: Vec<u32>,
+    /// An administrator allowlist does not establish a supplier fixed dimension.
+    pub supports_dimension_parameter: bool,
     pub supports_fusion: bool,
     pub allow_remote_media: bool,
 }
@@ -86,6 +88,7 @@ impl ExternalEmbeddingContract {
             || dimensions.len() != self.dimensions.len()
             || dimensions.iter().any(|v| !(1..=4096).contains(v))
             || !dimensions.contains(&self.default_dimensions)
+            || (!self.supports_dimension_parameter && dimensions.len() != 1)
             || (self.max_videos != 0 && !self.allow_remote_media)
         {
             return Err(RelayError::Invalid("invalid native embedding contract"));

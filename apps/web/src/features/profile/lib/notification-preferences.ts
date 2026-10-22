@@ -32,7 +32,7 @@ export type NotificationDraft = Pick<
   | 'channel_notify_enabled'
   | 'upstream_model_update_notify_enabled'
 >
-export type NotificationScope = { userId: number; sessionId?: string }
+export type NotificationScope = { userId: number; sessionId: string | undefined }
 
 export function notificationScope(): NotificationScope | undefined {
   const { user, session } = useAuthStore.getState().auth

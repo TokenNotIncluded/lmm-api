@@ -695,7 +695,7 @@ mod tests {
         gateway.enable_routing_admin().unwrap();
         let public = super::super::pricing::PricingSurface::from_gateway(&gateway).unwrap();
         let oauth = gateway.oauth_catalog_surface();
-        let store = crate::routing::PostgresRoutingStore::new(pool.clone());
+        let store = crate::routing::store::PostgresRoutingStore::new(pool.clone());
         store
             .register_credential_reference(CredentialRef { id: 1, revision: 1 })
             .await
@@ -1029,6 +1029,7 @@ mod tests {
         assert!(v.groups.is_empty());
         let disabled = CatalogSurface {
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
+            source: std::sync::OnceLock::new(),
             state: SurfaceState::Disabled,
         };
         assert!(matches!(
