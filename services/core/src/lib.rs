@@ -32,6 +32,7 @@ pub mod lifecycle;
 pub mod market_oauth;
 pub mod model_http;
 pub mod native_key_read;
+pub mod notifications;
 pub mod oauth2_balance;
 pub mod oauth2_http;
 #[cfg(unix)]
@@ -41,6 +42,7 @@ pub mod public_server;
 pub mod relay;
 pub mod remote_control;
 pub mod routing;
+pub mod routing_admin;
 pub mod runtime_database;
 pub mod support_projection;
 #[cfg(test)]

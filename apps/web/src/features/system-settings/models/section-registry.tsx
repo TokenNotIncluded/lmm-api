@@ -64,7 +64,17 @@ function formatJsonForEditor(value: string, fallback: string) {
   }
 }
 
+const NativePriceSync = lazyNamedSection(
+  () => import('@/features/routing-admin/price-sync'),
+  'NativePriceSync'
+)
+
 const MODELS_SECTIONS = [
+  {
+    id: 'native-price-sync',
+    titleKey: 'Native price synchronization',
+    build: (_settings: ModelSettings) => <NativePriceSync />,
+  },
   {
     id: 'service-tier-pricing',
     titleKey: 'Fast and Ultrafast pricing',

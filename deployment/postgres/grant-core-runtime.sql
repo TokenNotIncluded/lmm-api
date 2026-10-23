@@ -150,6 +150,21 @@ GRANT EXECUTE ON FUNCTION core_billing.open_ledger_wallet(bigint),
     core_billing.post_ledger(jsonb),
     core_billing.legacy_escrow_finalize(jsonb,bigint,bigint) TO :"runtime_role";
 
+-- BEGIN notification-publisher runtime grants
+-- All Core money writers observe one durable policy, even without a local
+-- notification worker. These grants neither edit policy nor provision/consume
+-- subscriptions. They are required before a site policy can be enabled.
+GRANT USAGE ON SCHEMA core_console, core_events TO :"runtime_role";
+GRANT SELECT ON core_console.options TO :"runtime_role";
+GRANT SELECT ON core_events.capacity, core_events.subscriptions,
+    core_events.outbox, core_events.inbox TO :"runtime_role";
+GRANT UPDATE (pending_events, pending_bytes) ON core_events.capacity TO :"runtime_role";
+GRANT UPDATE (pending) ON core_events.subscriptions TO :"runtime_role";
+GRANT INSERT ON core_events.outbox, core_events.deliveries, core_events.inbox TO :"runtime_role";
+GRANT UPDATE (response, completed_at) ON core_events.inbox TO :"runtime_role";
+GRANT USAGE ON SEQUENCE core_events.outbox_id_seq TO :"runtime_role";
+-- END notification-publisher runtime grants
+
 -- Abuse administration is checked against canonical superadmin Sessions in Rust.
 -- Secrets are host-private references; audit/operations/previews are append-only.
 GRANT USAGE ON SCHEMA core_abuse TO :"runtime_role";
@@ -282,6 +297,17 @@ GRANT USAGE ON SCHEMA core_model TO :"runtime_role";
 GRANT EXECUTE ON FUNCTION
     core_model.checkpoint_output(text,bytea,bigint,bytea,bigint,jsonb,boolean),
     core_model.completed_streams_after(integer,text) TO :"runtime_role";
+-- BEGIN routing-admin runtime grants
+-- Publication reauthorizes the native Session inside these bounded functions.
+-- The runtime never receives table access or direct helper execution authority.
+GRANT USAGE ON SCHEMA core_routing_admin TO :"runtime_role";
+GRANT EXECUTE ON FUNCTION
+    core_routing_admin.read_active(),
+    core_routing_admin.store_preview(bytea,text,text,text),
+    core_routing_admin.read_preview(bytea,text),
+    core_routing_admin.read_operation(bytea,text),
+    core_routing_admin.publish_preview(bytea,text,text,text) TO :"runtime_role";
+-- END routing-admin runtime grants
 \endif
 
 \if :enable_images

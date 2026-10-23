@@ -5,6 +5,7 @@
 //! Decimal coefficients are exact; settlement rounds once, half upwards. The
 //! second revision adds measured cache creation and its independent TTLs. The
 //! third is the fixed flat-price generic-remainder contract, not an expression.
+//! Revision four separates OpenAI's twelve-hour subset from total cache writes.
 //! These revisions do not reproduce intermediate legacy floating-point errors.
 use num_bigint::BigUint;
 use num_rational::Ratio;
@@ -114,6 +115,9 @@ pub struct TieredRates {
     /// Revision 2: the distinct one-hour Anthropic cache-creation price.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_1h: Option<DecimalRate>,
+    /// Revision 4: the distinct twelve-hour OpenAI cache-write price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_12h: Option<DecimalRate>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -137,6 +141,8 @@ pub struct TieredTariff {
     pub tiers: Vec<TokenTier>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub uses_cache_write_1h: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub uses_cache_write_12h: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -176,6 +182,7 @@ impl PersistedTieredTariff {
             || !(1..=MAX_MULTIPLIER).contains(&self.speed_multiplier_ppm)
             || self.credits_per_usd != 500_000
             || (self.tariff.revision == 1 && self.missing_cache_creation_is_zero)
+            || (self.tariff.revision == 4 && self.input_semantics != InputSemantics::Inclusive)
             || self.cache_creation_mode != compiled.cache_creation_mode()
         {
             return Err(invalid());
@@ -214,6 +221,8 @@ pub struct TieredUsage {
     /// A missing TTL breakdown is unknown, not an aggregate five-minute write.
     pub created_5m: Option<u64>,
     pub created_1h: Option<u64>,
+    /// OpenAI's measured twelve-hour subset; missing is not zero.
+    pub created_12h: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,6 +232,7 @@ pub struct CompiledTariff {
     uses_cache_read: bool,
     uses_cache_write: bool,
     uses_cache_write_1h: bool,
+    uses_cache_write_12h: bool,
     cache_creation_mode: Option<CacheCreationMode>,
     count: u8,
     tiers: [TokenTier; MAX_TIERS],
@@ -231,12 +241,15 @@ pub struct CompiledTariff {
 impl TieredTariff {
     pub fn compile(&self) -> Result<CompiledTariff, RoutingError> {
         let cache_creation_mode = match self.revision {
-            1 | 2 => None,
+            1 | 2 | 4 => None,
             3 => Some(CacheCreationMode::GenericRemainderV1),
             _ => return Err(invalid()),
         };
         if (self.revision == 1 && (self.uses_cache_write || self.uses_cache_write_1h))
+            || (self.uses_cache_write_12h != (self.revision == 4))
             || !(1..=MAX_TIERS).contains(&self.tiers.len())
+            || (self.revision == 4
+                && (!self.uses_cache_read || !self.uses_cache_write || self.uses_cache_write_1h))
             || (self.revision == 3
                 && (self.tiers.len() != 1
                     || self.tiers[0].up_to_input_tokens.is_some()
@@ -277,6 +290,7 @@ impl TieredTariff {
                 || (!self.uses_cache_write && tier.rates.cache_write.numerator != 0)
                 || (self.revision == 1 && tier.rates.cache_write_1h.is_some())
                 || (self.uses_cache_write_1h != tier.rates.cache_write_1h.is_some())
+                || (self.uses_cache_write_12h != tier.rates.cache_write_12h.is_some())
             {
                 return Err(invalid());
             }
@@ -289,6 +303,7 @@ impl TieredTariff {
             uses_cache_read: self.uses_cache_read,
             uses_cache_write: self.uses_cache_write,
             uses_cache_write_1h: self.uses_cache_write_1h,
+            uses_cache_write_12h: self.uses_cache_write_12h,
             cache_creation_mode,
             count: self.tiers.len() as u8,
             tiers,
@@ -301,6 +316,7 @@ impl TieredRates {
         [self.input, self.output, self.cache_read, self.cache_write]
             .into_iter()
             .chain(self.cache_write_1h)
+            .chain(self.cache_write_12h)
     }
 }
 
@@ -317,6 +333,7 @@ impl CompiledTariff {
             uses_cache_write: self.uses_cache_write,
             tiers: self.tiers[..usize::from(self.count)].to_vec(),
             uses_cache_write_1h: self.uses_cache_write_1h,
+            uses_cache_write_12h: self.uses_cache_write_12h,
         }
     }
 
@@ -363,6 +380,28 @@ impl CompiledTariff {
         credits_per_usd: u64,
         discount: Option<DiscountRatio>,
     ) -> Result<u64, RoutingError> {
+        self.charge_with_surcharge(
+            usage,
+            semantics,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            discount,
+            super::SearchSurcharge::zero(),
+        )
+    }
+
+    /// Search is still exact USD here, before token conversion and rounding.
+    pub(crate) fn charge_with_surcharge(
+        self,
+        usage: TieredUsage,
+        semantics: InputSemantics,
+        group_ppm: u32,
+        speed_ppm: u32,
+        credits_per_usd: u64,
+        discount: Option<DiscountRatio>,
+        surcharge: super::SearchSurcharge,
+    ) -> Result<u64, RoutingError> {
         let cached = usage
             .cached
             .checked_add(usage.created)
@@ -370,63 +409,87 @@ impl CompiledTariff {
         if cached > usage.input || (self.revision == 1 && usage.created != 0) {
             return Err(RoutingError::InvalidRequest);
         }
-        for count in [usage.created_5m, usage.created_1h].into_iter().flatten() {
+        for count in [usage.created_5m, usage.created_1h, usage.created_12h]
+            .into_iter()
+            .flatten()
+        {
             if count > usage.created {
                 return Err(RoutingError::InvalidRequest);
             }
         }
-        if self.cache_creation_mode.is_none()
+        if self.revision != 4
+            && self.cache_creation_mode.is_none()
             && let (Some(five), Some(hour)) = (usage.created_5m, usage.created_1h)
             && five.checked_add(hour) != Some(usage.created)
         {
             return Err(RoutingError::InvalidRequest);
         }
-        let (created, created_1h) =
-            if self.cache_creation_mode == Some(CacheCreationMode::GenericRemainderV1) {
-                let partition = CacheCreationPartition::from_effective(
-                    usage.created,
-                    usage.created_5m,
-                    usage.created_1h,
-                )?;
-                if semantics == InputSemantics::AnthropicText {
-                    // The actual flat factory gives generic and five-minute
-                    // writes the same rate. Keep their evidence distinct.
-                    (
-                        partition.generic_remainder() + partition.five_minute().unwrap_or(0),
-                        partition.one_hour().unwrap_or(0),
-                    )
-                } else {
-                    // The original inclusive flat branch prices all creation at
-                    // its generic rate, irrespective of supplied TTL details.
-                    (partition.total(), 0)
-                }
-            } else if semantics == InputSemantics::AnthropicText {
-                if usage.created == 0 {
-                    (0, 0)
-                } else {
-                    match (usage.created_5m, usage.created_1h) {
-                        (Some(five), Some(hour)) => (five, hour),
-                        (Some(five), None) => (
-                            five,
-                            usage
-                                .created
-                                .checked_sub(five)
-                                .ok_or(RoutingError::InvalidRequest)?,
-                        ),
-                        (None, Some(hour)) => (
-                            usage
-                                .created
-                                .checked_sub(hour)
-                                .ok_or(RoutingError::InvalidRequest)?,
-                            hour,
-                        ),
-                        (None, None) => return Err(RoutingError::InvalidRequest),
-                    }
-                }
+        let created_12h = if self.revision == 4 {
+            if semantics != InputSemantics::Inclusive
+                || usage.created_5m.unwrap_or(0) != 0
+                || usage.created_1h.unwrap_or(0) != 0
+            {
+                return Err(RoutingError::InvalidRequest);
+            }
+            match usage.created_12h {
+                Some(twelve) => twelve,
+                None if usage.created == 0 => 0,
+                None => return Err(RoutingError::InvalidRequest),
+            }
+        } else {
+            // Never reinterpret frozen revisions 1-3 using a new TTL price.
+            if usage.created_12h.unwrap_or(0) != 0 {
+                return Err(RoutingError::InvalidRequest);
+            }
+            0
+        };
+        let (created, created_1h) = if self.revision == 4 {
+            (usage.created - created_12h, 0)
+        } else if self.cache_creation_mode == Some(CacheCreationMode::GenericRemainderV1) {
+            let partition = CacheCreationPartition::from_effective(
+                usage.created,
+                usage.created_5m,
+                usage.created_1h,
+            )?;
+            if semantics == InputSemantics::AnthropicText {
+                // The actual flat factory gives generic and five-minute
+                // writes the same rate. Keep their evidence distinct.
+                (
+                    partition.generic_remainder() + partition.five_minute().unwrap_or(0),
+                    partition.one_hour().unwrap_or(0),
+                )
             } else {
-                // The source's non-Anthropic cc is the aggregate and cc1h is zero.
-                (usage.created, 0)
-            };
+                // The original inclusive flat branch prices all creation at
+                // its generic rate, irrespective of supplied TTL details.
+                (partition.total(), 0)
+            }
+        } else if semantics == InputSemantics::AnthropicText {
+            if usage.created == 0 {
+                (0, 0)
+            } else {
+                match (usage.created_5m, usage.created_1h) {
+                    (Some(five), Some(hour)) => (five, hour),
+                    (Some(five), None) => (
+                        five,
+                        usage
+                            .created
+                            .checked_sub(five)
+                            .ok_or(RoutingError::InvalidRequest)?,
+                    ),
+                    (None, Some(hour)) => (
+                        usage
+                            .created
+                            .checked_sub(hour)
+                            .ok_or(RoutingError::InvalidRequest)?,
+                        hour,
+                    ),
+                    (None, None) => return Err(RoutingError::InvalidRequest),
+                }
+            }
+        } else {
+            // The source's non-Anthropic cc is the aggregate and cc1h is zero.
+            (usage.created, 0)
+        };
         let tier = self.tiers[..usize::from(self.count)]
             .iter()
             .find(|t| {
@@ -453,12 +516,26 @@ impl CompiledTariff {
                     denominator: 1,
                 }),
             ),
+            (
+                created_12h,
+                tier.rates.cache_write_12h.unwrap_or(DecimalRate {
+                    numerator: 0,
+                    denominator: 1,
+                }),
+            ),
         ]
         .into_iter()
         .try_fold(Fraction::zero(), |sum, (tokens, rate)| {
             sum.add(Fraction::rate(tokens, rate)?)
         })?;
-        convert(raw, group_ppm, speed_ppm, credits_per_usd, false, discount)
+        convert(
+            raw.add(Fraction(surcharge.micro_usd()))?,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            false,
+            discount,
+        )
     }
 
     /// Every tier and every cache split is considered. Tier rates need not be
@@ -490,6 +567,28 @@ impl CompiledTariff {
         credits_per_usd: u64,
         discount: Option<DiscountRatio>,
     ) -> Result<u64, RoutingError> {
+        self.reservation_ceiling_with_surcharge(
+            input,
+            output,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            discount,
+            super::SearchSurcharge::zero(),
+        )
+    }
+
+    pub(crate) fn reservation_ceiling_with_surcharge(
+        self,
+        input: u64,
+        output: u64,
+        group_ppm: u32,
+        speed_ppm: u32,
+        credits_per_usd: u64,
+        discount: Option<DiscountRatio>,
+        surcharge: super::SearchSurcharge,
+    ) -> Result<u64, RoutingError> {
+        let search = Fraction(surcharge.micro_usd());
         let mut maximum = 0;
         let mut lower = 0;
         for tier in &self.tiers[..usize::from(self.count)] {
@@ -502,6 +601,7 @@ impl CompiledTariff {
                 Some(tier.rates.cache_read),
                 Some(tier.rates.cache_write),
                 tier.rates.cache_write_1h,
+                tier.rates.cache_write_12h,
             ]
             .into_iter()
             .flatten()
@@ -511,7 +611,8 @@ impl CompiledTariff {
                 }
             }
             let raw = Fraction::rate(bound, input_rate)?
-                .add(Fraction::rate(output, tier.rates.output)?)?;
+                .add(Fraction::rate(output, tier.rates.output)?)?
+                .add(search.clone())?;
             maximum = maximum.max(convert(
                 raw,
                 group_ppm,
@@ -532,7 +633,7 @@ fn invalid() -> RoutingError {
     RoutingError::InvalidConfig("decimal token tariff")
 }
 
-/// At most four terms with bounded u64 numerators and denominators enter each
+/// At most six terms with bounded u64 numerators and denominators enter each
 /// operation. Big-integer size is therefore bounded by this tariff contract,
 /// rather than arbitrary input text, even when denominators are coprime.
 #[derive(Clone)]
@@ -755,6 +856,7 @@ mod tests {
                             output: 2,
                             created_5m: Some(created - hour),
                             created_1h: Some(hour),
+                            created_12h: None,
                         };
                         for semantics in [InputSemantics::Inclusive, InputSemantics::AnthropicText]
                         {
@@ -817,6 +919,7 @@ mod tests {
             cache_read: cached,
             cache_write: rate(0, 1),
             cache_write_1h: None,
+            cache_write_12h: None,
         }
     }
     fn tariff(tiers: Vec<TokenTier>, uses_cache_read: bool) -> TieredTariff {
@@ -826,6 +929,7 @@ mod tests {
             uses_cache_read,
             uses_cache_write: false,
             uses_cache_write_1h: false,
+            uses_cache_write_12h: false,
             tiers,
         }
     }
@@ -864,6 +968,7 @@ mod tests {
             uses_cache_read: true,
             uses_cache_write: true,
             uses_cache_write_1h: true,
+            uses_cache_write_12h: false,
             tiers: vec![TokenTier {
                 up_to_input_tokens: None,
                 rates: TieredRates {
@@ -872,6 +977,7 @@ mod tests {
                     cache_read: rate(1, 5),
                     cache_write: rate(5, 2),
                     cache_write_1h: Some(rate(4, 1)),
+                    cache_write_12h: None,
                 },
             }],
         }
@@ -886,8 +992,369 @@ mod tests {
             cache_read: rate(1, 2),
             cache_write: rate(25, 4),
             cache_write_1h: Some(rate(10, 1)),
+            cache_write_12h: None,
         };
         tariff
+    }
+
+    fn cache_12h_tariff() -> TieredTariff {
+        let mut tariff = cache_tariff();
+        tariff.revision = 4;
+        tariff.uses_cache_write_1h = false;
+        tariff.uses_cache_write_12h = true;
+        tariff.tiers[0].rates.cache_write_1h = None;
+        tariff.tiers[0].rates.cache_write_12h = Some(rate(5, 1));
+        tariff
+    }
+
+    #[test]
+    fn openai_v4_splits_12h_from_aggregate_without_counting_input_twice() {
+        let price = cache_12h_tariff().compile().unwrap();
+        let usage = TieredUsage {
+            input: 100,
+            cached: 20,
+            created: 60,
+            output: 5,
+            created_12h: Some(40),
+            ..TieredUsage::default()
+        };
+        // (20*2 + 20*.2 + 20*2.5 + 40*5 + 5*10) / 2 = 172.
+        assert_eq!(charge(price, usage), 172);
+        assert_eq!(
+            charge(
+                price,
+                TieredUsage {
+                    created_12h: Some(0),
+                    ..usage
+                }
+            ),
+            122
+        );
+        assert_eq!(
+            charge(
+                price,
+                TieredUsage {
+                    created_12h: Some(60),
+                    ..usage
+                }
+            ),
+            197
+        );
+        assert_eq!(charge(price, TieredUsage::default()), 0);
+        // Explicit zero legacy buckets do not consume any OpenAI write tokens.
+        assert_eq!(
+            charge(
+                price,
+                TieredUsage {
+                    created_5m: Some(0),
+                    created_1h: Some(0),
+                    ..usage
+                }
+            ),
+            172
+        );
+    }
+
+    #[test]
+    fn openai_v4_validates_missing_ttl_partitions_and_protocol_before_charging() {
+        let price = cache_12h_tariff().compile().unwrap();
+        let usage = TieredUsage {
+            input: 10,
+            cached: 2,
+            created: 6,
+            created_12h: Some(4),
+            ..TieredUsage::default()
+        };
+        for invalid_usage in [
+            TieredUsage {
+                created_12h: None,
+                ..usage
+            },
+            TieredUsage {
+                created_12h: Some(7),
+                ..usage
+            },
+            TieredUsage {
+                created: 0,
+                ..usage
+            },
+            TieredUsage { input: 7, ..usage },
+            TieredUsage {
+                created_5m: Some(1),
+                ..usage
+            },
+            TieredUsage {
+                created_1h: Some(1),
+                ..usage
+            },
+            TieredUsage {
+                input: u64::MAX,
+                cached: u64::MAX,
+                ..usage
+            },
+        ] {
+            assert!(
+                price
+                    .charge(
+                        invalid_usage,
+                        InputSemantics::Inclusive,
+                        1_000_000,
+                        1_000_000,
+                        500_000
+                    )
+                    .is_err(),
+                "{invalid_usage:?}"
+            );
+        }
+        for usage in [usage, TieredUsage::default()] {
+            assert!(
+                price
+                    .charge(
+                        usage,
+                        InputSemantics::AnthropicText,
+                        1_000_000,
+                        1_000_000,
+                        500_000
+                    )
+                    .is_err()
+            );
+        }
+        // A free group does not turn unknown measurements into a valid receipt.
+        assert!(
+            price
+                .charge(
+                    TieredUsage {
+                        created_12h: None,
+                        ..usage
+                    },
+                    InputSemantics::Inclusive,
+                    0,
+                    1_000_000,
+                    500_000
+                )
+                .is_err()
+        );
+        assert_eq!(
+            price.charge(usage, InputSemantics::Inclusive, 0, 1_000_000, 500_000),
+            Ok(0)
+        );
+        let mut huge = cache_12h_tariff();
+        huge.tiers[0].rates.cache_write_12h = Some(rate(u64::MAX, 1));
+        assert!(
+            huge.compile()
+                .unwrap()
+                .charge(
+                    usage,
+                    InputSemantics::Inclusive,
+                    1_000_000,
+                    1_000_000,
+                    500_000
+                )
+                .is_err()
+        );
+        assert!(
+            huge.compile()
+                .unwrap()
+                .reservation_ceiling(10, 0, 1_000_000, 1_000_000, 500_000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn openai_v4_requires_explicit_reviewed_rates_and_rejects_legacy_contracts() {
+        for variant in 0..10 {
+            let mut tariff = cache_12h_tariff();
+            match variant {
+                0 => tariff.revision = 1,
+                1 => tariff.revision = 2,
+                2 => tariff.revision = 3,
+                3 => tariff.uses_cache_write_12h = false,
+                4 => tariff.uses_cache_write = false,
+                5 => tariff.uses_cache_read = false,
+                6 => tariff.tiers[0].rates.cache_write_12h = None,
+                7 => tariff.tiers[0].rates.cache_write_12h = Some(rate(5, 0)),
+                8 => tariff.tiers[0].rates.cache_write_12h = Some(rate(5, MAX_DENOMINATOR + 1)),
+                _ => {
+                    tariff.uses_cache_write_1h = true;
+                    tariff.tiers[0].rates.cache_write_1h = Some(rate(4, 1));
+                }
+            }
+            assert!(tariff.compile().is_err(), "variant {variant}");
+        }
+        for mut legacy in [
+            flat(rate(1, 1), rate(2, 1), rate(1, 10), true).tariff(),
+            cache_tariff(),
+            generic_tariff(),
+        ] {
+            let compiled = legacy.compile().unwrap();
+            let original = serde_json::to_vec(&legacy).unwrap();
+            assert!(!String::from_utf8(original.clone()).unwrap().contains("12h"));
+            assert_eq!(
+                serde_json::from_slice::<TieredTariff>(&original).unwrap(),
+                legacy
+            );
+            assert!(
+                compiled
+                    .charge(
+                        TieredUsage {
+                            input: 2,
+                            created: 1,
+                            created_12h: Some(1),
+                            ..TieredUsage::default()
+                        },
+                        InputSemantics::Inclusive,
+                        1_000_000,
+                        1_000_000,
+                        500_000
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                charge(
+                    compiled,
+                    TieredUsage {
+                        input: 2,
+                        created_12h: Some(0),
+                        ..TieredUsage::default()
+                    }
+                ),
+                charge(
+                    compiled,
+                    TieredUsage {
+                        input: 2,
+                        ..TieredUsage::default()
+                    }
+                )
+            );
+            legacy.tiers[0].rates.cache_write_12h = Some(rate(5, 1));
+            assert!(legacy.compile().is_err());
+        }
+    }
+
+    #[test]
+    fn openai_v4_rounds_all_dimensions_once_after_exact_discount() {
+        let mut tariff = cache_12h_tariff();
+        tariff.tiers[0].rates.input = rate(1, 1);
+        tariff.tiers[0].rates.cache_write_12h = Some(rate(1, 1));
+        let price = tariff.compile().unwrap();
+        let usage = TieredUsage {
+            input: 2,
+            created: 1,
+            created_12h: Some(1),
+            ..TieredUsage::default()
+        };
+        // Each half-credit category alone would round to 1; the sum is 1.
+        assert_eq!(charge(price, usage), 1);
+        tariff.tiers[0].rates.cache_write_12h = Some(rate(2, 1));
+        let price = tariff.compile().unwrap();
+        assert_eq!(charge(price, usage), 2);
+        assert_eq!(
+            price.charge_with_discount(
+                usage,
+                InputSemantics::Inclusive,
+                1_000_000,
+                1_000_000,
+                500_000,
+                Some(DiscountRatio::new(3, 4).unwrap())
+            ),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn openai_v4_reservation_bounds_every_split_and_nonmonotone_tier() {
+        let mut tariff = cache_12h_tariff();
+        let mut low = tariff.tiers[0];
+        low.up_to_input_tokens = Some(6);
+        low.rates.cache_write_12h = Some(rate(50, 1));
+        tariff.tiers.insert(0, low);
+        let price = tariff.compile().unwrap();
+        let discount = Some(DiscountRatio::new(3, 5).unwrap());
+        let hold = price
+            .reservation_ceiling_with_discount(8, 2, 1_250_000, 1_000_000, 500_000, discount)
+            .unwrap();
+        assert_eq!(hold, 120);
+        for input in 0..=8 {
+            for cached in 0..=input {
+                for created in 0..=input - cached {
+                    for twelve in 0..=created {
+                        for output in 0..=2 {
+                            let usage = TieredUsage {
+                                input,
+                                cached,
+                                created,
+                                output,
+                                created_12h: Some(twelve),
+                                ..TieredUsage::default()
+                            };
+                            let amount = price
+                                .charge_with_discount(
+                                    usage,
+                                    InputSemantics::Inclusive,
+                                    1_250_000,
+                                    1_000_000,
+                                    500_000,
+                                    discount,
+                                )
+                                .unwrap();
+                            assert!(amount <= hold, "{usage:?}: {amount} > {hold}");
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            price.charge_with_discount(
+                TieredUsage {
+                    input: 6,
+                    created: 6,
+                    created_12h: Some(6),
+                    output: 2,
+                    ..TieredUsage::default()
+                },
+                InputSemantics::Inclusive,
+                1_250_000,
+                1_000_000,
+                500_000,
+                discount
+            ),
+            Ok(hold)
+        );
+    }
+
+    #[test]
+    fn openai_v4_frozen_tariff_restores_exact_price_and_rejects_anthropic_or_new_mode() {
+        let mut current = cache_12h_tariff();
+        let frozen = PersistedTieredTariff {
+            tariff: current.clone(),
+            input_semantics: InputSemantics::Inclusive,
+            group_multiplier_ppm: 1_000_000,
+            speed_multiplier_ppm: 1_000_000,
+            credits_per_usd: 500_000,
+            missing_cache_creation_is_zero: false,
+            cache_creation_mode: None,
+        };
+        assert!(frozen.validate().is_ok());
+        let bytes = serde_json::to_vec(&frozen).unwrap();
+        let mut restored: PersistedTieredTariff = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored, frozen);
+        current.tiers[0].rates.cache_write_12h = Some(rate(1000, 1));
+        let usage = TieredUsage {
+            input: 2,
+            created: 2,
+            created_12h: Some(2),
+            ..TieredUsage::default()
+        };
+        assert_eq!(restored.cost(usage), Ok(5));
+        assert_eq!(charge(current.compile().unwrap(), usage), 1000);
+        restored.input_semantics = InputSemantics::AnthropicText;
+        assert!(restored.validate().is_err());
+        restored.input_semantics = InputSemantics::Inclusive;
+        restored.cache_creation_mode = Some(CacheCreationMode::GenericRemainderV1);
+        assert!(restored.validate().is_err());
+        let mut value = serde_json::to_value(&frozen).unwrap();
+        value["tariff"]["unreviewed_ttl_price"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<PersistedTieredTariff>(value).is_err());
     }
 
     #[test]
@@ -916,6 +1383,7 @@ mod tests {
             created: 50,
             created_5m: Some(2),
             created_1h: Some(3),
+            created_12h: None,
             ..TieredUsage::default()
         };
         assert_eq!(
@@ -941,6 +1409,7 @@ mod tests {
         let aggregate_only = TieredUsage {
             created_5m: None,
             created_1h: None,
+            created_12h: None,
             ..usage
         };
         assert_eq!(
@@ -1047,6 +1516,7 @@ mod tests {
                                 output: 2,
                                 created_5m: None,
                                 created_1h: Some(hour),
+                                created_12h: None,
                             };
                             assert!(
                                 price
@@ -1077,6 +1547,7 @@ mod tests {
             output: 5,
             created_5m: Some(30),
             created_1h: Some(40),
+            created_12h: None,
         };
         assert_eq!(
             price
@@ -1095,6 +1566,7 @@ mod tests {
         let unknown_ttl = TieredUsage {
             created_5m: None,
             created_1h: None,
+            created_12h: None,
             ..usage
         };
         assert!(
@@ -1116,6 +1588,7 @@ mod tests {
             },
             TieredUsage {
                 created_1h: None,
+                created_12h: None,
                 ..usage
             },
         ] {
@@ -1144,6 +1617,7 @@ mod tests {
             cache_read: rate(13, 50),
             cache_write: rate(0, 1),
             cache_write_1h: None,
+            cache_write_12h: None,
         };
         let usage = TieredUsage {
             input: 100,
@@ -1179,6 +1653,7 @@ mod tests {
                             output: 3,
                             created_5m: Some(created - hour),
                             created_1h: Some(hour),
+                            created_12h: None,
                         };
                         for semantics in [InputSemantics::Inclusive, InputSemantics::AnthropicText]
                         {
@@ -1203,6 +1678,7 @@ mod tests {
             created: 5,
             created_5m: Some(3),
             created_1h: Some(3),
+            created_12h: None,
             ..TieredUsage::default()
         };
         assert!(

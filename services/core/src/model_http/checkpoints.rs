@@ -50,6 +50,76 @@ fn next_recovery_page(rows: &[CompletedStream], limit: usize) -> Option<String> 
         .map(|row| row.0.clone())
 }
 
+/// Reject a known billable dimension before either partial or terminal output
+/// becomes durable. A missing aggregate does not erase a known positive subset.
+fn validate_cache_write_dimensions(
+    usage: crate::relay::Usage,
+    price: &charging::Price,
+) -> Result<(), RelayError> {
+    price
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    if let Some(observed) = usage.embedding {
+        let embedding = price
+            .embedding
+            .as_ref()
+            .ok_or(RelayError::SettlementPending)?;
+        if !observed.valid()
+            || observed.provider != embedding.tariff.provider
+            || observed
+                .total_input_tokens
+                .is_some_and(|total| total > embedding.input_token_limit)
+        {
+            return Err(RelayError::SettlementPending);
+        }
+    }
+    if let Some(observed) = usage.search {
+        if !observed.valid()
+            || price.search.as_ref().is_some_and(|search| {
+                observed.provider != search.tariff.provider || !search.limits.contains(observed)
+            })
+            || (price.search.is_none() && observed.has_positive())
+        {
+            return Err(RelayError::SettlementPending);
+        }
+    }
+    // This separate contract prices the supplier's measured total USD cost;
+    // individual token categories do not determine its settlement amount.
+    if price.upstream_cost_group_ppm.is_some() {
+        return Ok(());
+    }
+    let revision = price.tiered.as_ref().map(|tariff| tariff.tariff.revision);
+    let requires_creation = revision.is_some_and(|revision| revision != 1);
+    let supports_12h = revision == Some(4);
+    let anthropic_creation = usage.cache_creation_details.is_some_and(|details| {
+        details
+            .ephemeral_5m_input_tokens
+            .is_some_and(|value| value != 0)
+            || details
+                .ephemeral_1h_input_tokens
+                .is_some_and(|value| value != 0)
+    });
+    let short_creation = usage
+        .openai_cache_write_details
+        .is_some_and(|details| details.ttl_30m_tokens.is_some_and(|value| value != 0));
+    let long_creation = usage
+        .openai_cache_write_details
+        .is_some_and(|details| details.ttl_12h_tokens.is_some_and(|value| value != 0));
+    if (!requires_creation
+        && (usage
+            .cache_creation_input_tokens
+            .is_some_and(|value| value != 0)
+            || anthropic_creation
+            || short_creation
+            || long_creation))
+        || (!supports_12h && long_creation)
+        || (supports_12h && anthropic_creation)
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(())
+}
+
 impl Bridge {
     pub(super) async fn reconcile_completed_streams(
         &self,
@@ -110,7 +180,8 @@ impl Bridge {
             let upstream_cost = original.price.upstream_cost_group_ppm.is_some();
             // A malformed historical receipt must not block the other rows in
             // this bounded batch. Never turn failed decoding into zero usage.
-            let Some(usage) = recovery_priced_usage(value, sequence, &original.price) else {
+            let Some((usage, outcome)) = recovery_priced_receipt(value, sequence, &original.price)
+            else {
                 continue;
             };
             if upstream_cost && usage.upstream_cost_atto_usd.is_none() {
@@ -127,7 +198,7 @@ impl Bridge {
             let evidence = format!("model-stream:{id}:{sequence}");
             let result = super::billing::retry(|| {
                 self.charging
-                    .reconcile(&id, revision, usage, Outcome::Completed, &evidence)
+                    .reconcile(&id, revision, usage, outcome, &evidence)
             })
             .await;
             let confirmed = match result {
@@ -148,13 +219,7 @@ impl Bridge {
                 Err(error) => return Err(super::billing::error(error)),
             };
             if confirmed.as_ref().is_some_and(|charge| {
-                super::billing::confirmed_settlement(
-                    charge,
-                    &id,
-                    &original.price,
-                    usage,
-                    Outcome::Completed,
-                )
+                super::billing::confirmed_settlement(charge, &id, &original.price, usage, outcome)
             }) {
                 recovered += 1;
             }
@@ -167,6 +232,9 @@ impl Bridge {
         reservation: &Reservation,
         checkpoint: &OutputCheckpoint,
     ) -> Result<(), RelayError> {
+        if !checkpoint.terminal_observed && checkpoint.terminal_outcome.is_some() {
+            return Err(RelayError::SettlementPending);
+        }
         let (worker, output_ceiling, selected) = {
             let active = self
                 .active
@@ -183,19 +251,20 @@ impl Bridge {
             )
         };
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
-        let tiered_tariff = selected.price.tiered.as_ref();
-        let requires_creation = tiered_tariff
-            .map(|tariff| tariff.tariff.compile().map(|t| t.requires_cache_creation()))
-            .transpose()
-            .map_err(|_| RelayError::SettlementPending)?
-            .unwrap_or(false);
+        validate_cache_write_dimensions(checkpoint.usage, &selected.price)?;
         let normalized = if checkpoint.terminal_observed {
-            tiered_tariff
-                .map(|tariff| super::billing::complete_tiered_usage(checkpoint.usage, tariff))
-                .transpose()?
+            Some(super::billing::complete_priced_usage(
+                checkpoint.usage,
+                &selected.price,
+            )?)
         } else {
             None
         };
+        if checkpoint.terminal_outcome == Some(crate::relay::TerminalOutcome::Failed)
+            && !normalized.is_some_and(|usage| verified_free_failure(&selected.price, usage))
+        {
+            return Err(RelayError::SettlementPending);
+        }
         // A persisted terminal is authority for automatic settlement after an
         // OS restart. Validate the original provider contract BEFORE writing it,
         // so recovery cannot turn a rejected receipt into a zero-cache charge.
@@ -219,23 +288,17 @@ impl Bridge {
                 .usage
                 .output_tokens
                 .is_some_and(|v| v > u64::from(output_ceiling))
-            || (!upstream_cost
-                && !requires_creation
-                && (checkpoint
-                    .usage
-                    .cache_creation_input_tokens
-                    .is_some_and(|v| v != 0)
-                    || checkpoint.usage.cache_creation_details.is_some_and(|v| {
-                        v.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
-                            || v.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
-                    })))
             || matches!((checkpoint.usage.cached_input_tokens,checkpoint.usage.input_tokens),(Some(cached),Some(input)) if cached>input)
             || matches!((checkpoint.usage.reasoning_output_tokens,checkpoint.usage.output_tokens),(Some(reasoning),Some(output)) if reasoning>output)
         {
             return Err(RelayError::SettlementPending);
         }
-        let usage =
+        let mut usage =
             serde_json::to_value(checkpoint.usage).map_err(|_| RelayError::BillingUnavailable)?;
+        if let Some(outcome) = checkpoint.terminal_outcome {
+            usage["_core_terminal_outcome"] =
+                serde_json::to_value(outcome).map_err(|_| RelayError::BillingUnavailable)?;
+        }
         let sequence =
             i64::try_from(checkpoint.sequence).map_err(|_| RelayError::SettlementPending)?;
         let bytes =
@@ -291,6 +354,7 @@ impl Bridge {
     }
 }
 
+#[cfg(test)]
 fn recovery_usage(
     value: serde_json::Value,
     sequence: i64,
@@ -303,24 +367,316 @@ fn recovery_usage(
     super::billing::complete_usage(observed, upstream_cost).ok()
 }
 
+fn recovery_priced_receipt(
+    mut value: serde_json::Value,
+    sequence: i64,
+    price: &charging::Price,
+) -> Option<(charging::Usage, Outcome)> {
+    if !(1..=65_536).contains(&sequence) {
+        return None;
+    }
+    let outcome = match value.as_object_mut()?.remove("_core_terminal_outcome") {
+        None => Outcome::Completed,
+        Some(value) => match serde_json::from_value::<crate::relay::TerminalOutcome>(value).ok()? {
+            crate::relay::TerminalOutcome::Completed => Outcome::Completed,
+            crate::relay::TerminalOutcome::Failed => Outcome::Failed,
+        },
+    };
+    let usage =
+        super::billing::complete_priced_usage(serde_json::from_value(value).ok()?, price).ok()?;
+    if outcome == Outcome::Failed && !verified_free_failure(price, usage) {
+        return None;
+    }
+    Some((usage, outcome))
+}
+
+fn verified_free_failure(price: &charging::Price, usage: charging::Usage) -> bool {
+    let Some(search) = &price.search else {
+        return false;
+    };
+    matches!(
+        search.tariff.provider,
+        crate::routing::SearchProvider::DeepSeekSearchV1
+            | crate::routing::SearchProvider::DeepSeekFetchV1
+    ) && search.tariff.unit == crate::routing::SearchBillingUnit::Call
+        && usage
+            .search
+            .is_some_and(|usage| usage.calls == Some(0) && !usage.has_positive())
+        && usage.input == 0
+        && usage.output == 0
+        && usage.cached == 0
+        && usage.image.is_none()
+        && usage.embedding.is_none()
+        && usage.cache_creation.is_none()
+        && usage.upstream_cost_atto_usd.is_none()
+        && price.embedding.is_none()
+        && price.image.is_none()
+        && price.upstream_cost_group_ppm.is_none()
+        && price.tiered.is_none()
+        && price.input_per_million == 0
+        && price.output_per_million == 0
+        && price.cached_per_million == 0
+        && search.limits.calls == Some(1)
+        && price.cost(usage) == Ok(0)
+}
+
+#[cfg(test)]
 fn recovery_priced_usage(
     value: serde_json::Value,
     sequence: i64,
     price: &charging::Price,
 ) -> Option<charging::Usage> {
-    let Some(tariff) = price.tiered.as_ref() else {
-        return recovery_usage(value, sequence, price.upstream_cost_group_ppm.is_some());
-    };
-    if !(1..=65_536).contains(&sequence) {
-        return None;
-    }
-    super::billing::complete_tiered_usage(serde_json::from_value(value).ok()?, tariff).ok()
+    recovery_priced_receipt(value, sequence, price).map(|(usage, _)| usage)
 }
 
 #[cfg(test)]
 mod a07_recovery_tests {
     use super::*;
     use serde_json::json;
+
+    fn dimension_price(revision: Option<u32>) -> charging::Price {
+        let mut value = json!({
+            "version":"routing-1-rule-1","model":"model","group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0
+        });
+        if let Some(revision) = revision {
+            let mut tariff = json!({
+                "revision":revision,"source_digest":"56".repeat(32),
+                "uses_cache_read":true,"uses_cache_write":revision != 1,
+                "tiers":[{"up_to_input_tokens":null,"rates":{
+                    "input":{"numerator":2,"denominator":1},
+                    "output":{"numerator":10,"denominator":1},
+                    "cache_read":{"numerator":1,"denominator":5},
+                    "cache_write":{"numerator":if revision == 1 {0} else {5},"denominator":2}
+                }}]
+            });
+            if revision == 2 || revision == 3 {
+                tariff["uses_cache_write_1h"] = json!(true);
+                tariff["tiers"][0]["rates"]["cache_write_1h"] =
+                    json!({"numerator":4,"denominator":1});
+            }
+            if revision == 4 {
+                tariff["uses_cache_write_12h"] = json!(true);
+                tariff["tiers"][0]["rates"]["cache_write_12h"] =
+                    json!({"numerator":5,"denominator":1});
+            }
+            value["tiered"] = json!({
+                "tariff":tariff,"input_semantics":"inclusive",
+                "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,
+                "credits_per_usd":500000
+            });
+            if revision == 3 {
+                value["tiered"]["cache_creation_mode"] = json!("generic_remainder_v1");
+            }
+        }
+        let price: charging::Price = serde_json::from_value(value).unwrap();
+        price.validate().unwrap();
+        price
+    }
+
+    fn native_tool_price() -> charging::Price {
+        let price: charging::Price = serde_json::from_value(json!({
+            "version":"native-tool-v1", "model":"local-search", "group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0,
+            "search":{
+                "tariff":{"revision":1,"provider":"deep_seek_search_v1","unit":"call",
+                    "currency":"USD","usd_per_unit":{"numerator":1,"denominator":1000}},
+                "limits":{"calls":1},"supplier_contract_revision":"synthetic-native-tool-v1",
+                "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,"credits_per_usd":500000
+            }
+        })).unwrap();
+        price.validate().unwrap();
+        price
+    }
+
+    #[test]
+    fn native_failed_receipt_restores_its_terminal_outcome_without_inventing_success() {
+        let price = native_tool_price();
+        let mut receipt = json!({"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,
+            "search":{"provider":"deep_seek_search_v1","calls":0},
+            "_core_terminal_outcome":"failed"});
+        let (usage, outcome) = recovery_priced_receipt(receipt.clone(), 1, &price).unwrap();
+        assert_eq!(outcome, Outcome::Failed);
+        assert_eq!(price.cost(usage), Ok(0));
+        receipt
+            .as_object_mut()
+            .unwrap()
+            .remove("_core_terminal_outcome");
+        assert_eq!(
+            recovery_priced_receipt(receipt.clone(), 1, &price)
+                .unwrap()
+                .1,
+            Outcome::Completed
+        );
+        receipt["_core_terminal_outcome"] = json!("completed");
+        receipt["search"]["calls"] = json!(1);
+        let (usage, outcome) = recovery_priced_receipt(receipt, 1, &price).unwrap();
+        assert_eq!(outcome, Outcome::Completed);
+        assert_eq!(price.cost(usage), Ok(500));
+    }
+
+    #[test]
+    fn free_failure_authority_cannot_be_applied_to_paid_unknown_or_non_native_receipts() {
+        let price = native_tool_price();
+        let good = json!({"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,
+            "search":{"provider":"deep_seek_search_v1","calls":0},
+            "_core_terminal_outcome":"failed"});
+        for (field, value) in [
+            (
+                "search",
+                json!({"provider":"deep_seek_search_v1","calls":1}),
+            ),
+            ("search", json!({"provider":"deep_seek_search_v1"})),
+            (
+                "search",
+                json!({"provider":"open_ai_responses_v1","calls":0}),
+            ),
+            ("input_tokens", json!(1)),
+            ("_core_terminal_outcome", json!("cancelled")),
+            ("_core_terminal_outcome", json!(null)),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            assert!(recovery_priced_receipt(bad, 1, &price).is_none());
+        }
+        let mut token_price = price.clone();
+        token_price.input_per_million = 1;
+        assert!(recovery_priced_receipt(good.clone(), 1, &token_price).is_none());
+        let mut multi_call = price;
+        multi_call.search.as_mut().unwrap().limits.calls = Some(2);
+        assert!(recovery_priced_receipt(good.clone(), 1, &multi_call).is_none());
+        assert!(recovery_priced_receipt(good, 0, &native_tool_price()).is_none());
+    }
+
+    #[test]
+    fn native_embedding_recovery_preserves_the_frozen_modality_price_and_complete_evidence() {
+        let price: charging::Price = serde_json::from_value(json!({
+            "version":"native-embedding-v1","model":"local-embedding","group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0,
+            "embedding":{
+                "tariff":{"revision":1,"provider":"ali_separate_input_v1","currency":"USD",
+                    "text_usd_per_million":{"numerator":258,"denominator":1000},
+                    "image_usd_per_million":{"numerator":258,"denominator":1000}},
+                "input_token_limit":1000,"provider_contract_revision":"synthetic-embedding-v1",
+                "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,"credits_per_usd":500000
+            }
+        })).unwrap();
+        price.validate().unwrap();
+        let receipt = json!({"input_tokens":30,"cached_input_tokens":0,"output_tokens":0,
+            "embedding":{"provider":"ali_separate_input_v1","text_tokens":10,"image_tokens":20,"total_input_tokens":30}});
+        let (usage, outcome) = recovery_priced_receipt(receipt.clone(), 1, &price).unwrap();
+        assert_eq!(outcome, Outcome::Completed);
+        assert_eq!(price.cost(usage), Ok(4));
+        let restored: charging::Price =
+            serde_json::from_value(serde_json::to_value(&price).unwrap()).unwrap();
+        assert_eq!(restored.cost(usage), Ok(4));
+        for (field, value) in [
+            ("input_tokens", json!(10)),
+            ("output_tokens", json!(1)),
+            ("cached_input_tokens", json!(1)),
+            ("_core_terminal_outcome", json!("failed")),
+            (
+                "embedding",
+                json!({"provider":"ali_separate_input_v1","text_tokens":10,"total_input_tokens":30}),
+            ),
+            (
+                "embedding",
+                json!({"provider":"ali_separate_input_v1","text_tokens":10,"image_tokens":20,"total_input_tokens":29}),
+            ),
+        ] {
+            let mut bad = receipt.clone();
+            bad[field] = value;
+            assert!(recovery_priced_receipt(bad, 1, &price).is_none());
+        }
+        assert!(recovery_priced_receipt(receipt, 1, &dimension_price(None)).is_none());
+    }
+
+    #[test]
+    fn cache_dimensions_reject_known_unsupported_subsets_even_without_aggregate() {
+        use crate::relay::{CacheCreationDetails, OpenAiCacheWriteDetails, Usage};
+        let twelve = Usage {
+            input_tokens: Some(12),
+            cached_input_tokens: Some(0),
+            output_tokens: Some(1),
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: None,
+                ttl_12h_tokens: Some(3),
+            }),
+            ..Usage::default()
+        };
+        for aggregate in [None, Some(3)] {
+            let observed = Usage {
+                cache_creation_input_tokens: aggregate,
+                ..twelve
+            };
+            observed.validate().unwrap();
+            for revision in [None, Some(1), Some(2), Some(3)] {
+                assert!(
+                    matches!(
+                        validate_cache_write_dimensions(observed, &dimension_price(revision)),
+                        Err(RelayError::SettlementPending)
+                    ),
+                    "{revision:?}: {observed:?}"
+                );
+            }
+            assert!(validate_cache_write_dimensions(observed, &dimension_price(Some(4))).is_ok());
+        }
+        let short = Usage {
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: Some(3),
+                ttl_12h_tokens: Some(0),
+            }),
+            ..twelve
+        };
+        short.validate().unwrap();
+        for revision in [None, Some(1)] {
+            assert!(validate_cache_write_dimensions(short, &dimension_price(revision)).is_err());
+        }
+        // Supported partial dimensions may await their total; terminal
+        // normalization separately requires a complete authoritative receipt.
+        for revision in [2, 3, 4] {
+            assert!(
+                validate_cache_write_dimensions(short, &dimension_price(Some(revision))).is_ok()
+            );
+        }
+        let anthropic = Usage {
+            openai_cache_write_details: None,
+            cache_creation_details: Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: None,
+                ephemeral_1h_input_tokens: Some(3),
+            }),
+            ..twelve
+        };
+        anthropic.validate().unwrap();
+        assert!(validate_cache_write_dimensions(anthropic, &dimension_price(Some(4))).is_err());
+        for revision in [None, Some(1), Some(2), Some(3), Some(4)] {
+            assert!(
+                validate_cache_write_dimensions(Usage::default(), &dimension_price(revision))
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_cost_checkpoint_contract_keeps_total_cost_independent_of_cache_dimensions() {
+        let mut price = dimension_price(None);
+        price.model = "openrouter/auto-beta".into();
+        price.upstream_cost_group_ppm = Some(1_000_000);
+        price.validate().unwrap();
+        let observed: crate::relay::Usage = serde_json::from_value(json!({
+            "input_tokens":12,"output_tokens":1,"cached_input_tokens":0,
+            "cache_creation_input_tokens":null,"reasoning_output_tokens":null,
+            "openai_cache_write_details":{"ttl_12h_tokens":3},
+            "upstream_cost_atto_usd":crate::upstream_cost::ATTO_USD
+        }))
+        .unwrap();
+        observed.validate().unwrap();
+        assert!(validate_cache_write_dimensions(observed, &price).is_ok());
+        let usage =
+            recovery_priced_usage(serde_json::to_value(observed).unwrap(), 1, &price).unwrap();
+        assert_eq!(price.cost(usage).unwrap(), 500_000);
+        assert!(usage.cache_creation.is_none());
+    }
 
     #[test]
     fn cache_v2_recovery_uses_the_original_frozen_usage_contract() {
@@ -411,6 +767,10 @@ mod a07_recovery_tests {
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                mantle_sigv4_region: None,
+                deepseek_parameters_contract: None,
+                embedding: None,
+                search: None,
                 missing_cache_creation_tokens_is_zero: false,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),
@@ -477,6 +837,7 @@ mod a07_recovery_tests {
             },
         ] {
             let checkpoint = OutputCheckpoint {
+                terminal_outcome: None,
                 sequence: 1,
                 packet_sha256: [3; 32],
                 packet_bytes: 1,
@@ -496,6 +857,47 @@ mod a07_recovery_tests {
                 matches!(result, Err(RelayError::SettlementPending)),
                 "invalid terminal reached persistence: {result:?}"
             );
+        }
+        for terminal_observed in [false, true] {
+            for details in [
+                crate::relay::OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: None,
+                    ttl_12h_tokens: Some(3),
+                },
+                crate::relay::OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: Some(3),
+                    ttl_12h_tokens: Some(0),
+                },
+            ] {
+                let checkpoint = OutputCheckpoint {
+                    terminal_outcome: None,
+                    sequence: 1,
+                    packet_sha256: [4; 32],
+                    packet_bytes: 1,
+                    usage: crate::relay::Usage {
+                        input_tokens: Some(12),
+                        cached_input_tokens: Some(0),
+                        output_tokens: Some(3),
+                        openai_cache_write_details: Some(details),
+                        ..Default::default()
+                    },
+                    terminal_observed,
+                };
+                checkpoint.usage.validate().unwrap();
+                let result = gateway
+                    .bridge
+                    .persist_output(
+                        &Reservation {
+                            id: "terminal-contract".into(),
+                        },
+                        &checkpoint,
+                    )
+                    .await;
+                assert!(
+                    matches!(result, Err(RelayError::SettlementPending)),
+                    "unsupported cache subset reached persistence: {terminal_observed}: {result:?}"
+                );
+            }
         }
     }
 
@@ -568,6 +970,8 @@ mod a07_recovery_tests {
         assert_eq!(
             valid,
             vec![charging::Usage {
+                embedding: None,
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
@@ -628,6 +1032,8 @@ mod a07_recovery_tests {
         assert_eq!(
             recovery_usage(value, 1, true),
             Some(charging::Usage {
+                embedding: None,
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),

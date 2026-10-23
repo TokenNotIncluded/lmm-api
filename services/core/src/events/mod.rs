@@ -2,6 +2,7 @@
 //! Publishers use their existing transaction. No method calls an extension.
 mod inbox;
 pub use inbox::{CommandKey, InboxOutcome, begin_command, complete_command};
+pub(crate) use inbox::{begin_command_in_transaction, complete_command_in_transaction};
 
 use rand::{Rng, RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
@@ -213,13 +214,19 @@ impl EventStore {
     /// Call near the end of the business transaction; commit both or neither.
     /// On Busy/Full/error the caller must roll back the ENTIRE business write.
     pub async fn publish(tx: &mut Transaction<'_, Postgres>, event: NewEvent<'_>) -> Result<i64> {
+        Self::publish_in_transaction(&mut **tx, event).await
+    }
+    pub(crate) async fn publish_in_transaction(
+        c: &mut PgConnection,
+        event: NewEvent<'_>,
+    ) -> Result<i64> {
         event.validate()?;
         let fingerprint = event.fingerprint();
-        let capacity = lock_capacity(tx).await?;
+        let capacity = lock_capacity(c).await?;
         if let Some(row) =
             sqlx::query("SELECT id,content_sha256 FROM core_events.outbox WHERE event_key=$1")
                 .bind(event.key)
-                .fetch_optional(&mut **tx)
+                .fetch_optional(&mut *c)
                 .await?
         {
             return if row.try_get::<Vec<u8>, _>("content_sha256")? == fingerprint {
@@ -238,24 +245,24 @@ impl EventStore {
             return Err(EventError::Full);
         }
         let full: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_events.subscriptions WHERE $1=ANY(event_types) AND pending>=max_pending)")
-            .bind(event.event_type).fetch_one(&mut **tx).await?;
+            .bind(event.event_type).fetch_one(&mut *c).await?;
         if full {
             return Err(EventError::Full);
         }
         let id: i64 = sqlx::query_scalar("INSERT INTO core_events.outbox(event_key,event_type,schema_version,resource_id,resource_version,payload,content_sha256,pending_deliveries) VALUES($1,$2,$3,$4,$5,$6,$7,(SELECT count(*) FROM core_events.subscriptions WHERE $2=ANY(event_types))) RETURNING id")
             .bind(event.key).bind(event.event_type).bind(event.schema_version as i32)
             .bind(event.resource_id).bind(event.resource_version).bind(event.payload)
-            .bind(fingerprint.as_slice()).fetch_one(&mut **tx).await?;
+            .bind(fingerprint.as_slice()).fetch_one(&mut *c).await?;
         sqlx::query("INSERT INTO core_events.deliveries(consumer_id,event_id) SELECT consumer_id,$1 FROM core_events.subscriptions WHERE $2=ANY(event_types)")
-            .bind(id).bind(event.event_type).execute(&mut **tx).await?;
+            .bind(id).bind(event.event_type).execute(&mut *c).await?;
         sqlx::query(
             "UPDATE core_events.subscriptions SET pending=pending+1 WHERE $1=ANY(event_types)",
         )
         .bind(event.event_type)
-        .execute(&mut **tx)
+        .execute(&mut *c)
         .await?;
         sqlx::query("UPDATE core_events.capacity SET pending_events=pending_events+1,pending_bytes=pending_bytes+$1 WHERE singleton")
-            .bind(bytes).execute(&mut **tx).await?;
+            .bind(bytes).execute(&mut *c).await?;
         Ok(id)
     }
     pub async fn event_types(&self, service: &str, consumer: &str) -> Result<Vec<String>> {
@@ -360,7 +367,7 @@ impl EventStore {
         Ok(false)
     }
 }
-async fn acknowledge_transaction(
+pub(crate) async fn acknowledge_transaction(
     c: &mut PgConnection,
     service: &str,
     consumer: &str,

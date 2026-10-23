@@ -34,6 +34,7 @@ import { useStatus } from '@/hooks/use-status'
 import { getEndpointTypeLabel, isNativeSessionEndpointType } from '../constants'
 import { replaceModelInPath } from '../lib/model-helpers'
 import { buildModerationSample } from '../lib/moderation-samples'
+import { buildNativeToolSample } from '../lib/native-tool-samples'
 import { buildSystemoneSample } from '../lib/systemone-samples'
 import type { PricingModel } from '../types'
 
@@ -418,6 +419,9 @@ function buildSample(
 ): string {
   if (endpointType === 'systemone') return buildSystemoneSample(lang, ctx)
   if (endpointType === 'moderation') return buildModerationSample(lang, ctx)
+  if (endpointType === 'deepseek-search' || endpointType === 'deepseek-fetch') {
+    return buildNativeToolSample(lang, { ...ctx, endpointType })
+  }
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
   if (endpointType === 'gemini') return buildGeminiSample(lang, ctx)
   if (endpointType === 'embeddings' || endpointType === 'jina-rerank') {

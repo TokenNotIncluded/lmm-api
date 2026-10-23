@@ -27,9 +27,9 @@ import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
   buildQueryParams,
-  calculateDashboardStats,
   getDefaultDays,
-} from '@/features/dashboard/lib'
+} from '@/features/dashboard/lib/filters'
+import { calculateDashboardStats } from '@/features/dashboard/lib/stats'
 import { registerDashboardUsageTranslations } from '@/features/dashboard/model-usage-i18n'
 import type {
   QuotaDataItem,
@@ -130,6 +130,8 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
     rpm: stats?.totalCount ?? 0,
     quota: stats?.totalQuota ?? null,
     tpm: stats?.totalTokens ?? null,
+    cacheRead: stats?.totalCacheReadTokens ?? null,
+    cacheCreation: stats?.totalCacheCreationTokens ?? null,
     outputImages: stats?.totalOutputImages ?? null,
   }
   const start = filters?.start_timestamp

@@ -30,6 +30,8 @@ pub struct Bootstrap {
 pub enum Operation {
     InitDb,
     CompleteSetup,
+    ConfigureNotifications(lmm_core::notifications::PolicyInstallation),
+    ConfigureRoutingBaseline(Box<lmm_core::routing::store::ReleaseDocument>),
     InstallToolMarketBuiltins,
     BootstrapUser(Bootstrap),
     CreateFirstOwner(first_owner::Request),
@@ -40,6 +42,46 @@ pub enum Operation {
 }
 
 impl Operation {
+    pub fn configure_routing_baseline(input: impl Read) -> io::Result<Self> {
+        let mut bytes = Vec::new();
+        input.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        let document = lmm_core::routing::store::ReleaseDocument::decode(&bytes).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid routing baseline JSON")
+        })?;
+        document.clone().into_router().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid routing baseline configuration",
+            )
+        })?;
+        Ok(Self::ConfigureRoutingBaseline(Box::new(document)))
+    }
+
+    pub fn configure_notifications(input: impl Read) -> io::Result<Self> {
+        let mut bytes = Vec::new();
+        input.take(4097).read_to_end(&mut bytes)?;
+        if bytes.len() > 4096 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "notification policy exceeds 4096 bytes",
+            ));
+        }
+        let policy: lmm_core::notifications::PolicyInstallation = serde_json::from_slice(&bytes)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid notification policy JSON",
+                )
+            })?;
+        if !policy.policy.valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid notification policy",
+            ));
+        }
+        Ok(Self::ConfigureNotifications(policy))
+    }
+
     pub fn upgrade_database(input: impl Read) -> io::Result<Self> {
         lmm_core::core_schema::UpgradeRequest::read(input)
             .map(|request| Self::UpgradeDatabase(Box::new(request)))
@@ -151,6 +193,20 @@ pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
         }
         Operation::CreateFirstOwner(request) => {
             let receipt = first_owner::run(&pool, request).await?;
+            serde_json::to_writer(io::stdout().lock(), &receipt)?;
+            println!();
+        }
+        Operation::ConfigureNotifications(input) => {
+            lmm_core::core_schema::check(&pool).await?;
+            let revision = lmm_core::notifications::install_policy(&pool, &input).await?;
+            serde_json::to_writer(
+                io::stdout().lock(),
+                &serde_json::json!({"revision":revision,"mail_sent":false}),
+            )?;
+            println!();
+        }
+        Operation::ConfigureRoutingBaseline(document) => {
+            let receipt = lmm_core::routing_admin::install_owner_baseline(&pool, *document).await?;
             serde_json::to_writer(io::stdout().lock(), &receipt)?;
             println!();
         }

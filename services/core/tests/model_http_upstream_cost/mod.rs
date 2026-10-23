@@ -7,7 +7,10 @@ use std::sync::atomic::AtomicUsize;
 const MODEL: &str = "openrouter/fusion";
 const COST: &str = "0.123456789";
 
-async fn cost_provider(State(hits): State<Arc<AtomicUsize>>, Json(request): Json<Value>) -> Response {
+async fn cost_provider(
+    State(hits): State<Arc<AtomicUsize>>,
+    Json(request): Json<Value>,
+) -> Response {
     hits.fetch_add(1, Ordering::SeqCst);
     assert!(lmm_core::upstream_cost::supported_router(
         request["model"].as_str().unwrap()
@@ -61,6 +64,8 @@ fn cost_routes(endpoint: &str, model: &str) -> Arc<lmm_core::routing::Router> {
     let price = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            embedding: None,
+            search: None,
             billing_mode: BillingMode::UpstreamCost,
             tiered: None,
             id: 1,

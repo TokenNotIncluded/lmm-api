@@ -9,6 +9,9 @@ const bucketShape = {
   model_name: z.string().optional(),
   created_at: z.number(),
   token_used: counter.nullable().optional(),
+  cache_read_tokens: counter.nullable().optional(),
+  cache_creation_tokens: counter.nullable().optional(),
+  cache_creation_tokens_12h: counter.nullable().optional(),
   count: counter.optional(),
   quota: z.number().nullable().optional(),
   quota_usd: z.string().optional(),
@@ -61,7 +64,13 @@ const nativeBucketSchema = z
     (bucket) =>
       bucket.quota === bucket.net_consumption_credits &&
       bucket.gross_settled_credits - bucket.refunded_credits === bucket.quota &&
-      (bucket.token_used !== null || bucket.output_image_count > 0),
+      (bucket.token_used !== null || bucket.output_image_count > 0) &&
+      (bucket.token_used !== null ||
+        [
+          bucket.cache_read_tokens,
+          bucket.cache_creation_tokens,
+          bucket.cache_creation_tokens_12h,
+        ].every((value) => value === null || value === undefined)),
     'Invalid native consumption receipt'
   )
 
@@ -69,6 +78,19 @@ const nativeBucketSchema = z
 export const usageBucketSchema = z
   .object(bucketShape)
   .superRefine((bucket, ctx) => {
+    const read = bucket.cache_read_tokens
+    const write = bucket.cache_creation_tokens
+    const twelveHour = bucket.cache_creation_tokens_12h
+    if (
+      (typeof bucket.token_used === 'number' &&
+        (read ?? 0) + (write ?? 0) > bucket.token_used) ||
+      (typeof twelveHour === 'number' &&
+        ((typeof write === 'number' && twelveHour > write) ||
+          (typeof bucket.token_used === 'number' &&
+            twelveHour > bucket.token_used)))
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid cache usage totals' })
+    }
     const native =
       bucket.token_count_scope !== undefined ||
       bucket.settlement_scope !== undefined ||

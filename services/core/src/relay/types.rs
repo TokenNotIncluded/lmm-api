@@ -258,6 +258,9 @@ pub struct Route {
     pub(crate) endpoint: Url,
     pub(crate) credential: HeaderValue,
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
+    pub(crate) search_contract: Option<super::search::SearchBinding>,
+    pub(crate) deepseek_parameters: bool,
+    pub(crate) mantle: Option<super::mantle::MantleSigner>,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -321,6 +324,9 @@ impl Route {
             credential,
             price_version,
             cache_creation_mode: None,
+            search_contract: None,
+            deepseek_parameters: false,
+            mantle: None,
             availability: None,
         })
     }
@@ -329,6 +335,76 @@ impl Route {
     pub(crate) fn with_cache_creation_mode(mut self, mode: Option<CacheCreationMode>) -> Self {
         self.cache_creation_mode = mode;
         self
+    }
+
+    /// Mantle has a dedicated credential path. Its JSON secret is never passed
+    /// through an API-key HeaderValue or made available as a fallback token.
+    pub fn new_mantle(
+        id: String,
+        endpoint: &str,
+        model: String,
+        region: &str,
+        secret_json: &str,
+        price_version: u64,
+    ) -> Result<Self, RelayError> {
+        if id.is_empty()
+            || id.len() > 128
+            || model.is_empty()
+            || model.len() > 256
+            || price_version == 0
+        {
+            return Err(RelayError::Invalid("invalid Mantle route configuration"));
+        }
+        let mantle = super::mantle::MantleSigner::new(endpoint, region, secret_json)?;
+        let mut credential = HeaderValue::from_static("");
+        credential.set_sensitive(true);
+        Ok(Self {
+            id,
+            protocol: UpstreamProtocol::Anthropic,
+            model,
+            price_version,
+            endpoint: mantle.endpoint().clone(),
+            credential,
+            cache_creation_mode: None,
+            search_contract: None,
+            deepseek_parameters: false,
+            mantle: Some(mantle),
+            availability: None,
+        })
+    }
+
+    /// Server-owned, frozen supplier guarantees. Requests cannot select prices
+    /// or decide which supplier's search receipt is authoritative.
+    pub(crate) fn with_search_contract(
+        mut self,
+        provider: crate::routing::SearchProvider,
+        limits: crate::routing::SearchLimits,
+    ) -> Result<Self, RelayError> {
+        if self.mantle.is_some() {
+            return Err(RelayError::Unsupported(
+                "Mantle hosted search has no reviewed billing contract",
+            ));
+        }
+        limits
+            .validate()
+            .map_err(|_| RelayError::Invalid("invalid search bounds"))?;
+        if super::search::provider_protocol(provider) != Some(self.protocol) {
+            return Err(RelayError::Unsupported("search supplier protocol mismatch"));
+        }
+        self.search_contract = Some(super::search::SearchBinding { provider, limits });
+        Ok(self)
+    }
+
+    /// Selected only through an exact server-owned DeepSeek parameter contract.
+    /// A model name or a client-supplied thinking option cannot enable this.
+    pub(crate) fn with_deepseek_parameters(mut self) -> Result<Self, RelayError> {
+        if self.protocol == UpstreamProtocol::Gemini || self.mantle.is_some() {
+            return Err(RelayError::Unsupported(
+                "DeepSeek has no Gemini parameter contract",
+            ));
+        }
+        self.deepseek_parameters = true;
+        Ok(self)
     }
 
     /// Server-owned snapshot guard, checked immediately before sending bytes.
@@ -368,6 +444,16 @@ pub struct OutputCheckpoint {
     pub packet_bytes: usize,
     pub usage: Usage,
     pub terminal_observed: bool,
+    /// None preserves the historical completed-terminal contract. A Failed
+    /// terminal needs a separate reviewed free-failure receipt validation.
+    pub terminal_outcome: Option<TerminalOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutcome {
+    Completed,
+    Failed,
 }
 
 pub trait Billing: Send + Sync + 'static {
@@ -458,6 +544,30 @@ impl CacheCreationDetails {
     }
 }
 
+/// OpenAI's cache lifetimes are separate from Anthropic's 5m/1h counters.
+/// Both are subsets of the reported aggregate, never additional input tokens.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiCacheWriteDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_30m_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_12h_tokens: Option<u64>,
+}
+
+impl OpenAiCacheWriteDetails {
+    fn has_known_bucket(&self) -> bool {
+        self.ttl_30m_tokens.is_some() || self.ttl_12h_tokens.is_some()
+    }
+
+    fn known_total(self) -> Result<u64, RelayError> {
+        self.ttl_30m_tokens
+            .unwrap_or(0)
+            .checked_add(self.ttl_12h_tokens.unwrap_or(0))
+            .ok_or(RelayError::Protocol("usage overflow"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Usage {
@@ -473,10 +583,16 @@ pub struct Usage {
     pub cache_creation_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_details: Option<CacheCreationDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_cache_write_details: Option<OpenAiCacheWriteDetails>,
     /// Frozen Core interpretation; the provider's aggregate remains unmodified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_mode: Option<CacheCreationMode>,
     pub reasoning_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<crate::routing::SearchUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<crate::routing::EmbeddingUsage>,
 }
 impl Usage {
     pub(crate) fn merge(&mut self, next: Self) -> Result<(), RelayError> {
@@ -501,6 +617,8 @@ impl Usage {
             Ok(())
         }
         let mut combined = *self;
+        combined.merge_search(next.search)?;
+        combined.merge_embedding(next.embedding)?;
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let creation_advanced = advances(
             self.cache_creation_input_tokens,
@@ -575,6 +693,7 @@ impl Usage {
             &mut combined.reasoning_output_tokens,
             next.reasoning_output_tokens,
         )?;
+        combined.openai_cache_write_details = self.merged_openai_cache_write_details(next)?;
         combined.validate()?;
         if let (Some(mut previous), Some(details)) =
             (previous_details, combined.cache_creation_details)
@@ -620,6 +739,8 @@ impl Usage {
         self.validate()?;
         next.validate()?;
         let mut combined = *self;
+        combined.merge_search(next.search)?;
+        combined.merge_embedding(next.embedding)?;
         combined.cache_creation_mode = self.cache_creation_mode.or(next.cache_creation_mode);
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let uncached_advanced = advances(self.uncached_input_tokens, next.uncached_input_tokens);
@@ -706,9 +827,76 @@ impl Usage {
                 ));
             }
         }
+        combined.openai_cache_write_details = self.merged_openai_cache_write_details(next)?;
         combined.validate()?;
         *self = combined;
         Ok(())
+    }
+
+    fn merged_openai_cache_write_details(
+        &self,
+        next: Self,
+    ) -> Result<Option<OpenAiCacheWriteDetails>, RelayError> {
+        let previous = self.openai_cache_write_details;
+        let new_basis = [
+            (self.input_tokens, next.input_tokens),
+            (self.uncached_input_tokens, next.uncached_input_tokens),
+            (self.cached_input_tokens, next.cached_input_tokens),
+            (
+                self.cache_creation_input_tokens,
+                next.cache_creation_input_tokens,
+            ),
+        ]
+        .into_iter()
+        .any(|(old, new)| new.is_some_and(|value| old.is_none_or(|old| value > old)));
+        if new_basis && let Some(old) = previous.filter(OpenAiCacheWriteDetails::has_known_bucket) {
+            let current = next.openai_cache_write_details.ok_or(RelayError::Protocol(
+                "missing current OpenAI cache write details",
+            ))?;
+            if next.cache_creation_input_tokens.is_none()
+                || (old.ttl_30m_tokens.is_some() && current.ttl_30m_tokens.is_none())
+                || (old.ttl_12h_tokens.is_some() && current.ttl_12h_tokens.is_none())
+            {
+                return Err(RelayError::Protocol(
+                    "missing current OpenAI cache write details",
+                ));
+            }
+        }
+        let Some(current) = next.openai_cache_write_details else {
+            return Ok(previous);
+        };
+        let mut combined = previous.unwrap_or_default();
+        for (old, new) in [
+            (&mut combined.ttl_30m_tokens, current.ttl_30m_tokens),
+            (&mut combined.ttl_12h_tokens, current.ttl_12h_tokens),
+        ] {
+            if let Some(value) = new {
+                if old.is_some_and(|old| value < old) {
+                    return Err(RelayError::Protocol("usage counter decreased"));
+                }
+                *old = Some(value);
+            }
+        }
+        // A known aggregate and 12h count also bound ordinary creation. Do not
+        // let later TTL refinement erase that cumulative billable quantity.
+        if let (Some(old_total), Some(old_long), Some(total), Some(long)) = (
+            self.cache_creation_input_tokens,
+            previous.and_then(|details| details.ttl_12h_tokens),
+            next.cache_creation_input_tokens
+                .or(self.cache_creation_input_tokens),
+            combined.ttl_12h_tokens,
+        ) {
+            let old_short = old_total.checked_sub(old_long).ok_or(RelayError::Protocol(
+                "inconsistent OpenAI cache write usage",
+            ))?;
+            let short = total.checked_sub(long).ok_or(RelayError::Protocol(
+                "inconsistent OpenAI cache write usage",
+            ))?;
+            if short < old_short {
+                return Err(RelayError::Protocol("usage counter decreased"));
+            }
+        }
+        Ok(Some(combined))
     }
 
     /// Effective creation is derived from real aggregate and TTL evidence.
@@ -729,9 +917,64 @@ impl Usage {
         }
     }
 
+    fn merge_search(
+        &mut self,
+        next: Option<crate::routing::SearchUsage>,
+    ) -> Result<(), RelayError> {
+        if let Some(next) = next {
+            if let Some(previous) = &mut self.search {
+                super::search::merge_usage(previous, next)?;
+            } else {
+                if !next.valid() {
+                    return Err(RelayError::Protocol("invalid search usage"));
+                }
+                self.search = Some(next);
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_embedding(
+        &mut self,
+        next: Option<crate::routing::EmbeddingUsage>,
+    ) -> Result<(), RelayError> {
+        if let Some(next) = next {
+            if !next.valid() || self.embedding.is_some_and(|old| !next.follows(old)) {
+                return Err(RelayError::Protocol("inconsistent embedding usage"));
+            }
+            self.embedding = Some(next);
+        }
+        Ok(())
+    }
+
     /// Validate both live observations and receipts restored after a restart.
     /// Deserialization alone does not establish counter consistency.
     pub(crate) fn validate(&self) -> Result<(), RelayError> {
+        if let Some(embedding) = self.embedding {
+            if !embedding.valid()
+                || self.search.is_some()
+                || self.upstream_cost_atto_usd.is_some()
+                || self.cache_creation_mode.is_some()
+                || self.uncached_input_tokens.is_some()
+                || self.cache_creation_details.is_some()
+                || self.openai_cache_write_details.is_some()
+                || [
+                    self.output_tokens,
+                    self.cached_input_tokens,
+                    self.cache_creation_input_tokens,
+                    self.reasoning_output_tokens,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|count| count != 0)
+                || matches!((self.input_tokens, embedding.total_input_tokens), (Some(input), Some(total)) if input != total)
+            {
+                return Err(RelayError::Protocol("invalid embedding usage"));
+            }
+        }
+        if self.search.is_some_and(|usage| !usage.valid()) {
+            return Err(RelayError::Protocol("invalid search usage"));
+        }
         if self.uncached_input_tokens.is_some() && self.cache_creation_mode.is_none() {
             return Err(RelayError::Protocol(
                 "uncached input without cache creation mode",
@@ -758,6 +1001,28 @@ impl Usage {
             })
             .transpose()?
             .unwrap_or(0);
+        let openai_creation = self
+            .openai_cache_write_details
+            .map(|details| {
+                let known = details.known_total()?;
+                if known_creation != 0 {
+                    return Err(RelayError::Protocol("mixed cache write lifetimes"));
+                }
+                if let Some(total) = self.cache_creation_input_tokens
+                    && (known > total
+                        || (details.ttl_30m_tokens.is_some()
+                            && details.ttl_12h_tokens.is_some()
+                            && known != total))
+                {
+                    return Err(RelayError::Protocol(
+                        "inconsistent OpenAI cache write usage",
+                    ));
+                }
+                Ok(known)
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let known_creation = known_creation.max(openai_creation);
         let cached = self
             .cached_input_tokens
             .unwrap_or(0)
@@ -813,6 +1078,15 @@ impl Usage {
         if let Some(v) = self.cached_input_tokens {
             out.insert(format!("{input}_details"), json!({"cached_tokens":v}));
         }
+        if let Some(details) = self.openai_cache_write_details {
+            let input_details = out
+                .entry(format!("{input}_details"))
+                .or_insert_with(|| json!({}));
+            if let Some(total) = self.cache_creation_input_tokens {
+                input_details["cache_write_tokens"] = json!(total);
+            }
+            input_details["cache_write_tokens_details"] = json!(details);
+        }
         if let Some(v) = self.reasoning_output_tokens {
             out.insert(format!("{output}_details"), json!({"reasoning_tokens":v}));
         }
@@ -821,6 +1095,36 @@ impl Usage {
         }
         if let Some(details) = self.cache_creation_details {
             out.insert("cache_creation_details".into(), json!(details));
+        }
+        if client == ClientProtocol::Responses
+            && let Some(search) = self.search
+        {
+            match search.provider {
+                crate::routing::SearchProvider::XaiResponsesV1 => {
+                    let mut details = serde_json::Map::new();
+                    for (key, value) in [
+                        ("web_search_calls", search.calls),
+                        ("x_posts_fetched", search.x_posts_fetched),
+                        ("x_users_fetched", search.x_users_fetched),
+                    ] {
+                        if let Some(value) = value {
+                            details.insert(key.into(), json!(value));
+                        }
+                    }
+                    if !details.is_empty() {
+                        out.insert(
+                            "server_side_tool_usage_details".into(),
+                            Value::Object(details),
+                        );
+                    }
+                }
+                crate::routing::SearchProvider::DashscopeResponsesV1 => {
+                    if let Some(calls) = search.calls {
+                        out.insert("x_tools".into(), json!({"web_search":{"count":calls}}));
+                    }
+                }
+                _ => {}
+            }
         }
         Value::Object(out)
     }
@@ -852,6 +1156,12 @@ pub(crate) enum BlockKind {
     Thinking,
     Tool { id: String, name: String },
 }
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OutputSlot {
+    Block(usize),
+    Hosted(usize),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
     Start(String),
@@ -870,6 +1180,17 @@ pub(crate) enum Event {
     },
     EndBlock(usize),
     Usage(Usage),
+    /// Native hosted-tool output or grounding metadata. It is never a client
+    /// function call, and is not itself a billing authority.
+    SearchOutput {
+        protocol: UpstreamProtocol,
+        value: Value,
+    },
+    Citations {
+        index: usize,
+        protocol: UpstreamProtocol,
+        values: Vec<Value>,
+    },
     StopSequence(String),
     Finish(FinishReason),
     Done,
@@ -1349,6 +1670,8 @@ mod a07_usage_tests {
     #[test]
     fn zero_boundary_repeated_receipt_and_missing_fields_are_valid() {
         let zero = Usage {
+            embedding: None,
+            search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,
             input_tokens: Some(0),
@@ -1357,6 +1680,7 @@ mod a07_usage_tests {
             cache_creation_input_tokens: Some(0),
             cache_creation_details: None,
             cache_creation_mode: None,
+            openai_cache_write_details: None,
             reasoning_output_tokens: Some(0),
         };
         let mut value = Usage::default();
@@ -1405,6 +1729,196 @@ mod a07_usage_tests {
             }))
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod openai_cache_write_tests {
+    use super::*;
+
+    fn measured(total: Option<u64>, short: Option<u64>, long: Option<u64>) -> Usage {
+        Usage {
+            input_tokens: Some(100),
+            cache_creation_input_tokens: total,
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: short,
+                ttl_12h_tokens: long,
+            }),
+            ..Usage::default()
+        }
+    }
+
+    #[test]
+    fn old_receipts_keep_their_shape_and_new_receipts_round_trip() {
+        let old = Usage {
+            input_tokens: Some(100),
+            cache_creation_input_tokens: Some(5),
+            ..Usage::default()
+        };
+        let old_json = serde_json::to_value(old).unwrap();
+        assert!(old_json.get("openai_cache_write_details").is_none());
+        assert_eq!(serde_json::from_value::<Usage>(old_json).unwrap(), old);
+        let new = measured(Some(5), Some(2), Some(3));
+        let bytes = serde_json::to_vec(&new).unwrap();
+        let restored: Usage = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored, new);
+        assert!(restored.validate().is_ok());
+        let mut invalid = serde_json::to_value(new).unwrap();
+        invalid["openai_cache_write_details"]["ttl_1h_tokens"] = json!(1);
+        assert!(serde_json::from_value::<Usage>(invalid).is_err());
+    }
+
+    #[test]
+    fn known_lifetimes_validate_without_creating_missing_evidence() {
+        for value in [
+            measured(Some(5), None, Some(3)),
+            measured(Some(5), Some(2), None),
+            measured(Some(5), None, None),
+            measured(None, Some(2), Some(3)),
+            measured(None, None, Some(3)),
+            measured(Some(0), Some(0), Some(0)),
+        ] {
+            let before = value;
+            assert!(value.validate().is_ok());
+            assert_eq!(value, before);
+        }
+        for value in [
+            measured(Some(5), None, Some(6)),
+            measured(Some(5), Some(2), Some(4)),
+            measured(Some(5), Some(2), Some(2)),
+            measured(Some(0), None, Some(1)),
+            measured(None, Some(u64::MAX), Some(1)),
+            measured(None, None, Some(101)),
+            Usage {
+                cached_input_tokens: Some(98),
+                ..measured(None, None, Some(3))
+            },
+        ] {
+            assert!(value.validate().is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn anthropic_lifetimes_cannot_be_combined_with_openai_lifetimes() {
+        for mode in [None, Some(CacheCreationMode::GenericRemainderV1)] {
+            let mixed = Usage {
+                cache_creation_details: Some(CacheCreationDetails {
+                    ephemeral_5m_input_tokens: Some(2),
+                    ephemeral_1h_input_tokens: Some(3),
+                }),
+                cache_creation_mode: mode,
+                ..measured(Some(5), Some(2), Some(3))
+            };
+            assert!(mixed.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn cumulative_merges_preserve_unknown_zero_and_repeated_observations() {
+        let first = measured(Some(5), None, Some(3));
+        let mut value = Usage::default();
+        value.merge(first).unwrap();
+        value.merge(first).unwrap();
+        value.merge(Usage::default()).unwrap();
+        assert_eq!(value, first);
+        value.merge(measured(Some(6), None, Some(4))).unwrap();
+        assert_eq!(
+            value.openai_cache_write_details.unwrap().ttl_30m_tokens,
+            None
+        );
+        assert_eq!(
+            value.openai_cache_write_details.unwrap().ttl_12h_tokens,
+            Some(4)
+        );
+        let mut zero = Usage::default();
+        zero.merge(measured(Some(0), None, Some(0))).unwrap();
+        assert_eq!(
+            zero.openai_cache_write_details.unwrap().ttl_12h_tokens,
+            Some(0)
+        );
+        assert_ne!(zero.openai_cache_write_details, None);
+    }
+
+    #[test]
+    fn changing_the_measurement_basis_requires_fresh_known_lifetimes() {
+        for mode in [None, Some(CacheCreationMode::GenericRemainderV1)] {
+            let initial = Usage {
+                cache_creation_mode: mode,
+                ..measured(Some(5), Some(2), Some(3))
+            };
+            for next in [
+                Usage {
+                    cache_creation_input_tokens: Some(6),
+                    openai_cache_write_details: None,
+                    ..initial
+                },
+                measured(Some(6), None, Some(4)),
+                measured(Some(6), Some(3), None),
+                measured(None, Some(3), Some(3)),
+                measured(Some(6), Some(1), Some(5)),
+                measured(Some(6), Some(4), Some(2)),
+                Usage {
+                    input_tokens: Some(101),
+                    openai_cache_write_details: None,
+                    ..initial
+                },
+            ] {
+                let next = Usage {
+                    cache_creation_mode: mode,
+                    ..next
+                };
+                let mut value = initial;
+                assert!(value.merge(next).is_err(), "{next:?}");
+                assert_eq!(value, initial, "a rejected observation must be atomic");
+            }
+            let mut value = initial;
+            value
+                .merge(Usage {
+                    cache_creation_mode: mode,
+                    ..measured(Some(6), Some(3), Some(3))
+                })
+                .unwrap();
+            assert_eq!(value.cache_creation_input_tokens, Some(6));
+        }
+    }
+
+    #[test]
+    fn a_later_lifetime_cannot_reduce_the_ordinary_creation_remainder() {
+        let initial = measured(Some(5), None, Some(3));
+        for next in [
+            measured(Some(5), None, Some(4)),
+            measured(None, None, Some(4)),
+            measured(Some(6), None, Some(5)),
+        ] {
+            let mut value = initial;
+            assert!(value.merge(next).is_err());
+            assert_eq!(value, initial);
+        }
+    }
+
+    #[test]
+    fn openai_wire_uses_the_provider_shape_without_internal_markers() {
+        let value = Usage {
+            cached_input_tokens: Some(7),
+            ..measured(Some(5), None, Some(3))
+        };
+        for (client, input) in [
+            (ClientProtocol::Chat, "prompt_tokens_details"),
+            (ClientProtocol::Responses, "input_tokens_details"),
+        ] {
+            let wire = value.wire(client);
+            assert_eq!(wire[input]["cached_tokens"], 7);
+            assert_eq!(wire[input]["cache_write_tokens"], 5);
+            assert_eq!(
+                wire[input]["cache_write_tokens_details"],
+                json!({"ttl_12h_tokens":3})
+            );
+            assert_eq!(wire["cache_creation_input_tokens"], 5);
+            assert!(wire.get("openai_cache_write_details").is_none());
+            assert!(wire.get("cache_creation_mode").is_none());
+        }
+        assert_eq!(value.wire(ClientProtocol::Anthropic), Value::Null);
+        assert_eq!(value.wire(ClientProtocol::Gemini), Value::Null);
     }
 }
 

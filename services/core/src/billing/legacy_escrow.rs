@@ -130,6 +130,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<sqlx::Error> for Error {
     fn from(error: sqlx::Error) -> Self {
+        if matches!(&error, sqlx::Error::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock) {
+            return Self::Retry;
+        }
         match error.as_database_error().and_then(|e| e.code()).as_deref() {
             Some("P1000") => Self::Invalid,
             Some("P1001" | "23505") => Self::Conflict,
@@ -243,6 +246,9 @@ impl LegacyEscrowStore {
                 .bind(actor.owner_account_id)
                 .fetch_one(&mut *tx)
                 .await?;
+        if let Some(journal_id) = receipt.journal_id {
+            crate::notifications::observe_ledger(&mut tx, journal_id).await?;
+        }
         if let Err(error) = tx.commit().await {
             return Err(
                 if matches!(

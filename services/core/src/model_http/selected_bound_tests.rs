@@ -101,6 +101,10 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
     ]
     .into_iter()
     .map(|(model, input, output)| ExternalModelContext {
+        mantle_sigv4_region: None,
+        deepseek_parameters_contract: None,
+        embedding: None,
+        search: None,
         missing_cache_creation_tokens_is_zero: false,
         upstream_id: 1,
         upstream_model: model.into(),
@@ -141,6 +145,8 @@ fn gateway(f: &Fixture, base: &str, contexts: Vec<ExternalModelContext>) -> Mode
             .into_iter()
             .enumerate()
             .map(|(index, model)| PriceRule {
+                embedding: None,
+                search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
                 id: index as u64 + 1,
@@ -470,6 +476,7 @@ async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: 
                 .persist_output(
                     &reservation,
                     &OutputCheckpoint {
+                        terminal_outcome: None,
                         sequence: 1,
                         packet_sha256: [3; 32],
                         packet_bytes: 128,
@@ -536,6 +543,7 @@ async fn selected_bound_recovery_uses_old_terminal_price_after_contract_change(p
         .persist_output(
             &reservation,
             &OutputCheckpoint {
+                terminal_outcome: None,
                 sequence: 1,
                 packet_sha256: [4; 32],
                 packet_bytes: 128,

@@ -123,6 +123,8 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  search_billing?: unknown
+  embedding_billing?: unknown
   // Pricing snapshots record their engine unit separately from true USD.
   pricing_schema_version?: number
   pricing_currency?: string
@@ -199,9 +201,10 @@ export interface LogOtherData {
   cache_text_tokens?: number | null
   cache_image_tokens?: number | null
   cache_audio_tokens?: number | null
-  cache_creation_tokens?: number
-  cache_creation_tokens_5m?: number
-  cache_creation_tokens_1h?: number
+  cache_creation_tokens?: number | null
+  cache_creation_tokens_5m?: number | null
+  cache_creation_tokens_1h?: number | null
+  cache_creation_tokens_12h?: number | null
   claude?: boolean
   model_ratio?: number
   completion_ratio?: number

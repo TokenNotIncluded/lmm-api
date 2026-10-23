@@ -46,6 +46,10 @@ pub struct UpstreamCostPrice {
 }
 #[derive(Clone, Serialize)]
 pub struct TokenPrice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<SearchPrice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingPrice>,
     pub currency: &'static str,
     pub unit: &'static str,
     pub rate_basis: &'static str,
@@ -56,6 +60,72 @@ pub struct TokenPrice {
     pub cache_write: Option<Number>,
     pub request: Option<Number>,
     pub final_cost_depends_on_usage: bool,
+    /// Revision 4 prices remain exact and tiered; no headline scalar is inferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_12h_tiers: Option<Vec<CacheWrite12hTier>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct EmbeddingPrice {
+    pub available: bool,
+    pub provider: crate::routing::EmbeddingProvider,
+    pub text_usd_per_million: ExactFraction,
+    pub image_usd_per_million: ExactFraction,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SearchPrice {
+    pub available: bool,
+    pub provider: crate::routing::SearchProvider,
+    pub unit: crate::routing::SearchBillingUnit,
+    pub usd_per_unit: ExactFraction,
+    pub x_posts_fetched_usd_per_unit: Option<ExactFraction>,
+    pub x_users_fetched_usd_per_unit: Option<ExactFraction>,
+}
+
+impl SearchPrice {
+    fn apply_discount(
+        &mut self,
+        discount: crate::billing::trust_pricing::DiscountRatio,
+    ) -> Result<(), PricingError> {
+        self.usd_per_unit = discounted_fraction(&self.usd_per_unit, discount)?;
+        for rate in [
+            &mut self.x_posts_fetched_usd_per_unit,
+            &mut self.x_users_fetched_usd_per_unit,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *rate = discounted_fraction(rate, discount)?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Serialize)]
+pub struct CacheWrite12hTier {
+    pub up_to_input_tokens: Option<String>,
+    pub input: ExactFraction,
+    pub output: ExactFraction,
+    pub cache_read: ExactFraction,
+    pub cache_write: ExactFraction,
+    pub cache_write_12h: ExactFraction,
+}
+impl CacheWrite12hTier {
+    fn apply_discount(
+        &mut self,
+        discount: crate::billing::trust_pricing::DiscountRatio,
+    ) -> Result<(), PricingError> {
+        for rate in [
+            &mut self.input,
+            &mut self.output,
+            &mut self.cache_read,
+            &mut self.cache_write,
+            &mut self.cache_write_12h,
+        ] {
+            *rate = discounted_fraction(rate, discount)?;
+        }
+        Ok(())
+    }
 }
 /// Decimal strings avoid integer precision loss in browser JSON parsers.
 #[derive(Clone, Serialize, PartialEq, Eq)]
@@ -79,6 +149,7 @@ pub struct ImageVariant {
 }
 #[derive(Clone)]
 pub struct PricingSurface {
+    gateway: ModelGateway,
     trust: crate::billing::charging::Charging,
     router: Arc<crate::routing::Router>,
     routing_version: u64,
@@ -125,6 +196,8 @@ impl PricingSurface {
             let price_ok = super::routing::credit_price(quote, &route.model, &route.group).is_ok();
             let mut apis = BTreeSet::new();
             let mut upstream_budget_contract_required = false;
+            let mut search_available = false;
+            let mut embedding_available = false;
             for target in route.targets.iter().filter(|t| {
                 t.enabled
                     && t.weight > 0
@@ -135,6 +208,19 @@ impl PricingSurface {
                 else {
                     continue;
                 };
+                if quote.embedding().is_some()
+                    != (upstream.protocol == Protocol::AliMultimodalEmbedding)
+                {
+                    continue;
+                }
+                if quote.tiered().is_some_and(|tariff| tariff.revision() == 4)
+                    && !matches!(
+                        upstream.protocol,
+                        Protocol::OpenAiChat | Protocol::OpenAiResponses
+                    )
+                {
+                    continue;
+                }
                 let local = crate::relay::honeypot_network::literal_ip(
                     &reqwest::Url::parse(upstream.endpoint.as_str())
                         .map_err(|_| PricingError::Unavailable)?,
@@ -164,7 +250,14 @@ impl PricingSurface {
                         upstream.protocol,
                         upstream.endpoint.as_str(),
                         gateway.bridge.policy.input_token_ceiling,
-                        1,
+                        if matches!(
+                            upstream.protocol,
+                            Protocol::DeepSeekTools | Protocol::AliMultimodalEmbedding
+                        ) {
+                            0
+                        } else {
+                            1
+                        },
                     )
                     .is_err()
                 {
@@ -175,15 +268,77 @@ impl PricingSurface {
                 {
                     continue;
                 }
-                let header = match upstream.protocol {
-                    Protocol::Gemini => secret.clone(),
-                    _ => format!("Bearer {secret}"),
-                };
-                if reqwest::header::HeaderValue::from_str(&header).is_err() {
+                let mantle_region = gateway.bridge.provider_policy.mantle_region_for_binding(
+                    upstream.id,
+                    &target.upstream_model,
+                    upstream.protocol,
+                    upstream.endpoint.as_str(),
+                );
+                if gateway
+                    .bridge
+                    .mantle_credentials
+                    .contains(&(upstream.credential.id, upstream.credential.revision))
+                    != mantle_region.is_some()
+                {
                     continue;
+                }
+                if let Some(region) = mantle_region {
+                    if crate::relay::validate_mantle_binding(
+                        upstream.endpoint.as_str(),
+                        region,
+                        secret,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                } else {
+                    let header = match upstream.protocol {
+                        Protocol::Gemini => secret.clone(),
+                        _ => format!("Bearer {secret}"),
+                    };
+                    if reqwest::header::HeaderValue::from_str(&header).is_err() {
+                        continue;
+                    }
                 }
                 if upstream.protocol == Protocol::SystemOne && !quote.is_input_only_scalar() {
                     continue;
+                }
+                let mut target_search_available = false;
+                if let Some(tariff) = quote.search()
+                    && let Ok(contract) =
+                        gateway.bridge.provider_policy.search_contract_for_binding(
+                            upstream.id,
+                            &target.upstream_model,
+                            upstream.protocol,
+                            upstream.endpoint.as_str(),
+                        )
+                    && contract.provider == tariff.provider
+                    && tariff.validate_limits(contract.limits).is_ok()
+                {
+                    target_search_available = true;
+                    search_available = true;
+                }
+                if upstream.protocol == Protocol::DeepSeekTools && !target_search_available {
+                    continue;
+                }
+                if let Some(tariff) = quote.embedding() {
+                    let Ok((contract, _)) = gateway
+                        .bridge
+                        .provider_policy
+                        .embedding_contract_for_binding(
+                            upstream.id,
+                            &target.upstream_model,
+                            upstream.protocol,
+                            upstream.endpoint.as_str(),
+                        )
+                    else {
+                        continue;
+                    };
+                    if contract.provider != tariff.provider {
+                        continue;
+                    }
+                    embedding_available = true;
                 }
                 apis.insert(match upstream.protocol {
                     Protocol::OpenAiChat => "openai-completions",
@@ -191,6 +346,12 @@ impl PricingSurface {
                     Protocol::AnthropicMessages => "anthropic-messages",
                     Protocol::Gemini => "google-generative-ai",
                     Protocol::SystemOne => "system-one",
+                    Protocol::DeepSeekTools => match quote.search().map(|tariff| tariff.provider) {
+                        Some(crate::routing::SearchProvider::DeepSeekSearchV1) => "deepseek-search",
+                        Some(crate::routing::SearchProvider::DeepSeekFetchV1) => "deepseek-fetch",
+                        _ => continue,
+                    },
+                    Protocol::AliMultimodalEmbedding => "ali-multimodal-embedding",
                 });
             }
             if !price_ok {
@@ -216,7 +377,14 @@ impl PricingSurface {
                 if quote.billing_mode() == BillingMode::UpstreamCost {
                     (None, Some(upstream_cost_price(quote)))
                 } else {
-                    (Some(token_price(quote)?), None)
+                    let mut token = token_price(quote)?;
+                    if let Some(search) = &mut token.search {
+                        search.available = search_available && price_ok;
+                    }
+                    if let Some(embedding) = &mut token.embedding {
+                        embedding.available = embedding_available && price_ok;
+                    }
+                    (Some(token), None)
                 };
             for name in std::iter::once(route.model.as_str()).chain(
                 doc.routing
@@ -274,6 +442,7 @@ impl PricingSurface {
         }
         models.sort_by(|a, b| (&a.group, &a.model).cmp(&(&b.group, &b.model)));
         let result = Self {
+            gateway: gateway.clone(),
             trust: gateway.bridge.charging.clone(),
             router,
             routing_version,
@@ -296,6 +465,26 @@ impl PricingSurface {
         }
     }
     /// Filtering facts must be derived by the server's current read transaction.
+    pub(crate) async fn project_current(
+        &self,
+        connection: &mut sqlx::PgConnection,
+        groups: Option<&[String]>,
+        models: Option<&[String]>,
+    ) -> Result<PricingProjection, PricingError> {
+        if let Some(admin) = self.gateway.bridge.routing_admin.get() {
+            admin
+                .refresh_in(connection)
+                .await
+                .map_err(|_| PricingError::Unavailable)?;
+        }
+        if self.check_version().is_ok() {
+            self.project(groups, models)
+        } else {
+            Self::from_gateway(&self.gateway)?.project(groups, models)
+        }
+    }
+
+    /// Project one exact frozen release; never combine old and new rates.
     pub(crate) fn project(
         &self,
         groups: Option<&[String]>,
@@ -372,7 +561,9 @@ fn decimal(value: u128, scale: u32) -> Result<Number, PricingError> {
 }
 fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     let (g, s) = quote.multipliers_ppm();
-    let known = quote.billing_mode() == BillingMode::Tokens && quote.tiered().is_none();
+    let known = quote.billing_mode() == BillingMode::Tokens
+        && quote.tiered().is_none()
+        && quote.embedding().is_none();
     let rate = |v: u64| {
         if known {
             decimal(u128::from(v) * u128::from(g) * u128::from(s), 18).map(Some)
@@ -382,6 +573,8 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     };
     let r = quote.rates();
     Ok(TokenPrice {
+        embedding: embedding_price(quote)?,
+        search: search_price(quote)?,
         currency: "USD",
         unit: "million_tokens",
         rate_basis: "base_group_rate",
@@ -392,7 +585,106 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
         cache_write: None,
         request: None,
         final_cost_depends_on_usage: true,
+        cache_write_12h_tiers: cache_write_12h_tiers(quote)?,
     })
+}
+
+fn embedding_price(quote: PriceQuote) -> Result<Option<EmbeddingPrice>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.embedding() else {
+        return Ok(None);
+    };
+    tariff.validate().map_err(|_| PricingError::Unavailable)?;
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::DecimalRate| {
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        }
+    };
+    Ok(Some(EmbeddingPrice {
+        available: false,
+        provider: tariff.provider,
+        text_usd_per_million: rate(tariff.text_usd_per_million),
+        image_usd_per_million: rate(tariff.image_usd_per_million),
+    }))
+}
+
+fn search_price(quote: PriceQuote) -> Result<Option<SearchPrice>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.search() else {
+        return Ok(None);
+    };
+    tariff.validate().map_err(|_| PricingError::Unavailable)?;
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::SearchRate| {
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        }
+    };
+    Ok(Some(SearchPrice {
+        available: false,
+        provider: tariff.provider,
+        unit: tariff.unit,
+        usd_per_unit: rate(tariff.usd_per_unit),
+        x_posts_fetched_usd_per_unit: tariff.x_posts_fetched_usd_per_unit.map(rate),
+        x_users_fetched_usd_per_unit: tariff.x_users_fetched_usd_per_unit.map(rate),
+    }))
+}
+
+fn cache_write_12h_tiers(
+    quote: PriceQuote,
+) -> Result<Option<Vec<CacheWrite12hTier>>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.tiered().filter(|tariff| tariff.revision() == 4) else {
+        return Ok(None);
+    };
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::DecimalRate| -> Result<ExactFraction, PricingError> {
+        if value.denominator == 0 {
+            return Err(PricingError::Unavailable);
+        }
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        Ok(ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        })
+    };
+    tariff
+        .tariff()
+        .tiers
+        .into_iter()
+        .map(|tier| {
+            Ok(CacheWrite12hTier {
+                up_to_input_tokens: tier.up_to_input_tokens.map(|bound| bound.to_string()),
+                input: rate(tier.rates.input)?,
+                output: rate(tier.rates.output)?,
+                cache_read: rate(tier.rates.cache_read)?,
+                cache_write: rate(tier.rates.cache_write)?,
+                cache_write_12h: rate(
+                    tier.rates
+                        .cache_write_12h
+                        .ok_or(PricingError::Unavailable)?,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn upstream_cost_price(quote: PriceQuote) -> UpstreamCostPrice {
@@ -491,6 +783,8 @@ pub(crate) mod tests {
                 failover: FailoverPolicy::default(),
             });
             rules.push(PriceRule {
+                embedding: None,
+                search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
                 id,
@@ -626,6 +920,10 @@ pub(crate) mod tests {
             names
                 .into_iter()
                 .map(|name| super::super::ExternalModelContext {
+                    mantle_sigv4_region: None,
+                    deepseek_parameters_contract: None,
+                    embedding: None,
+                    search: None,
                     upstream_id: 1,
                     upstream_model: name.into(),
                     protocol: Protocol::OpenAiChat,
@@ -834,6 +1132,7 @@ pub(crate) mod tests {
             uses_cache_read: true,
             uses_cache_write: false,
             uses_cache_write_1h: false,
+            uses_cache_write_12h: false,
             tiers: vec![
                 TokenTier {
                     up_to_input_tokens: Some(9),
@@ -843,6 +1142,7 @@ pub(crate) mod tests {
                         cache_read: rate(1, 8),
                         cache_write: rate(0, 1),
                         cache_write_1h: None,
+                        cache_write_12h: None,
                     },
                 },
                 TokenTier {
@@ -853,6 +1153,7 @@ pub(crate) mod tests {
                         cache_read: rate(1, 4),
                         cache_write: rate(0, 1),
                         cache_write_1h: None,
+                        cache_write_12h: None,
                     },
                 },
             ],
@@ -1044,6 +1345,10 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    mantle_sigv4_region: None,
+                    deepseek_parameters_contract: None,
+                    embedding: None,
+                    search: None,
                     missing_cache_creation_tokens_is_zero: false,
                     upstream_id: upstream.id,
                     upstream_model: target.upstream_model.clone(),
@@ -1384,6 +1689,20 @@ impl PricingProjection {
                 ] {
                     *v = scaled_number(v.as_ref(), discount)?;
                 }
+                if let Some(tiers) = &mut token.cache_write_12h_tiers {
+                    for tier in tiers {
+                        tier.apply_discount(discount)?;
+                    }
+                }
+                if let Some(search) = &mut token.search {
+                    search.apply_discount(discount)?;
+                }
+                if let Some(embedding) = &mut token.embedding {
+                    embedding.text_usd_per_million =
+                        discounted_fraction(&embedding.text_usd_per_million, discount)?;
+                    embedding.image_usd_per_million =
+                        discounted_fraction(&embedding.image_usd_per_million, discount)?;
+                }
             }
             for image in &mut row.image_variants {
                 image.rate_basis = "effective_user_rate";
@@ -1465,5 +1784,92 @@ mod user_rate_tests {
             ((&n + &den - num_bigint::BigUint::from(1_u8)) / den).to_string(),
             "1"
         );
+    }
+}
+
+#[cfg(test)]
+mod cache_write_12h_projection_tests {
+    use super::*;
+    use crate::routing::*;
+
+    #[test]
+    fn cache_write_12h_projection_keeps_tiers_and_exact_effective_rates() {
+        let rate = |numerator, denominator| DecimalRate {
+            numerator,
+            denominator,
+        };
+        let prices = PriceSnapshot::compile(PriceConfig {
+            version: 7,
+            rules: vec![PriceRule {
+                embedding: None,
+                search: None,
+                id: 1,
+                model: "cache-model".into(),
+                group: "default".into(),
+                speed: Speed::Standard,
+                billing_mode: BillingMode::TieredDecimal,
+                rates: TokenRates {
+                    input: 0,
+                    output: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                    request: 0,
+                },
+                group_multiplier_ppm: 1_250_000,
+                speed_multiplier_ppm: 2_000_000,
+                tiered: Some(TieredTariff {
+                    revision: 4,
+                    source_digest: "ab".repeat(32),
+                    uses_cache_read: true,
+                    uses_cache_write: true,
+                    uses_cache_write_1h: false,
+                    uses_cache_write_12h: true,
+                    tiers: [Some(272_000), None]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, bound)| {
+                            let scale = index as u64 + 1;
+                            TokenTier {
+                                up_to_input_tokens: bound,
+                                rates: TieredRates {
+                                    input: rate(scale, 1),
+                                    output: rate(5 * scale, 1),
+                                    cache_read: rate(0, 1),
+                                    cache_write: rate(5 * scale, 4),
+                                    cache_write_1h: None,
+                                    cache_write_12h: Some(rate(5 * scale, 2)),
+                                },
+                            }
+                        })
+                        .collect(),
+                }),
+            }],
+        })
+        .unwrap();
+        let projected = token_price(
+            prices
+                .quote("cache-model", "default", Speed::Standard)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(projected.input.is_none());
+        assert!(projected.output.is_none());
+        let mut tiers = projected.cache_write_12h_tiers.unwrap();
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].up_to_input_tokens.as_deref(), Some("272000"));
+        assert!(tiers[1].up_to_input_tokens.is_none());
+        assert_eq!(tiers[0].cache_write.numerator, "25");
+        assert_eq!(tiers[0].cache_write.denominator, "8");
+        assert_eq!(tiers[0].cache_write_12h.numerator, "25");
+        assert_eq!(tiers[0].cache_write_12h.denominator, "4");
+        assert_eq!(tiers[1].cache_write_12h.numerator, "25");
+        assert_eq!(tiers[1].cache_write_12h.denominator, "2");
+        tiers[0]
+            .apply_discount(crate::billing::trust_pricing::DiscountRatio::new(97, 100).unwrap())
+            .unwrap();
+        assert_eq!(tiers[0].cache_write_12h.numerator, "97");
+        assert_eq!(tiers[0].cache_write_12h.denominator, "16");
+        assert_eq!(tiers[0].cache_read.numerator, "0");
+        assert_eq!(tiers[0].cache_read.denominator, "1");
     }
 }

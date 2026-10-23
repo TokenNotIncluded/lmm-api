@@ -127,6 +127,9 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
+        if matches!(&e, sqlx::Error::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock) {
+            return Self::Retry;
+        }
         match e.as_database_error().and_then(|e| e.code()).as_deref() {
             Some("40001" | "40P01" | "55P03" | "57014") => Self::Retry,
             Some("23505" | "P1001") => Self::Conflict,
@@ -403,11 +406,7 @@ impl CommerceStore {
                 reason: format!("Store {} order {}", cmd.kind, cmd.order_id),
                 action,
             };
-            let Json(outcome): Json<Outcome> =
-                sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-                    .bind(Json(request))
-                    .fetch_one(&mut *tx)
-                    .await?;
+            let outcome = crate::billing::ledger::post_in_transaction(&mut *tx, &request).await?;
             Some(outcome)
         };
         let (journal, rejection) = match outcome {
@@ -685,11 +684,7 @@ impl CommerceStore {
                 amount_units: Credits::try_from(amount).map_err(|_| Error::Invalid)?,
             },
         };
-        let Json(outcome): Json<Outcome> =
-            sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-                .bind(Json(request))
-                .fetch_one(&mut *tx)
-                .await?;
+        let outcome = crate::billing::ledger::post_in_transaction(&mut *tx, &request).await?;
         let (journal, rejection) = match outcome {
             Outcome::Posted { journal_id, .. } => (Some(journal_id), String::new()),
             Outcome::Rejected {

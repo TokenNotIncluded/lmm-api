@@ -57,13 +57,19 @@ impl Bridge {
 
 pub(super) fn credential_map(
     values: Vec<UpstreamCredential>,
+    mantle_credentials: &std::collections::BTreeSet<(u64, u64)>,
 ) -> Result<BTreeMap<(u64, u64), String>, RelayError> {
     let mut result = BTreeMap::new();
     for value in values {
         if value.reference.id == 0
             || value.reference.revision == 0
             || value.secret.is_empty()
-            || value.secret.len() > 4096
+            || value.secret.len()
+                > if mantle_credentials.contains(&(value.reference.id, value.reference.revision)) {
+                    16 * 1024
+                } else {
+                    4096
+                }
             || result
                 .insert((value.reference.id, value.reference.revision), value.secret)
                 .is_some()
@@ -87,6 +93,8 @@ pub(super) fn credit_price(
     if let Some(tariff) = quote.tiered() {
         let (group_multiplier_ppm, speed_multiplier_ppm) = quote.multipliers_ppm();
         let price = Price {
+            embedding: None,
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -112,6 +120,8 @@ pub(super) fn credit_price(
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
+            embedding: None,
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: Some(group_ppm),
@@ -146,6 +156,8 @@ pub(super) fn credit_price(
         i64::try_from(numerator / DENOMINATOR).map_err(|_| RelayError::BillingUnavailable)
     };
     let price = Price {
+        embedding: None,
+        search: None,
         user_trust: None,
         image: None,
         upstream_cost_group_ppm: None,
@@ -210,6 +222,7 @@ impl RouteProvider for Bridge {
         request: &'a Request,
     ) -> RelayFuture<'a, Route> {
         Box::pin(async move {
+            self.refresh_routing().await?;
             let group = self
                 .active
                 .lock()
@@ -240,9 +253,35 @@ impl RouteProvider for Bridge {
             let quote = plan.quote().with_credit_rate(
                 CreditRate::new(1, 500_000).map_err(|_| RelayError::BillingUnavailable)?,
             );
+            if quote.price().embedding().is_some() {
+                return Err(RelayError::Unsupported(
+                    "embedding prices require the native embedding endpoint",
+                ));
+            }
             let mut price = credit_price(quote.price(), plan.canonical_model(), &group)?;
             let attempt = plan.start().map_err(|_| RelayError::RouteUnavailable)?;
+            if request.prompt_cache_options.is_some()
+                && (attempt.protocol() != Protocol::OpenAiResponses
+                    || !price
+                        .tiered
+                        .as_ref()
+                        .is_some_and(|t| t.tariff.revision == 4))
+            {
+                return Err(RelayError::Unsupported(
+                    "cache lifetime controls require a reviewed twelve-hour tariff",
+                ));
+            }
             if let Some(tariff) = &mut price.tiered {
+                if tariff.tariff.revision == 4
+                    && !matches!(
+                        attempt.protocol(),
+                        Protocol::OpenAiChat | Protocol::OpenAiResponses
+                    )
+                {
+                    return Err(RelayError::Unsupported(
+                        "twelve-hour cache pricing requires an OpenAI protocol route",
+                    ));
+                }
                 tariff.input_semantics = if attempt.protocol() == Protocol::AnthropicMessages {
                     crate::routing::InputSemantics::AnthropicText
                 } else {
@@ -275,7 +314,58 @@ impl RouteProvider for Bridge {
                         "System One requires its native endpoint",
                     ));
                 }
+                Protocol::DeepSeekTools | Protocol::AliMultimodalEmbedding => {
+                    return Err(RelayError::Unsupported(
+                        "native tools and embeddings require their native endpoints",
+                    ));
+                }
             };
+            if request.has_hosted_search() {
+                if price.upstream_cost_group_ppm.is_some() || price.image.is_some() {
+                    return Err(RelayError::Unsupported(
+                        "hosted search requires explicit search pricing",
+                    ));
+                }
+                let contract = self.provider_policy.search_contract(&attempt)?;
+                let tariff = quote.price().search().ok_or(RelayError::Unsupported(
+                    "hosted search requires an explicit supplier tariff",
+                ))?;
+                if contract.provider != tariff.provider {
+                    return Err(RelayError::Unsupported(
+                        "search price and supplier do not match",
+                    ));
+                }
+                if request.has_x_search()
+                    && (tariff.x_posts_fetched_usd_per_unit.is_none()
+                        || tariff.x_users_fetched_usd_per_unit.is_none())
+                {
+                    return Err(RelayError::Unsupported(
+                        "x_search requires explicit post and user prices",
+                    ));
+                }
+                request.validate_search_contract(upstream, contract.provider, contract.limits)?;
+                let (group_multiplier_ppm, speed_multiplier_ppm) = quote.price().multipliers_ppm();
+                let search = crate::routing::PersistedSearchPrice {
+                    tariff,
+                    limits: contract.limits,
+                    supplier_contract_revision: contract.contract_revision.clone(),
+                    group_multiplier_ppm,
+                    speed_multiplier_ppm,
+                    credits_per_usd: quote.conversion().credits_per_usd(),
+                };
+                search.validate().map_err(|_| {
+                    RelayError::Unsupported(
+                        "search price requires finite supplier bounds for every priced dimension",
+                    )
+                })?;
+                price.search = Some(search);
+                price.validate().map_err(super::billing::error)?;
+            }
+            let deepseek_parameters = self
+                .provider_policy
+                .deepseek_parameters_contract(&attempt)
+                .is_some();
+            request.validate_deepseek_parameters(upstream, deepseek_parameters)?;
             if request.client == ClientProtocol::Anthropic
                 && upstream != UpstreamProtocol::Anthropic
             {
@@ -300,12 +390,19 @@ impl RouteProvider for Bridge {
                     "upstream-cost router cannot be mapped to another model",
                 ));
             }
-            let endpoint = operation_endpoint(
-                attempt.endpoint(),
-                upstream,
+            let mantle_region = self.provider_policy.mantle_region_for_binding(
+                attempt.upstream_id(),
                 attempt.upstream_model(),
-                request.stream,
-            )?;
+                attempt.protocol(),
+                attempt.endpoint(),
+            );
+            if self
+                .mantle_credentials
+                .contains(&(reference.id, reference.revision))
+                != mantle_region.is_some()
+            {
+                return Err(RelayError::RouteUnavailable);
+            }
             let route_id = format!(
                 "r{}-t{}-u{}",
                 attempt.route_id(),
@@ -314,16 +411,39 @@ impl RouteProvider for Bridge {
             );
             let attempt = Arc::new(attempt);
             let availability = attempt.clone();
-            let route = Route::new(
-                route_id.clone(),
-                upstream,
-                endpoint.as_str(),
-                attempt.upstream_model().to_owned(),
-                secret,
-                attempt.quote().version(),
-            )?
+            let mut route = if let Some(region) = mantle_region {
+                Route::new_mantle(
+                    route_id.clone(),
+                    attempt.endpoint(),
+                    attempt.upstream_model().to_owned(),
+                    region,
+                    secret,
+                    attempt.quote().version(),
+                )?
+            } else {
+                let endpoint = operation_endpoint(
+                    attempt.endpoint(),
+                    upstream,
+                    attempt.upstream_model(),
+                    request.stream,
+                )?;
+                Route::new(
+                    route_id.clone(),
+                    upstream,
+                    endpoint.as_str(),
+                    attempt.upstream_model().to_owned(),
+                    secret,
+                    attempt.quote().version(),
+                )?
+            }
             .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));
+            if let Some(search) = &price.search {
+                route = route.with_search_contract(search.tariff.provider, search.limits)?;
+            }
+            if deepseek_parameters {
+                route = route.with_deepseek_parameters()?;
+            }
             let mut active = self
                 .active
                 .lock()
@@ -409,6 +529,8 @@ mod tests {
         PriceSnapshot::compile(PriceConfig {
             version: 3,
             rules: vec![PriceRule {
+                embedding: None,
+                search: None,
                 billing_mode: crate::routing::BillingMode::Tokens,
                 tiered: None,
                 id: 1,
@@ -476,6 +598,8 @@ mod tests {
                             .unwrap();
                         let amount = legacy
                             .cost(crate::billing::charging::Usage {
+                                embedding: None,
+                                search: None,
                                 cache_creation: None,
                                 image: None,
                                 upstream_cost_atto_usd: None,

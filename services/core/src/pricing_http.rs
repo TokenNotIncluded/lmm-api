@@ -236,7 +236,8 @@ impl PricingHttp {
             .surface
             .as_ref()
             .ok_or(Error::Unavailable)?
-            .project(allowed.as_deref(), model_filter.as_deref())
+            .project_current(&mut tx, allowed.as_deref(), model_filter.as_deref())
+            .await
             .map_err(|_| Error::Unavailable)?;
         let (rate_basis, user_price) = if let Some(authority) = authority {
             catalog

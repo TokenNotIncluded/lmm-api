@@ -38,6 +38,7 @@ fn tariff() -> TieredTariff {
         uses_cache_read: true,
         uses_cache_write: false,
         uses_cache_write_1h: false,
+        uses_cache_write_12h: false,
         tiers: vec![
             TokenTier {
                 up_to_input_tokens: Some(9),
@@ -47,6 +48,7 @@ fn tariff() -> TieredTariff {
                     cache_read: rate(1, 8),
                     cache_write: rate(0, 1),
                     cache_write_1h: None,
+                    cache_write_12h: None,
                 },
             },
             TokenTier {
@@ -57,9 +59,88 @@ fn tariff() -> TieredTariff {
                     cache_read: rate(1, 4),
                     cache_write: rate(0, 1),
                     cache_write_1h: None,
+                    cache_write_12h: None,
                 },
             },
         ],
+    }
+}
+
+fn cache_12h_tariff() -> TieredTariff {
+    let rate = |numerator, denominator| DecimalRate {
+        numerator,
+        denominator,
+    };
+    TieredTariff {
+        revision: 4,
+        source_digest: "45".repeat(32),
+        uses_cache_read: true,
+        uses_cache_write: true,
+        uses_cache_write_1h: false,
+        uses_cache_write_12h: true,
+        tiers: vec![TokenTier {
+            up_to_input_tokens: None,
+            rates: TieredRates {
+                input: rate(2, 1),
+                output: rate(10, 1),
+                cache_read: rate(1, 5),
+                cache_write: rate(5, 2),
+                cache_write_1h: None,
+                cache_write_12h: Some(rate(5, 1)),
+            },
+        }],
+    }
+}
+
+struct CacheProvider {
+    endpoint: String,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl CacheProvider {
+    async fn start(with_ttl: bool) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/custom/v1", listener.local_addr().unwrap());
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_hits = hits.clone();
+        let app = axum::Router::new().route(
+            "/custom/v1/chat/completions",
+            axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(request): axum::Json<Value>| {
+                let hits = observed_hits.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(headers["authorization"], "Bearer synthetic-upstream-key");
+                    assert_eq!(request["model"], "provider-model");
+                    let mut usage = json!({
+                        "prompt_tokens":100,"completion_tokens":5,"total_tokens":105,
+                        "prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":60}
+                    });
+                    if with_ttl {
+                        usage["prompt_tokens_details"]["cache_write_tokens_details"] =
+                            json!({"ttl_30m_tokens":20,"ttl_12h_tokens":40});
+                    }
+                    axum::Json(json!({
+                        "id":"synthetic-cache-completion","object":"chat.completion",
+                        "model":"provider-model","created":0,
+                        "choices":[{"index":0,"message":{"role":"assistant","content":"cache answer"},"finish_reason":"stop"}],
+                        "usage":usage
+                    }))
+                }
+            }),
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self {
+            endpoint,
+            hits,
+            task,
+        }
+    }
+}
+
+impl Drop for CacheProvider {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 
@@ -101,6 +182,8 @@ fn gateway_with_billing(
     let prices = PriceSnapshot::compile(PriceConfig {
         version,
         rules: vec![PriceRule {
+            embedding: None,
+            search: None,
             billing_mode: mode,
             tiered: price,
             id: 1,
@@ -234,6 +317,101 @@ async fn tiered_decimal_missing_authoritative_usage_keeps_original_hold_and_neve
     assert_eq!(
         (balance.available_units, balance.reserved_units),
         (656, 344)
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn openai_12h_actual_key_settlement_is_idempotent_and_preserves_frozen_evidence(
+    pool: PgPool,
+) {
+    let (_, ledger, _, key, key_id, account) = fixture(&pool, 1000).await;
+    let provider = CacheProvider::start(true).await;
+    let first = gateway(&pool, &provider.endpoint, key_id, 1, cache_12h_tariff());
+    let (one, two) = tokio::join!(
+        invoke(&first, &key, "cache-12h-concurrent"),
+        invoke(&first, &key, "cache-12h-concurrent")
+    );
+    assert_eq!(one.2, two.2);
+    let (success, repeated) = if one.0 == StatusCode::OK {
+        (one, two)
+    } else {
+        (two, one)
+    };
+    assert_eq!(success.0, StatusCode::OK, "{}", success.1);
+    assert_eq!(repeated.0, StatusCode::CONFLICT, "{}", repeated.1);
+    assert_eq!(
+        success.1["usage"]["prompt_tokens_details"]["cache_write_tokens_details"]["ttl_12h_tokens"],
+        40
+    );
+    let operation_id = success.2;
+    let charging = Charging::new(pool.clone(), Arc::new(TransactionalLedger));
+    let receipt = charging.resolve(&operation_id).await.unwrap().unwrap();
+    // Ceiling: ceil((100*5 + 20*10)*1.25/2) = 438.
+    // Settlement: (20*2 + 20*.2 + 20*2.5 + 40*5 + 5*10)*1.25/2 = 215.
+    assert_eq!(
+        (receipt.reserved, receipt.settled, receipt.state.as_str()),
+        (438, 215, "settled")
+    );
+    let creation = receipt.usage.cache_creation.unwrap();
+    assert_eq!((creation.total, creation.twelve_hour), (60, Some(40)));
+    assert_eq!(receipt.price.cost(receipt.usage).unwrap(), 215);
+    assert_eq!(
+        receipt.price.tiered.as_ref().unwrap().tariff,
+        cache_12h_tariff()
+    );
+    let mut changed = cache_12h_tariff();
+    changed.tiers[0]
+        .rates
+        .cache_write_12h
+        .as_mut()
+        .unwrap()
+        .numerator = 1000;
+    let restarted = gateway(&pool, &provider.endpoint, key_id, 2, changed);
+    let after_restart = invoke(&restarted, &key, "cache-12h-concurrent").await;
+    assert_eq!(after_restart.0, StatusCode::CONFLICT);
+    assert_eq!(after_restart.2, operation_id);
+    assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+    let restored = charging.resolve(&operation_id).await.unwrap().unwrap();
+    assert_eq!(restored.price, receipt.price);
+    assert_eq!(restored.usage, receipt.usage);
+    assert_eq!(restored.price.cost(restored.usage).unwrap(), 215);
+    let balance = ledger.balance(account).await.unwrap();
+    assert_eq!((balance.available_units, balance.reserved_units), (785, 0));
+    let unbalanced: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT journal_id FROM core_billing.ledger_entries GROUP BY journal_id HAVING sum(delta_units)<>0) e")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(unbalanced, 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn openai_12h_missing_breakdown_retains_hold_after_price_change_without_replay(pool: PgPool) {
+    let (_, ledger, _, key, key_id, account) = fixture(&pool, 1000).await;
+    let provider = CacheProvider::start(false).await;
+    let service = gateway(&pool, &provider.endpoint, key_id, 1, cache_12h_tariff());
+    let (status, _, operation_id) = invoke(&service, &key, "cache-12h-unknown").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let charging = Charging::new(pool.clone(), Arc::new(TransactionalLedger));
+    let original = charging.resolve(&operation_id).await.unwrap().unwrap();
+    assert_eq!((original.reserved, original.settled), (438, 0));
+    assert!(!matches!(original.state.as_str(), "released" | "settled"));
+    let mut changed = cache_12h_tariff();
+    changed.tiers[0]
+        .rates
+        .cache_write_12h
+        .as_mut()
+        .unwrap()
+        .numerator = 1;
+    let restarted = gateway(&pool, &provider.endpoint, key_id, 2, changed);
+    let repeated = invoke(&restarted, &key, "cache-12h-unknown").await;
+    assert_eq!(repeated.0, StatusCode::CONFLICT);
+    assert_eq!(repeated.2, operation_id);
+    assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+    let restored = charging.resolve(&operation_id).await.unwrap().unwrap();
+    assert_eq!(restored.price, original.price);
+    assert_eq!((restored.reserved, restored.settled), (438, 0));
+    let balance = ledger.balance(account).await.unwrap();
+    assert_eq!(
+        (balance.available_units, balance.reserved_units),
+        (562, 438)
     );
 }
 

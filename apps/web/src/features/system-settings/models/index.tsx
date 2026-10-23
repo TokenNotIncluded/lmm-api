@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { SettingsPage } from '../components/settings-page'
+import { useParams } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
+
+import { NativePriceSync } from '@/features/routing-admin/price-sync'
+
+import { SettingsPage, SettingsPageFrame } from '../components/settings-page'
 import type { ModelSettings } from '../types'
 import {
   MODELS_DEFAULT_SECTION,
@@ -87,6 +92,17 @@ const defaultModelSettings: ModelSettings = {
 }
 
 export function ModelSettings() {
+  const { t } = useTranslation()
+  const { section } = useParams({
+    from: '/_authenticated/system-settings/models/$section',
+  })
+  if (section === 'native-price-sync') {
+    return (
+      <SettingsPageFrame title={t('Native price synchronization')}>
+        <NativePriceSync />
+      </SettingsPageFrame>
+    )
+  }
   return (
     <SettingsPage
       routePath='/_authenticated/system-settings/models/$section'

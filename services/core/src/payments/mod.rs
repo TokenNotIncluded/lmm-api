@@ -92,6 +92,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<sqlx::Error> for Error {
     fn from(error: sqlx::Error) -> Self {
+        if matches!(&error, sqlx::Error::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock) {
+            return Self::Unavailable;
+        }
         match error.as_database_error().and_then(|e| e.code()).as_deref() {
             // Transient transaction aborts are retried as a WHOLE call with its
             // unchanged key after receipt reconciliation, never one statement.
@@ -388,11 +391,7 @@ impl PaymentsStore {
             action,
         };
         request.validate().map_err(|_| Error::Invalid)?;
-        let Json(result) =
-            sqlx::query_scalar::<_, Json<Outcome>>("SELECT core_billing.post_ledger($1)")
-                .bind(Json(request))
-                .fetch_one(connection)
-                .await?;
+        let result = crate::billing::ledger::post_in_transaction(connection, &request).await?;
         Ok(result)
     }
     async fn record_outcome(

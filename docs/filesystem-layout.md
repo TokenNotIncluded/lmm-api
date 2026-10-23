@@ -31,6 +31,8 @@
 
 主配置和功能配置引用均使用 TOML；连接串、口令和密钥通过绝对路径引用独立私密文件。文件模式不允许环境变量混合覆盖，不展开 `$VARIABLE`、`%d` 或任意 shell 内容。示例见 [core.example.toml](../config/core.example.toml) 和 [extensions.example.toml](../config/extensions.example.toml)。示例不含可用凭据，配置解析测试也不能证明数据库和业务已验收。
 
+可选通知的 `[notifications].config_file` 引用私密邮件配置；SMTP／Resend 凭据分别通过 `password_file`／`api_key_file` 引用。通知站点策略使用显式离线 `configure-notifications` 命令，不由服务启动自动启用；完整配置与失败语义见[通知与邮件](../services/core/src/notifications/README.md)。
+
 ## 权限与服务账户
 
 非敏感 TOML 可由 root 持有、权限 `0644`；限制可见范围时可用 `0640` 或 `0600`，但服务必须能够读取。配置文件不得允许组或其他用户写入。私密文件使用 root 或对应服务账户持有的 `0600`，或服务管理器提供的只读 `0400` 凭据文件；不得放进仓库、软件包、命令行参数或日志。私密目录须限制访问，核心与扩展分别授权。

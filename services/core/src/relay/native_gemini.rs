@@ -323,9 +323,19 @@ pub(crate) fn parse(
         }
     }
     let mut tools = Vec::new();
+    let mut hosted_search = None;
     if let Some(ts) = v.get("tools") {
         for t in array(ts)? {
-            keys(t, &["functionDeclarations"])?;
+            keys(t, &["functionDeclarations", "googleSearch"])?;
+            if let Some(search) = t.get("googleSearch") {
+                keys(t, &["googleSearch"])?;
+                keys(search, &[])?;
+                if hosted_search.is_some() {
+                    return Err(RelayError::Invalid("duplicate Google Search tool"));
+                }
+                hosted_search = Some(super::search::HostedSearch::Gemini(search.clone()));
+                continue;
+            }
             for f in array(&t["functionDeclarations"])? {
                 keys(
                     f,
@@ -373,7 +383,18 @@ pub(crate) fn parse(
     }
     let bytes = serde_json::to_vec(&canonical)
         .map_err(|_| RelayError::Invalid("Gemini conversion failed"))?;
-    Request::parse(ClientProtocol::Chat, &bytes, limits)
+    let mut request = Request::parse(ClientProtocol::Chat, &bytes, limits)?;
+    if request
+        .tools
+        .len()
+        .saturating_add(usize::from(hosted_search.is_some()))
+        > limits.max_blocks
+    {
+        return Err(RelayError::Limit("tool count"));
+    }
+    request.client = ClientProtocol::Gemini;
+    request.hosted_search = hosted_search;
+    Ok(request)
 }
 
 struct Block {
@@ -395,6 +416,7 @@ pub(crate) struct NativeEncoder {
     emitted: bool,
     bytes: usize,
     wire_bytes: usize,
+    grounding: Option<Value>,
 }
 impl NativeEncoder {
     pub(crate) fn new(model: &str, request_id: &str, stream: bool, limits: &Limits) -> Self {
@@ -411,6 +433,7 @@ impl NativeEncoder {
             emitted: false,
             bytes: 0,
             wire_bytes: 0,
+            grounding: None,
         }
     }
     pub(crate) fn usage(&self) -> Usage {
@@ -567,6 +590,25 @@ impl NativeEncoder {
                 }
                 self.usage.merge(*u)?;
             }
+            Event::SearchOutput { protocol, value } => {
+                if *protocol != UpstreamProtocol::Gemini {
+                    return Err(RelayError::Unsupported("grounding cannot cross protocols"));
+                }
+                let previous = self.grounding.clone();
+                super::search::merge_grounding(&mut self.grounding, value)?;
+                if self.grounding != previous {
+                    self.account(value.to_string().len())?;
+                    if self.stream {
+                        let value = json!({"responseId":self.id,"modelVersion":self.model,"candidates":[{"index":0,"groundingMetadata":self.grounding}]});
+                        return Ok(vec![self.packet(&value)?]);
+                    }
+                }
+            }
+            Event::Citations { .. } => {
+                return Err(RelayError::Unsupported(
+                    "foreign citations cannot be emitted as Gemini",
+                ));
+            }
             Event::StopSequence(sequence) => {
                 if !self.started
                     || self.finish.is_some()
@@ -663,6 +705,9 @@ impl NativeEncoder {
         let mut response = json!({"responseId":self.id,"modelVersion":self.model,"candidates":[{"index":0,"content":{"role":"model","parts":parts},"finishReason":match finish { FinishReason::Stop | FinishReason::ToolCalls => "STOP", FinishReason::Length => "MAX_TOKENS", FinishReason::ContentFilter => "SAFETY" }}]});
         if !usage.is_empty() {
             response["usageMetadata"] = Value::Object(usage);
+        }
+        if let Some(grounding) = &self.grounding {
+            response["candidates"][0]["groundingMetadata"] = grounding.clone();
         }
         let data = self.packet(&response)?;
         self.emitted = true;

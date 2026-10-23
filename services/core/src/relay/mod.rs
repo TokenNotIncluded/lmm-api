@@ -3,7 +3,13 @@
 //! This module does not register public routes or change readiness. Integration
 //! must supply real core routing and durable billing adapters before enabling it.
 mod decode;
+mod deepseek;
+#[cfg(test)]
+mod deepseek_tests;
 mod encode;
+mod mantle;
+pub(crate) use mantle::mantle_credential_fingerprints;
+pub use mantle::{mantle_credential_reuses, validate_mantle_binding, validate_mantle_endpoint};
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
 mod native;
@@ -11,10 +17,14 @@ pub(crate) mod native_anthropic;
 pub(crate) mod native_gemini;
 pub(crate) mod provider_network;
 mod request;
+mod search;
+#[cfg(test)]
+mod search_tests;
 mod sse;
 #[cfg(test)]
 mod tests;
 mod types;
+#[cfg(test)]
 pub(crate) use decode::usage as provider_usage;
 pub(crate) use decode::usage_with_cache_creation_mode as provider_usage_with_cache_creation_mode;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
@@ -466,6 +476,7 @@ impl Worker {
             .filter(|v| *v <= 65_536)
             .ok_or(RelayError::Limit("output checkpoints"))?;
         let evidence = OutputCheckpoint {
+            terminal_outcome: None,
             sequence: self.checkpoint_sequence,
             packet_sha256: Sha256::digest(packet).into(),
             packet_bytes: packet.len(),
@@ -531,8 +542,6 @@ impl Worker {
             if !route.is_available() {
                 return Err(RelayError::RouteUnavailable);
             }
-            self.report.attempts += 1;
-            self.report.upstream_attempted = true;
             let request = connection
                 .client()
                 .post(route.endpoint.clone())
@@ -547,17 +556,31 @@ impl Worker {
                     },
                 )
                 .body(body.clone());
-            let request = match route.protocol {
-                UpstreamProtocol::Chat | UpstreamProtocol::Responses => {
-                    request.header(header::AUTHORIZATION, route.credential.clone())
+            let request = if let Some(mantle) = &route.mantle {
+                if route.protocol != UpstreamProtocol::Anthropic {
+                    return Err(RelayError::Invalid("Mantle requires the Messages protocol"));
                 }
-                UpstreamProtocol::Anthropic => request
-                    .header("x-api-key", route.credential.clone())
-                    .header("anthropic-version", "2023-06-01"),
-                UpstreamProtocol::Gemini => {
-                    request.header("x-goog-api-key", route.credential.clone())
+                request.headers(mantle.headers(
+                    &route.endpoint,
+                    &body,
+                    self.request.stream,
+                    std::time::SystemTime::now(),
+                )?)
+            } else {
+                match route.protocol {
+                    UpstreamProtocol::Chat | UpstreamProtocol::Responses => {
+                        request.header(header::AUTHORIZATION, route.credential.clone())
+                    }
+                    UpstreamProtocol::Anthropic => request
+                        .header("x-api-key", route.credential.clone())
+                        .header("anthropic-version", "2023-06-01"),
+                    UpstreamProtocol::Gemini => {
+                        request.header("x-goog-api-key", route.credential.clone())
+                    }
                 }
             };
+            self.report.attempts += 1;
+            self.report.upstream_attempted = true;
             let result = self
                 .gate
                 .run(self.inner.limits.header_timeout, Phase::Headers, async {
@@ -598,6 +621,8 @@ impl Worker {
             .await?;
         self.report.route_id = Some(route.id.clone());
         self.report.price_version = Some(route.price_version);
+        self.encoder
+            .set_deepseek_parameters(route.deepseek_parameters)?;
         let payload = self.request.upstream(&route)?;
         let body = serde_json::to_vec(&payload)
             .map_err(|_| RelayError::Invalid("request encoding failed"))?;
@@ -660,7 +685,9 @@ impl Worker {
             route.protocol,
             &self.inner.limits,
             route.cache_creation_mode,
-        );
+        )
+        .with_search_contract(route.search_contract, &self.inner.limits)
+        .with_deepseek_parameters(route.deepseek_parameters);
         if self.request.stream {
             self.send_head()?;
             let mut parser = sse::Parser::new(self.inner.limits.event_bytes);
@@ -710,8 +737,12 @@ impl Worker {
                 }
                 data.extend_from_slice(&chunk);
             }
-            let value = serde_json::from_slice(&data)
-                .map_err(|_| RelayError::Protocol("invalid upstream JSON"))?;
+            let value = if route.search_contract.is_some() || route.deepseek_parameters {
+                native_anthropic::unambiguous_json(&data)
+            } else {
+                serde_json::from_slice(&data)
+            }
+            .map_err(|_| RelayError::Protocol("invalid upstream JSON"))?;
             self.events(decoder.json(&value)?).await?;
         }
         // Drop the upstream before any money write. Do not drain an unbounded

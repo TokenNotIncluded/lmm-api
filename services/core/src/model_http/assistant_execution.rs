@@ -533,6 +533,10 @@ mod usage_tests {
         .unwrap();
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                mantle_sigv4_region: None,
+                deepseek_parameters_contract: None,
+                embedding: None,
+                search: None,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),
                 protocol: Protocol::OpenAiChat,
@@ -653,6 +657,7 @@ mod usage_tests {
             "prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":0}
         }));
         let expected = CacheCreationUsage {
+            twelve_hour: None,
             cache_creation_mode: None,
             reported_total: None,
             total: 0,
@@ -696,6 +701,7 @@ mod usage_tests {
         assert_eq!(
             usage.cache_creation,
             Some(CacheCreationUsage {
+                twelve_hour: None,
                 cache_creation_mode: None,
                 reported_total: None,
                 total: 70,
@@ -733,6 +739,7 @@ mod usage_tests {
             assert_eq!(
                 usage.cache_creation,
                 Some(CacheCreationUsage {
+                    twelve_hour: None,
                     cache_creation_mode: Some(
                         crate::routing::CacheCreationMode::GenericRemainderV1
                     ),
@@ -794,6 +801,7 @@ mod usage_tests {
         assert_eq!(
             usage.cache_creation,
             Some(CacheCreationUsage {
+                twelve_hour: None,
                 cache_creation_mode: Some(crate::routing::CacheCreationMode::GenericRemainderV1),
                 reported_total: None,
                 total: 0,

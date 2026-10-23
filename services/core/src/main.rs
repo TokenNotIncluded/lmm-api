@@ -18,7 +18,7 @@ use std::{
 
 mod admin;
 
-const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | upgrade-db | create-first-owner | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
+const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | upgrade-db | create-first-owner | bootstrap-user | complete-setup | configure-notifications | configure-routing-baseline | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
 Commands:\n\
   serve           Start the core service (the default without arguments).\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
@@ -30,6 +30,8 @@ Commands:\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\
   complete-setup  Record setup completion offline after creating or importing root.\n\
+  configure-notifications  Offline owner-only policy/subscription configuration from stdin JSON; sends no mail.\n\
+  configure-routing-baseline  Offline owner-only initial routing release from bounded stdin JSON; requires --config, never replaces an active release.\n\
   install-usage-receipt-index  Offline owner-only index installation; requires explicit --config.\n\
   plan-admin-activation  Read-only candidate binding for one imported admin; requires explicit --config (not --legacy-env).\n\
   apply-admin-activation Owner-only apply of one human-confirmed activation; requires explicit --config (not --legacy-env).\n\n\
@@ -53,6 +55,8 @@ enum Command {
     CreateFirstOwner,
     BootstrapUser,
     CompleteSetup,
+    ConfigureNotifications,
+    ConfigureRoutingBaseline,
     InstallToolMarketBuiltins,
     InstallUsageReceiptIndex,
     PlanAdminActivation,
@@ -96,6 +100,8 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                 | "create-first-owner"
                 | "bootstrap-user"
                 | "complete-setup"
+                | "configure-notifications"
+                | "configure-routing-baseline"
                 | "install-tool-market-builtins"
                 | "install-usage-receipt-index"
                 | "plan-admin-activation"
@@ -109,6 +115,8 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                     Some("create-first-owner") => Command::CreateFirstOwner,
                     Some("bootstrap-user") => Command::BootstrapUser,
                     Some("complete-setup") => Command::CompleteSetup,
+                    Some("configure-notifications") => Command::ConfigureNotifications,
+                    Some("configure-routing-baseline") => Command::ConfigureRoutingBaseline,
                     Some("install-tool-market-builtins") => Command::InstallToolMarketBuiltins,
                     Some("install-usage-receipt-index") => Command::InstallUsageReceiptIndex,
                     Some("plan-admin-activation") => Command::PlanAdminActivation,
@@ -207,6 +215,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Command::BootstrapUser => Some(admin::Operation::bootstrap(io::stdin().lock())?),
         Command::CompleteSetup => Some(admin::Operation::CompleteSetup),
+        Command::ConfigureNotifications => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configure-notifications requires explicit offline owner --config",
+                )
+                .into());
+            }
+            Some(admin::Operation::configure_notifications(
+                io::stdin().lock(),
+            )?)
+        }
+        Command::ConfigureRoutingBaseline => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configure-routing-baseline requires explicit offline owner --config",
+                )
+                .into());
+            }
+            Some(admin::Operation::configure_routing_baseline(
+                io::stdin().lock(),
+            )?)
+        }
         Command::InstallToolMarketBuiltins => {
             if arguments.config.is_none() || arguments.legacy_env {
                 return Err(io::Error::new(
@@ -269,6 +301,13 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     let address = config::listen_address()?;
     let drain_timeout = config::drain_timeout()?;
     let database_url = config::database_url()?;
+    if database_url.is_none() && config::notifications_configured() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "notification delivery requires a database",
+        )
+        .into());
+    }
     let lifecycle = Lifecycle::with_capacity(config::max_inflight()?);
     let ingress = config::ingress()?;
     let legacy_config = config::legacy_auth()?;
@@ -279,6 +318,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     let mut remote_store = None;
     let mut model_gateway = None;
     let mut humangrant_engine = None;
+    let mut notifications = None;
     let mut app = lmm_core::http::router();
     if let Some(url) = database_url.as_deref() {
         let pool = config::database_pool(url).await?;
@@ -287,7 +327,8 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             lmm_core::runtime_database::RequiredCapabilities {
                 models: config::setting_os("LMM_CORE_MODEL_CONFIG_FILE").is_some(),
                 images: config::images_configured()?,
-                events: config::setting_os("LMM_CORE_RPC_SOCKET").is_some(),
+                events: config::setting_os("LMM_CORE_RPC_SOCKET").is_some()
+                    || config::notifications_configured(),
                 payments: config::payments_configured(),
                 commerce: config::commerce_configured(),
                 assistant: config::assistant_configured(),
@@ -305,6 +346,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         // Installation belongs solely to the explicit init-db command. Even a
         // valid identity-only installation cannot stand in for the whole core.
         lmm_core::core_schema::check(&pool).await?;
+        notifications = config::notifications(url).await?;
         let (abuse, configured_models) = config::models_and_abuse(pool.clone())?;
         let mut store = config::identity_auth(IdentityStore::from_pool(pool.clone()))?
             .with_password_slots(config::password_slots()?)?
@@ -315,6 +357,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         // Library fixtures may omit the builder; serving this binary may not.
         model_gateway = configured_models.map(|gateway| gateway.with_trust_pricing());
         if let Some(gateway) = &model_gateway {
+            gateway.enable_routing_admin()?.refresh().await?;
             store = store.with_dashboard_routing(gateway.dashboard_routing());
             // Trusted recovery keeps indeterminate upstream holds reserved.
             // A failed recovery prevents listener binding/readiness.
@@ -406,6 +449,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             capabilities.legacy_web_auth = true;
         }
         if let Some(gateway) = &model_gateway {
+            routes = routes.merge(gateway.enable_routing_admin()?.http_router());
             routes = routes.merge(gateway.router());
             routes = routes.merge(
                 lmm_core::pricing_http::PricingHttp::from_gateway(pool.clone(), gateway).router(),
@@ -632,6 +676,8 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     // All enabled components and listener binds have succeeded. The health body
     // lists capabilities; model readiness has its own explicit endpoint.
     assert!(lifecycle.mark_ready());
+    let notifications_task = notifications
+        .map(|runtime| lmm_core::notifications::spawn_worker(runtime, stopped.clone()));
     let humangrant_mail_task = humangrant_engine
         .filter(|engine| engine.mail.is_some())
         .map(|engine| lmm_core::humangrant::mail::spawn_worker(engine, stopped.clone()));
@@ -706,6 +752,9 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     if let Some(task) = recovery_task {
         let _ = task.await;
     }
+    if let Some(task) = notifications_task {
+        task.await?;
+    }
     if let Some(task) = humangrant_mail_task {
         task.await?;
     }
@@ -763,6 +812,32 @@ mod check_db_parser_tests {
             args(&["serve", "upgrade-db"]),
             args(&["upgrade-db", "init-db"]),
             args(&["upgrade-db", "--config", "relative.toml"]),
+        ] {
+            assert!(command(input).is_err());
+        }
+    }
+    #[test]
+    fn routing_baseline_parser_accepts_one_explicit_owner_operation() {
+        for input in [
+            args(&[
+                "configure-routing-baseline",
+                "--config",
+                "/private/owner.toml",
+            ]),
+            args(&[
+                "--config",
+                "/private/owner.toml",
+                "configure-routing-baseline",
+            ]),
+        ] {
+            let value = command(input).unwrap();
+            assert!(matches!(value.command, Command::ConfigureRoutingBaseline));
+            assert_eq!(value.config, Some(PathBuf::from("/private/owner.toml")));
+        }
+        for input in [
+            args(&["serve", "configure-routing-baseline"]),
+            args(&["configure-routing-baseline", "init-db"]),
+            args(&["configure-routing-baseline", "--config", "relative.toml"]),
         ] {
             assert!(command(input).is_err());
         }

@@ -26,6 +26,7 @@ pub use compat::{DashboardKeyInput, DashboardKeyQuery, ProfileUpdate};
 pub mod grants;
 mod lifecycle;
 mod mfa;
+mod notifications;
 pub use mfa::{
     BrowserLoginOutcome, LoginOutcome, MfaChallenge, MfaCompletion, MfaError, MfaResult, MfaSetup,
     MfaStatus,

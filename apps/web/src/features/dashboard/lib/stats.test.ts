@@ -28,6 +28,8 @@ test('image-only usage preserves requests, consumption and images without invent
     totalCount: 1,
     totalQuota: 2000,
     totalTokens: null,
+    totalCacheReadTokens: null,
+    totalCacheCreationTokens: null,
     totalOutputImages: 2,
     tokenCountScope: 'settled_text_requests',
     hasOutputImages: true,
@@ -58,6 +60,8 @@ test('measured zero and a successful empty result remain known zero', () => {
     totalCount: 0,
     totalQuota: 0,
     totalTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheCreationTokens: 0,
     totalOutputImages: 0,
     tokenCountScope: undefined,
     hasOutputImages: false,
@@ -137,4 +141,49 @@ test('safeDivide keeps its numeric caller contract', () => {
   assert.equal(safeDivide(193, 2), 96.5)
   assert.equal(safeDivide(1, 0), 0)
   assert.equal(safeDivide(1, 3, 2), 0.33)
+})
+
+test('cache totals include only measured text usage and never add lifetime details twice', () => {
+  const measured = {
+    ...text,
+    cache_read_tokens: 17,
+    cache_creation_tokens: 30,
+    cache_creation_tokens_12h: 25,
+  }
+  const stats = calculateDashboardStats([image, measured, measured])
+  assert.equal(stats.totalTokens, 386)
+  assert.equal(stats.totalCacheReadTokens, 34)
+  assert.equal(stats.totalCacheCreationTokens, 60)
+})
+
+test('cache absence and explicit zero remain distinct across mixed buckets', () => {
+  const zero = { ...text, cache_read_tokens: 0, cache_creation_tokens: 0 }
+  const stats = calculateDashboardStats([image, zero])
+  assert.equal(stats.totalCacheReadTokens, 0)
+  assert.equal(stats.totalCacheCreationTokens, 0)
+  assert.equal(calculateDashboardStats([text, zero]).totalCacheReadTokens, null)
+  assert.equal(
+    calculateDashboardStats([{ ...zero, cache_creation_tokens: null }, zero])
+      .totalCacheCreationTokens,
+    null
+  )
+  assert.equal(calculateDashboardStats([image]).totalCacheReadTokens, null)
+  assert.equal(calculateDashboardStats([]).totalCacheCreationTokens, 0)
+})
+
+test('malformed or overflowing cache counters do not become finite aggregate values', () => {
+  for (const value of [undefined, null, -1, 0.5, NaN, Infinity]) {
+    const stats = calculateDashboardStats([
+      { ...text, cache_read_tokens: value, cache_creation_tokens: 2 },
+    ])
+    assert.equal(stats.totalCacheReadTokens, null)
+    assert.equal(stats.totalCacheCreationTokens, 2)
+  }
+  assert.equal(
+    calculateDashboardStats([
+      { ...text, cache_creation_tokens: Number.MAX_SAFE_INTEGER },
+      { ...text, cache_creation_tokens: 1 },
+    ]).totalCacheCreationTokens,
+    null
+  )
 })

@@ -1,4 +1,5 @@
 //! Bounded, text/function-call request conversion. Unsupported inputs fail closed.
+use super::search::{HostedSearch, SearchBinding};
 use super::{ClientProtocol, Limits, RelayError, Route, UpstreamProtocol};
 use serde::{
     Deserialize,
@@ -88,6 +89,12 @@ pub struct Request {
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: Option<bool>,
     pub reasoning_effort: Option<String>,
+    pub(crate) deepseek_thinking: Option<bool>,
+    /// Original bounded plaintext Responses reasoning items, indexed by message.
+    pub(crate) response_reasoning_items: BTreeMap<usize, Value>,
+    /// Bounded Responses cache controls; never evidence of actual billed writes.
+    pub prompt_cache_options: Option<Value>,
+    pub(crate) hosted_search: Option<HostedSearch>,
     pub(crate) include_usage: bool,
 }
 
@@ -267,6 +274,7 @@ impl Request {
                     "parallel_tool_calls",
                     "n",
                     "reasoning_effort",
+                    "thinking",
                     "store",
                 ],
             )?,
@@ -285,6 +293,8 @@ impl Request {
                     "parallel_tool_calls",
                     "reasoning",
                     "store",
+                    "prompt_cache_options",
+                    "max_tool_calls",
                 ],
             )?,
         }
@@ -341,9 +351,30 @@ impl Request {
             return Err(RelayError::Invalid("invalid stop sequences"));
         }
         let mut tools = Vec::new();
+        let mut response_search_tools = Vec::new();
+        let mut hosted_search = None;
         let mut tool_names = BTreeSet::new();
         if let Some(raw) = v.get("tools").filter(|v| !v.is_null()) {
             for t in raw.as_array().ok_or(RelayError::Invalid("invalid tools"))? {
+                if client == ClientProtocol::Responses
+                    && matches!(t["type"].as_str(), Some("web_search" | "x_search"))
+                {
+                    if response_search_tools
+                        .iter()
+                        .any(|old: &Value| old["type"] == t["type"])
+                    {
+                        return Err(RelayError::Invalid("duplicate hosted search tool"));
+                    }
+                    response_search_tools.push(super::search::responses_tool(t)?);
+                    continue;
+                }
+                if client == ClientProtocol::Chat && t["type"] == "web_search" {
+                    if hosted_search.is_some() {
+                        return Err(RelayError::Invalid("duplicate hosted search tool"));
+                    }
+                    hosted_search = Some(HostedSearch::Zhipu(super::search::zhipu_tool(t)?));
+                    continue;
+                }
                 if t["type"] != "function" {
                     return Err(RelayError::Unsupported("only function tools are supported"));
                 }
@@ -374,9 +405,15 @@ impl Request {
                 });
             }
         }
-        if tools.len() > limits.max_blocks {
+        if tools
+            .len()
+            .saturating_add(response_search_tools.len())
+            .saturating_add(usize::from(hosted_search.is_some()))
+            > limits.max_blocks
+        {
             return Err(RelayError::Limit("too many tools"));
         }
+        let mut search_choice = None;
         let tool_choice = match v.get("tool_choice").filter(|v| !v.is_null()) {
             None => ToolChoice::Auto,
             Some(Value::String(s)) => match s.as_str() {
@@ -386,29 +423,74 @@ impl Request {
                 _ => return Err(RelayError::Unsupported("unsupported tool choice")),
             },
             Some(t) => {
-                if t["type"] != "function" {
-                    return Err(RelayError::Unsupported("unsupported tool choice"));
-                }
-                let n = match client {
-                    ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
-                        keys(t, &["type", "function"])?;
-                        keys(&t["function"], &["name"])?;
-                        &t["function"]["name"]
+                if client == ClientProtocol::Responses
+                    && matches!(t["type"].as_str(), Some("web_search" | "x_search"))
+                {
+                    keys(t, &["type"])?;
+                    if !response_search_tools
+                        .iter()
+                        .any(|tool| tool["type"] == t["type"])
+                    {
+                        return Err(RelayError::Invalid("unknown hosted search choice"));
                     }
-                    ClientProtocol::Responses => {
-                        keys(t, &["type", "name"])?;
-                        &t["name"]
+                    search_choice = Some(string(&t["type"])?);
+                    ToolChoice::Auto
+                } else {
+                    if t["type"] != "function" {
+                        return Err(RelayError::Unsupported("unsupported tool choice"));
                     }
-                };
-                let n = name(n)?;
-                if !tool_names.contains(&n) {
-                    return Err(RelayError::Invalid("tool choice names an unknown function"));
+                    let n = match client {
+                        ClientProtocol::Chat
+                        | ClientProtocol::Anthropic
+                        | ClientProtocol::Gemini => {
+                            keys(t, &["type", "function"])?;
+                            keys(&t["function"], &["name"])?;
+                            &t["function"]["name"]
+                        }
+                        ClientProtocol::Responses => {
+                            keys(t, &["type", "name"])?;
+                            &t["name"]
+                        }
+                    };
+                    let n = name(n)?;
+                    if !tool_names.contains(&n) {
+                        return Err(RelayError::Invalid("tool choice names an unknown function"));
+                    }
+                    ToolChoice::Named(n)
                 }
-                ToolChoice::Named(n)
             }
         };
-        if tools.is_empty() && matches!(tool_choice, ToolChoice::Required | ToolChoice::Named(_)) {
+        let max_tool_calls = v
+            .get("max_tool_calls")
+            .map(|v| {
+                let count = super::search::bounded_count(v)
+                    .map_err(|_| RelayError::Invalid("invalid hosted tool limit"))?;
+                if count == 0 {
+                    return Err(RelayError::Invalid("hosted tool limit must be positive"));
+                }
+                Ok(count)
+            })
+            .transpose()?;
+        if !response_search_tools.is_empty() {
+            hosted_search = Some(HostedSearch::Responses {
+                tools: response_search_tools,
+                max_tool_calls,
+                choice: search_choice,
+            });
+        } else if max_tool_calls.is_some() {
+            return Err(RelayError::Unsupported(
+                "hosted tool limit requires a hosted search tool",
+            ));
+        }
+        if tools.is_empty()
+            && hosted_search.is_none()
+            && matches!(tool_choice, ToolChoice::Required | ToolChoice::Named(_))
+        {
             return Err(RelayError::Invalid("tool choice requires tools"));
+        }
+        if hosted_search.is_some() {
+            super::native_anthropic::unambiguous_json(body)
+                .map_err(|_| RelayError::Invalid("ambiguous hosted search request"))?;
         }
         let reasoning_effort = match client {
             ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => v
@@ -427,10 +509,19 @@ impl Request {
         };
         if reasoning_effort
             .as_ref()
-            .is_some_and(|s| !["low", "medium", "high"].contains(&s.as_str()))
+            .is_some_and(|s| super::deepseek::effort(s).is_none())
         {
             return Err(RelayError::Unsupported("unsupported reasoning effort"));
         }
+        let deepseek_thinking = super::deepseek::thinking(v.get("thinking"))?;
+        if v.get("reasoning").is_some()
+            || v.get("reasoning_effort").is_some()
+            || v.get("thinking").is_some()
+        {
+            super::native_anthropic::unambiguous_json(body)
+                .map_err(|_| RelayError::Invalid("ambiguous reasoning controls"))?;
+        }
+        let mut response_reasoning_items = BTreeMap::new();
         let mut messages = Vec::new();
         if let Some(s) = v.get("instructions").filter(|v| !v.is_null()) {
             messages.push(Message {
@@ -536,6 +627,23 @@ impl Request {
                                 .ok_or(RelayError::Invalid("invalid Responses input type"))?,
                         };
                         match kind {
+                            "reasoning" => {
+                                let text = super::deepseek::reasoning_item(i)?;
+                                if response_reasoning_items
+                                    .values()
+                                    .any(|old: &Value| old["id"] == i["id"])
+                                {
+                                    return Err(RelayError::Invalid("duplicate reasoning item ID"));
+                                }
+                                response_reasoning_items.insert(messages.len(), i.clone());
+                                messages.push(Message {
+                                    role: Role::Assistant,
+                                    content: vec![InputBlock::Thinking {
+                                        text,
+                                        signature: None,
+                                    }],
+                                });
+                            }
                             "message" => {
                                 keys(i, &["type", "role", "content"])?;
                                 let role = Role::parse(&i["role"])?;
@@ -585,6 +693,10 @@ impl Request {
                 }
             }
         }
+        if !response_reasoning_items.is_empty() {
+            super::native_anthropic::unambiguous_json(body)
+                .map_err(|_| RelayError::Invalid("ambiguous reasoning history"))?;
+        }
         if messages.is_empty() || messages.len() > 1024 {
             return Err(RelayError::Limit("message count"));
         }
@@ -610,6 +722,28 @@ impl Request {
         if count > 4096 {
             return Err(RelayError::Limit("input block count"));
         }
+        let prompt_cache_options = v
+            .get("prompt_cache_options")
+            .filter(|value| !value.is_null())
+            .map(|options| {
+                keys(options, &["mode", "ttl"])?;
+                if options
+                    .get("mode")
+                    .is_some_and(|mode| mode.as_str() != Some("implicit"))
+                {
+                    return Err(RelayError::Unsupported(
+                        "explicit cache breakpoints are not supported",
+                    ));
+                }
+                if !matches!(
+                    options.get("ttl").and_then(Value::as_str),
+                    Some("30m" | "12h")
+                ) {
+                    return Err(RelayError::Invalid("cache lifetime must be 30m or 12h"));
+                }
+                Ok(options.clone())
+            })
+            .transpose()?;
         Ok(Self {
             client,
             model,
@@ -624,11 +758,61 @@ impl Request {
             top_p: number(v.get("top_p"), 1.0)?,
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
+            deepseek_thinking,
+            response_reasoning_items,
+            prompt_cache_options,
+            hosted_search,
         })
     }
 
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {
-        self.upstream_to(route.protocol, &route.model)
+        let mut value =
+            self.upstream_base(route.protocol, &route.model, route.deepseek_parameters)?;
+        if let Some(search) = &self.hosted_search {
+            let binding = route.search_contract.ok_or(RelayError::Unsupported(
+                "hosted search has no frozen supplier contract",
+            ))?;
+            self.validate_search_contract(route.protocol, binding.provider, binding.limits)?;
+            self.search_choice(&mut value);
+            search.apply(&mut value, binding)?;
+        }
+        Ok(value)
+    }
+
+    pub fn has_hosted_search(&self) -> bool {
+        self.hosted_search.is_some()
+    }
+
+    pub fn has_x_search(&self) -> bool {
+        matches!(&self.hosted_search, Some(HostedSearch::Responses { tools, .. })
+            if tools.iter().any(|tool| tool["type"] == "x_search"))
+    }
+
+    pub fn validate_search_contract(
+        &self,
+        protocol: UpstreamProtocol,
+        provider: crate::routing::SearchProvider,
+        limits: crate::routing::SearchLimits,
+    ) -> Result<(), RelayError> {
+        self.hosted_search
+            .as_ref()
+            .ok_or(RelayError::Invalid("no hosted search requested"))?
+            .validate_binding(
+                self.client,
+                protocol,
+                SearchBinding { provider, limits },
+                self.stream,
+            )
+    }
+
+    fn search_choice(&self, value: &mut Value) {
+        match self.client {
+            ClientProtocol::Responses => value["tool_choice"] = self.openai_choice(false),
+            ClientProtocol::Anthropic if matches!(self.tool_choice, ToolChoice::None) => {
+                value["tool_choice"] = json!({"type":"none"})
+            }
+            _ => {}
+        }
     }
 
     /// Encode the existing bounded request for a server-owned protocol/model.
@@ -638,6 +822,39 @@ impl Request {
         protocol: UpstreamProtocol,
         model: &str,
     ) -> Result<Value, RelayError> {
+        let mut value = self.upstream_base(protocol, model, false)?;
+        if let Some(search) = &self.hosted_search {
+            self.search_choice(&mut value);
+            search.unbound(&mut value)?;
+        }
+        Ok(value)
+    }
+
+    fn upstream_base(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+        deepseek: bool,
+    ) -> Result<Value, RelayError> {
+        self.validate_deepseek_parameters(protocol, deepseek)?;
+        if self.hosted_search.is_some()
+            && !matches!(
+                (self.client, protocol),
+                (ClientProtocol::Chat, UpstreamProtocol::Chat)
+                    | (ClientProtocol::Responses, UpstreamProtocol::Responses)
+                    | (ClientProtocol::Anthropic, UpstreamProtocol::Anthropic)
+                    | (ClientProtocol::Gemini, UpstreamProtocol::Gemini)
+            )
+        {
+            return Err(RelayError::Unsupported(
+                "hosted search metadata cannot cross protocols",
+            ));
+        }
+        if self.prompt_cache_options.is_some() && protocol != UpstreamProtocol::Responses {
+            return Err(RelayError::Unsupported(
+                "cache lifetime controls require a Responses route",
+            ));
+        }
         for m in &self.messages {
             for b in &m.content {
                 if protocol == UpstreamProtocol::Anthropic
@@ -668,19 +885,23 @@ impl Request {
         if matches!(
             protocol,
             UpstreamProtocol::Anthropic | UpstreamProtocol::Gemini
-        ) && (self.reasoning_effort.is_some()
+        ) && ((!deepseek && self.reasoning_effort.is_some())
             || self.tools.iter().any(|t| t.strict == Some(true)))
         {
             return Err(RelayError::Unsupported(
                 "reasoning effort or strict tools require an OpenAI protocol route",
             ));
         }
-        match protocol {
+        let mut value = match protocol {
             UpstreamProtocol::Chat => self.chat(model),
-            UpstreamProtocol::Responses => self.responses(model),
-            UpstreamProtocol::Anthropic => self.anthropic(model),
+            UpstreamProtocol::Responses => self.responses(model, deepseek),
+            UpstreamProtocol::Anthropic => self.anthropic(model, deepseek),
             UpstreamProtocol::Gemini => self.gemini(),
+        }?;
+        if deepseek {
+            super::deepseek::apply(self, protocol, &mut value)?;
         }
+        Ok(value)
     }
     fn openai_tools(&self, chat: bool) -> Vec<Value> {
         self.tools
@@ -795,12 +1016,16 @@ impl Request {
         self.sampling(&mut v);
         Ok(v)
     }
-    fn responses(&self, model: &str) -> Result<Value, RelayError> {
+    fn responses(&self, model: &str, deepseek: bool) -> Result<Value, RelayError> {
         if !self.stop.is_empty() {
             return Err(RelayError::Unsupported("Responses stop sequences"));
         }
         let mut input = Vec::new();
-        for m in &self.messages {
+        for (message_index, m) in self.messages.iter().enumerate() {
+            if deepseek && let Some(item) = self.response_reasoning_items.get(&message_index) {
+                input.push(item.clone());
+                continue;
+            }
             for b in &m.content {
                 match b {
             InputBlock::Text(s) => input.push(json!({"role":m.role.name(),"content":[{"type":if m.role == Role::Assistant {"output_text"} else {"input_text"},"text":s}]})),
@@ -815,6 +1040,9 @@ impl Request {
             }
         }
         let mut v = json!({"model":model,"input":input,"stream":self.stream,"max_output_tokens":self.max_output_tokens,"store":false});
+        if let Some(options) = &self.prompt_cache_options {
+            v["prompt_cache_options"] = options.clone();
+        }
         if !self.tools.is_empty() {
             v["tools"] = json!(self.openai_tools(false));
             v["tool_choice"] = self.openai_choice(false);
@@ -850,7 +1078,7 @@ impl Request {
         }
         Ok((system, messages))
     }
-    fn anthropic(&self, model: &str) -> Result<Value, RelayError> {
+    fn anthropic(&self, model: &str, deepseek: bool) -> Result<Value, RelayError> {
         if self.temperature.is_some_and(|t| t > 1.0) {
             return Err(RelayError::Unsupported("Anthropic temperature exceeds one"));
         }
@@ -862,6 +1090,7 @@ impl Request {
                 content.push(match b {
                 InputBlock::Text(s) | InputBlock::Refusal(s) => json!({"type":"text","text":s}),
                 InputBlock::Thinking { text, signature: Some((UpstreamProtocol::Anthropic, s)) } => json!({"type":"thinking","thinking":text,"signature":s}),
+                InputBlock::Thinking { text, signature: None } if deepseek => json!({"type":"thinking","thinking":text}),
                 InputBlock::Thinking { .. } => return Err(RelayError::Unsupported("Anthropic thinking history needs its original signature")),
                 InputBlock::ToolCall { id, name, arguments, .. } => json!({"type":"tool_use","id":id,"name":name,"input":serde_json::from_str::<Value>(arguments).map_err(|_| RelayError::Invalid("invalid tool JSON"))?}),
                 InputBlock::ToolResult { id, content } => json!({"type":"tool_result","tool_use_id":id,"content":content}),

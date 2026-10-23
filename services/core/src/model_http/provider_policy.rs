@@ -5,14 +5,114 @@ use crate::{
         RelayError,
         honeypot_network::{literal_ip, validate_base_url},
     },
-    routing::{Attempt, Protocol},
+    routing::{Attempt, EmbeddingProvider, Protocol, SearchLimits, SearchProvider},
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Host-reviewed limits for the exact model/endpoint below. A local stop after
+/// receiving a response is not a supplier spending guarantee.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalSearchContract {
+    pub provider: SearchProvider,
+    pub limits: SearchLimits,
+    pub contract_revision: String,
+}
+
+impl ExternalSearchContract {
+    fn validate(&self, protocol: Protocol) -> Result<(), RelayError> {
+        let expected = match self.provider {
+            SearchProvider::OpenAiResponsesV1
+            | SearchProvider::AzureResponsesV1
+            | SearchProvider::XaiResponsesV1
+            | SearchProvider::DashscopeResponsesV1 => Protocol::OpenAiResponses,
+            SearchProvider::GeminiGroundingV1 => Protocol::Gemini,
+            SearchProvider::DashscopeAnthropicV1 | SearchProvider::AnthropicMessagesV1 => {
+                Protocol::AnthropicMessages
+            }
+            SearchProvider::ZhipuChatV1 => Protocol::OpenAiChat,
+            SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1 => {
+                Protocol::DeepSeekTools
+            }
+        };
+        self.limits
+            .validate()
+            .map_err(|_| RelayError::Invalid("invalid provider search limits"))?;
+        if protocol != expected
+            || self.contract_revision.is_empty()
+            || self.contract_revision.len() > 512
+            || self.contract_revision.chars().any(char::is_control)
+        {
+            return Err(RelayError::Invalid("invalid provider search contract"));
+        }
+        Ok(())
+    }
+}
+
+/// Exact native embedding capability and supplier-enforced input contract.
+/// Remote media is never downloaded by Core; enabling it requires the bound
+/// to cover the supplier's remote-media validation and billing guarantees.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalEmbeddingContract {
+    pub provider: EmbeddingProvider,
+    pub contract_revision: String,
+    pub max_contents: u16,
+    pub max_images: u16,
+    pub max_videos: u16,
+    pub max_text_bytes: u32,
+    pub max_inline_image_bytes: u32,
+    pub default_dimensions: u32,
+    pub dimensions: Vec<u32>,
+    /// A narrowed administrator allowlist does not imply that a supplier model
+    /// has fixed dimensions. Adjustable models receive the actual chosen value.
+    pub supports_dimension_parameter: bool,
+    pub supports_fusion: bool,
+    pub allow_remote_media: bool,
+}
+impl ExternalEmbeddingContract {
+    fn validate(&self, protocol: Protocol) -> Result<(), RelayError> {
+        let mut dimensions = self.dimensions.clone();
+        dimensions.sort_unstable();
+        dimensions.dedup();
+        if protocol != Protocol::AliMultimodalEmbedding
+            || self.contract_revision.is_empty()
+            || self.contract_revision.len() > 512
+            || self.contract_revision.chars().any(char::is_control)
+            || !(1..=20).contains(&self.max_contents)
+            || self.max_images > 8
+            || self.max_videos > 1
+            || !(1..=1_048_576).contains(&self.max_text_bytes)
+            || self.max_inline_image_bytes > 5 * 1_048_576
+            || !(1..=16).contains(&self.dimensions.len())
+            || dimensions.len() != self.dimensions.len()
+            || dimensions.iter().any(|v| !(1..=4096).contains(v))
+            || !dimensions.contains(&self.default_dimensions)
+            || (!self.supports_dimension_parameter && dimensions.len() != 1)
+            || (self.max_videos != 0 && !self.allow_remote_media)
+        {
+            return Err(RelayError::Invalid("invalid native embedding contract"));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalModelContext {
+    #[serde(default)]
+    pub search: Option<ExternalSearchContract>,
+    #[serde(default)]
+    pub embedding: Option<ExternalEmbeddingContract>,
+    /// Explicit opt-in for the reviewed DeepSeek request parameter contract.
+    /// A model name or a protocol-compatible endpoint is never this authority.
+    #[serde(default)]
+    pub deepseek_parameters_contract: Option<String>,
+    /// AWS authentication is a distinct host contract. This region is bound to
+    /// the exact Mantle endpoint and never inferred from a model or client input.
+    #[serde(default)]
+    pub mantle_sigv4_region: Option<String>,
     pub upstream_id: u64,
     pub upstream_model: String,
     pub protocol: Protocol,
@@ -53,19 +153,61 @@ impl ProviderPolicy {
         }
         let mut result = Self::default();
         for mut context in contexts {
-            let endpoint = validate_base_url(&context.endpoint, false)?;
+            let endpoint = validate_base_url(&context.endpoint, true)?;
             if context.upstream_id == 0
                 || context.upstream_model.is_empty()
                 || context.upstream_model.len() > 256
                 || context.upstream_model.chars().any(char::is_control)
-                || context.max_input_tokens == 0
+                || (context.protocol != Protocol::DeepSeekTools && context.max_input_tokens == 0)
                 || i64::from(context.max_input_tokens) > reserved_input_tokens
-                || !(1..=65_536).contains(&context.max_output_tokens)
+                || match context.protocol {
+                    Protocol::DeepSeekTools => {
+                        context.max_input_tokens != 0
+                            || context.max_output_tokens != 0
+                            || context.search.is_none()
+                    }
+                    Protocol::AliMultimodalEmbedding => {
+                        context.max_output_tokens != 0 || context.embedding.is_none()
+                    }
+                    _ => !(1..=65_536).contains(&context.max_output_tokens),
+                }
                 || context.contract_revision.is_empty()
                 || context.contract_revision.len() > 512
                 || context.contract_revision.chars().any(char::is_control)
             {
                 return Err(RelayError::Invalid("invalid provider context policy"));
+            }
+            if let Some(search) = &context.search {
+                search.validate(context.protocol)?;
+            }
+            if let Some(embedding) = &context.embedding {
+                embedding.validate(context.protocol)?;
+                if context.search.is_some() {
+                    return Err(RelayError::Invalid("mixed provider metering contract"));
+                }
+            }
+            if let Some(revision) = &context.deepseek_parameters_contract
+                && (revision.is_empty()
+                    || revision.len() > 512
+                    || revision.chars().any(char::is_control)
+                    || !matches!(
+                        context.protocol,
+                        Protocol::OpenAiChat
+                            | Protocol::OpenAiResponses
+                            | Protocol::AnthropicMessages
+                    ))
+            {
+                return Err(RelayError::Invalid("invalid DeepSeek parameter contract"));
+            }
+            if let Some(region) = &context.mantle_sigv4_region {
+                if context.protocol != Protocol::AnthropicMessages
+                    || context.deepseek_parameters_contract.is_some()
+                    || context.search.is_some()
+                    || context.embedding.is_some()
+                {
+                    return Err(RelayError::Invalid("mixed Mantle provider contract"));
+                }
+                crate::relay::validate_mantle_endpoint(endpoint.as_str(), region)?;
             }
             context.endpoint = endpoint.to_string();
             if result
@@ -80,6 +222,150 @@ impl ProviderPolicy {
             }
         }
         Ok(result)
+    }
+
+    /// Search is opt-in even for synthetic loopback routes. Bind its supplier
+    /// contract before a hold or dispatch, then persist it with the price.
+    pub(crate) fn search_contract(
+        &self,
+        attempt: &Attempt,
+    ) -> Result<&ExternalSearchContract, RelayError> {
+        self.search_contract_for_binding(
+            attempt.upstream_id(),
+            attempt.upstream_model(),
+            attempt.protocol(),
+            attempt.endpoint(),
+        )
+    }
+
+    pub(crate) fn search_contract_for_binding(
+        &self,
+        upstream_id: u64,
+        upstream_model: &str,
+        protocol: Protocol,
+        endpoint: &str,
+    ) -> Result<&ExternalSearchContract, RelayError> {
+        let endpoint = validate_base_url(endpoint, true)?;
+        let context = self
+            .contexts
+            .get(&(upstream_id, upstream_model.to_owned()))
+            .filter(|context| context.protocol == protocol && context.endpoint == endpoint.as_str())
+            .ok_or(RelayError::Unsupported(
+                "hosted search requires an exact supplier contract",
+            ))?;
+        context.search.as_ref().ok_or(RelayError::Unsupported(
+            "hosted search requires reviewed supplier limits",
+        ))
+    }
+
+    pub(crate) fn embedding_contract(
+        &self,
+        attempt: &Attempt,
+    ) -> Result<(&ExternalEmbeddingContract, u32), RelayError> {
+        self.embedding_contract_for_binding(
+            attempt.upstream_id(),
+            attempt.upstream_model(),
+            attempt.protocol(),
+            attempt.endpoint(),
+        )
+    }
+
+    pub(crate) fn deepseek_parameters_contract(&self, attempt: &Attempt) -> Option<&str> {
+        let endpoint = validate_base_url(attempt.endpoint(), true).ok()?;
+        self.contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
+            .filter(|context| {
+                context.protocol == attempt.protocol() && context.endpoint == endpoint.as_str()
+            })
+            .and_then(|context| context.deepseek_parameters_contract.as_deref())
+    }
+
+    pub(crate) fn mantle_region_for_binding(
+        &self,
+        upstream_id: u64,
+        upstream_model: &str,
+        protocol: Protocol,
+        endpoint: &str,
+    ) -> Option<&str> {
+        let endpoint = validate_base_url(endpoint, true).ok()?;
+        self.contexts
+            .get(&(upstream_id, upstream_model.to_owned()))
+            .filter(|context| context.protocol == protocol && context.endpoint == endpoint.as_str())
+            .and_then(|context| context.mantle_sigv4_region.as_deref())
+    }
+
+    /// Freeze an authentication type for every credential reference, including
+    /// disabled targets. A later priority/price publication cannot reinterpret
+    /// an AWS document as a Bearer/API-key credential on another route.
+    pub(crate) fn mantle_credential_references(
+        &self,
+        upstreams: &[crate::routing::UpstreamConfig],
+        routes: &[crate::routing::ModelRoute],
+    ) -> Result<BTreeSet<(u64, u64)>, RelayError> {
+        let by_id: BTreeMap<_, _> = upstreams
+            .iter()
+            .map(|upstream| (upstream.id, upstream))
+            .collect();
+        let mut upstream_modes = BTreeMap::new();
+        for target in routes.iter().flat_map(|route| &route.targets) {
+            let upstream = by_id
+                .get(&target.upstream_id)
+                .ok_or(RelayError::RouteUnavailable)?;
+            let is_mantle = self
+                .mantle_region_for_binding(
+                    upstream.id,
+                    &target.upstream_model,
+                    upstream.protocol,
+                    upstream.endpoint.as_str(),
+                )
+                .is_some();
+            if upstream_modes
+                .insert(upstream.id, is_mantle)
+                .is_some_and(|old| old != is_mantle)
+            {
+                return Err(RelayError::Invalid(
+                    "upstream mixes credential authentication types",
+                ));
+            }
+        }
+        let mut modes = BTreeMap::new();
+        for upstream in upstreams {
+            let is_mantle = upstream_modes.get(&upstream.id).copied().unwrap_or(false);
+            let reference = (upstream.credential.id, upstream.credential.revision);
+            if modes
+                .insert(reference, is_mantle)
+                .is_some_and(|old| old != is_mantle)
+            {
+                return Err(RelayError::Invalid(
+                    "credential reference mixes authentication types",
+                ));
+            }
+        }
+        Ok(modes
+            .into_iter()
+            .filter_map(|(reference, mantle)| mantle.then_some(reference))
+            .collect())
+    }
+
+    pub(crate) fn embedding_contract_for_binding(
+        &self,
+        upstream_id: u64,
+        model: &str,
+        protocol: Protocol,
+        endpoint: &str,
+    ) -> Result<(&ExternalEmbeddingContract, u32), RelayError> {
+        let endpoint = validate_base_url(endpoint, true)?;
+        let context = self
+            .contexts
+            .get(&(upstream_id, model.to_owned()))
+            .filter(|context| context.protocol == protocol && context.endpoint == endpoint.as_str())
+            .ok_or(RelayError::Unsupported(
+                "native embedding requires an exact supplier contract",
+            ))?;
+        let contract = context.embedding.as_ref().ok_or(RelayError::Unsupported(
+            "native embedding requires reviewed supplier limits",
+        ))?;
+        Ok((contract, context.max_input_tokens))
     }
 
     /// Freeze the reviewed input bound for this exact selected attempt. The
@@ -212,6 +498,26 @@ impl ExternalModelContext {
         usage: &crate::relay::Usage,
         upstream_cost: bool,
     ) -> Result<(), RelayError> {
+        if let Some(observed) = usage.embedding {
+            let contract = self
+                .embedding
+                .as_ref()
+                .ok_or(RelayError::SettlementPending)?;
+            if !observed.complete()
+                || observed.provider != contract.provider
+                || observed
+                    .total_input_tokens
+                    .is_none_or(|tokens| tokens > u64::from(self.max_input_tokens))
+            {
+                return Err(RelayError::SettlementPending);
+            }
+        }
+        if let Some(observed) = usage.search {
+            let search = self.search.as_ref().ok_or(RelayError::SettlementPending)?;
+            if observed.provider != search.provider || !search.limits.contains(observed) {
+                return Err(RelayError::SettlementPending);
+            }
+        }
         if !upstream_cost
             && usage.cached_input_tokens.is_none()
             && !self.missing_cached_tokens_is_zero
@@ -385,6 +691,10 @@ mod tests {
 
     fn context() -> ExternalModelContext {
         ExternalModelContext {
+            mantle_sigv4_region: None,
+            deepseek_parameters_contract: None,
+            embedding: None,
+            search: None,
             missing_cache_creation_tokens_is_zero: false,
             upstream_id: 1,
             upstream_model: "bounded-model".into(),
@@ -396,6 +706,123 @@ mod tests {
             missing_cached_tokens_is_zero: false,
         }
     }
+    #[test]
+    fn exact_provider_contracts_normalize_only_the_reviewed_base_url() {
+        let mut search = context();
+        search.protocol = Protocol::OpenAiResponses;
+        search.endpoint = "https://api.example".into();
+        search.search = Some(ExternalSearchContract {
+            provider: SearchProvider::OpenAiResponsesV1,
+            limits: SearchLimits {
+                calls: Some(1),
+                ..Default::default()
+            },
+            contract_revision: "synthetic-search-v1".into(),
+        });
+        let policy = ProviderPolicy::new(vec![search], 128_000).unwrap();
+        for endpoint in ["https://api.example", "https://api.example/"] {
+            assert!(
+                policy
+                    .search_contract_for_binding(
+                        1,
+                        "bounded-model",
+                        Protocol::OpenAiResponses,
+                        endpoint
+                    )
+                    .is_ok()
+            );
+        }
+        assert!(
+            policy
+                .search_contract_for_binding(
+                    1,
+                    "bounded-model",
+                    Protocol::OpenAiResponses,
+                    "https://api.example/v1"
+                )
+                .is_err()
+        );
+        let mut deepseek = context();
+        deepseek.endpoint = "https://api.example".into();
+        deepseek.deepseek_parameters_contract = Some("synthetic-deepseek-v1".into());
+        let policy = ProviderPolicy::new(vec![deepseek], 128_000).unwrap();
+        let selected = attempt(Protocol::OpenAiChat, "bounded-model", "https://api.example");
+        assert_eq!(
+            policy.deepseek_parameters_contract(&selected),
+            Some("synthetic-deepseek-v1")
+        );
+        let other = attempt(
+            Protocol::OpenAiChat,
+            "bounded-model",
+            "https://api.example/v1",
+        );
+        assert_eq!(policy.deepseek_parameters_contract(&other), None);
+    }
+
+    #[test]
+    fn mantle_region_binds_host_protocol_and_excludes_other_vendor_contracts() {
+        let mut contract = context();
+        contract.protocol = Protocol::AnthropicMessages;
+        contract.endpoint = "https://bedrock-mantle.us-east-1.api.aws".into();
+        contract.mantle_sigv4_region = Some("us-east-1".into());
+        let policy = ProviderPolicy::new(vec![contract.clone()], 128_000).unwrap();
+        assert_eq!(
+            policy.mantle_region_for_binding(
+                1,
+                "bounded-model",
+                Protocol::AnthropicMessages,
+                &contract.endpoint
+            ),
+            Some("us-east-1")
+        );
+        assert_eq!(
+            policy.mantle_region_for_binding(
+                1,
+                "other-model",
+                Protocol::AnthropicMessages,
+                &contract.endpoint
+            ),
+            None
+        );
+        assert_eq!(
+            policy.mantle_region_for_binding(
+                1,
+                "bounded-model",
+                Protocol::OpenAiChat,
+                &contract.endpoint
+            ),
+            None
+        );
+        assert_eq!(
+            policy.mantle_region_for_binding(
+                1,
+                "bounded-model",
+                Protocol::AnthropicMessages,
+                "https://api.example/"
+            ),
+            None
+        );
+        for mutation in 0..4 {
+            let mut bad = contract.clone();
+            match mutation {
+                0 => bad.mantle_sigv4_region = Some("eu-west-1".into()),
+                1 => bad.protocol = Protocol::OpenAiChat,
+                2 => bad.deepseek_parameters_contract = Some("reviewed-deepseek-v1".into()),
+                _ => {
+                    bad.search = Some(ExternalSearchContract {
+                        provider: SearchProvider::AnthropicMessagesV1,
+                        limits: SearchLimits {
+                            calls: Some(1),
+                            ..SearchLimits::default()
+                        },
+                        contract_revision: "reviewed-search-v1".into(),
+                    })
+                }
+            }
+            assert!(ProviderPolicy::new(vec![bad], 128_000).is_err());
+        }
+    }
+
     #[test]
     fn external_context_is_explicit_and_binds_identity_protocol_and_origin() {
         let empty = ProviderPolicy::default();

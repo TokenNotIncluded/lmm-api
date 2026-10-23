@@ -1,7 +1,8 @@
-//! Bounded Anthropic Messages client adapter. No media, hosted tools or cache controls.
+//! Bounded Anthropic Messages client adapter, including contracted web search.
 use super::request::{InputBlock, Message, Request, Role};
 use super::{
-    BlockKind, ClientProtocol, Event, FinishReason, Limits, RelayError, UpstreamProtocol, Usage,
+    BlockKind, ClientProtocol, Event, FinishReason, Limits, OutputSlot, RelayError,
+    UpstreamProtocol, Usage,
 };
 use serde::{
     Deserialize,
@@ -62,6 +63,56 @@ impl<'de> Deserialize<'de> for Unique {
         d.deserialize_any(V)
     }
 }
+
+/// Shared strict reader for money-bearing hosted-search receipts. Keep duplicate
+/// object keys visible as errors before serde_json::Value can overwrite them.
+pub(crate) fn unambiguous_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    // With arbitrary_precision, deserialize_any represents decimal numbers by
+    // an internal map. Validate actual object keys through RawValue instead,
+    // then let Value preserve the original numeric representation exactly.
+    struct Fields(Vec<Box<serde_json::value::RawValue>>);
+    impl<'de> Deserialize<'de> for Fields {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct Object;
+            impl<'de> Visitor<'de> for Object {
+                type Value = Fields;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("an object with unique keys")
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Fields, A::Error> {
+                    let mut names = BTreeSet::new();
+                    let mut values = Vec::new();
+                    while let Some(name) = map.next_key::<String>()? {
+                        if name.starts_with("$serde_json::private::") || !names.insert(name) {
+                            return Err(serde::de::Error::custom("ambiguous JSON object"));
+                        }
+                        values.push(map.next_value()?);
+                    }
+                    Ok(Fields(values))
+                }
+            }
+            d.deserialize_map(Object)
+        }
+    }
+    fn validate(raw: &serde_json::value::RawValue, depth: usize) -> Result<(), serde_json::Error> {
+        if depth > 128 {
+            return Err(serde::de::Error::custom("JSON nesting limit"));
+        }
+        let children = match raw.get().trim_start().as_bytes().first() {
+            Some(b'{') => serde_json::from_str::<Fields>(raw.get())?.0,
+            Some(b'[') => serde_json::from_str::<Vec<Box<serde_json::value::RawValue>>>(raw.get())?,
+            _ => return Ok(()),
+        };
+        for child in children {
+            validate(&child, depth + 1)?;
+        }
+        Ok(())
+    }
+    let raw: Box<serde_json::value::RawValue> = serde_json::from_slice(bytes)?;
+    validate(&raw, 0)?;
+    serde_json::from_slice(bytes)
+}
+
 fn keys(v: &Value, allowed: &[&str]) -> Result<(), RelayError> {
     let m = v
         .as_object()
@@ -104,13 +155,13 @@ fn blocks(v: &Value, role: Role, limits: &Limits) -> Result<Vec<InputBlock>, Rel
             }
             Some("thinking") if role == Role::Assistant => {
                 keys(p, &["type", "thinking", "signature"])?;
-                let s = string(&p["signature"])?;
-                if s.is_empty() {
+                let signature = p.get("signature").map(string).transpose()?;
+                if signature.as_ref().is_some_and(String::is_empty) {
                     return Err(RelayError::Invalid("empty thinking signature"));
                 }
                 InputBlock::Thinking {
                     text: string(&p["thinking"])?,
-                    signature: Some((UpstreamProtocol::Anthropic, s)),
+                    signature: signature.map(|value| (UpstreamProtocol::Anthropic, value)),
                 }
             }
             Some("tool_use") if role == Role::Assistant => {
@@ -168,9 +219,7 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
     if body.len() > limits.request_bytes {
         return Err(RelayError::Limit("request body"));
     }
-    let v = serde_json::from_slice::<Unique>(body)
-        .map_err(|_| RelayError::Invalid("invalid or ambiguous JSON"))?
-        .0;
+    let v = unambiguous_json(body).map_err(|_| RelayError::Invalid("invalid or ambiguous JSON"))?;
     keys(
         &v,
         &[
@@ -184,6 +233,8 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
             "tools",
             "tool_choice",
             "stop_sequences",
+            "thinking",
+            "output_config",
         ],
     )?;
     if let Some(s) = v.get("stop_sequences") {
@@ -200,6 +251,21 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
         }
     }
     let mut canonical = json!({"model":v["model"],"max_tokens":v["max_tokens"],"messages":[{"role":"user","content":"validation"}]});
+    if let Some(thinking) = v.get("thinking") {
+        super::deepseek::thinking(Some(thinking))?;
+        canonical["thinking"] = thinking.clone();
+    }
+    if let Some(config) = v.get("output_config") {
+        keys(config, &["effort"])?;
+        let effort = config["effort"]
+            .as_str()
+            .filter(|effort| *effort != "none")
+            .filter(|effort| super::deepseek::effort(effort).is_some())
+            .ok_or(RelayError::Unsupported(
+                "unsupported DeepSeek output effort",
+            ))?;
+        canonical["reasoning_effort"] = json!(effort);
+    }
     if let Some(sequences) = v.get("stop_sequences") {
         canonical["stop"] = sequences.clone();
     }
@@ -216,12 +282,22 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
     {
         return Err(RelayError::Invalid("invalid Anthropic temperature"));
     }
+    let mut hosted_search = None;
     if let Some(tools) = v.get("tools") {
         let mut dst = Vec::new();
         for t in tools
             .as_array()
             .ok_or(RelayError::Invalid("invalid tools"))?
         {
+            if t.get("type").is_some() {
+                if hosted_search.is_some() {
+                    return Err(RelayError::Invalid("duplicate hosted search tool"));
+                }
+                hosted_search = Some(super::search::HostedSearch::Anthropic(
+                    super::search::anthropic_tool(t)?,
+                ));
+                continue;
+            }
             keys(t, &["name", "description", "input_schema"])?;
             if !t["input_schema"].is_object() {
                 return Err(RelayError::Invalid("tool schema must be object"));
@@ -235,6 +311,11 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
         canonical["tools"] = json!(dst);
     }
     if let Some(t) = v.get("tool_choice") {
+        if hosted_search.is_some() && !matches!(t["type"].as_str(), Some("auto" | "none")) {
+            return Err(RelayError::Unsupported(
+                "hosted Anthropic search supports auto or none choice",
+            ));
+        }
         keys(t, &["type", "name", "disable_parallel_tool_use"])?;
         canonical["tool_choice"] = match t["type"].as_str() {
             Some("auto") => json!("auto"),
@@ -309,6 +390,16 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
         return Err(RelayError::Limit("input blocks"));
     }
     request.messages = messages;
+    if request
+        .tools
+        .len()
+        .saturating_add(usize::from(hosted_search.is_some()))
+        > limits.max_blocks
+    {
+        return Err(RelayError::Limit("tool count"));
+    }
+    request.hosted_search = hosted_search;
+    request.client = ClientProtocol::Anthropic;
     Ok(request)
 }
 
@@ -317,8 +408,11 @@ struct Block {
     text: String,
     signature: String,
     ended: bool,
+    citations: Vec<Value>,
+    wire_index: usize,
 }
 pub(crate) struct NativeEncoder {
+    deepseek_parameters: bool,
     model: String,
     id: String,
     stream: bool,
@@ -328,6 +422,8 @@ pub(crate) struct NativeEncoder {
     stop_sequence: Option<String>,
     wire_started: bool,
     pending: Vec<Vec<u8>>,
+    search_outputs: Vec<Value>,
+    output_order: Vec<OutputSlot>,
     blocks: Vec<Block>,
     usage: Usage,
     finish: Option<FinishReason>,
@@ -336,8 +432,13 @@ pub(crate) struct NativeEncoder {
     limits: Limits,
 }
 impl NativeEncoder {
+    pub(crate) fn set_deepseek_parameters(&mut self, enabled: bool) {
+        self.deepseek_parameters = enabled;
+    }
+
     pub fn new(model: &str, request_id: &str, stream: bool, limits: &Limits) -> Self {
         Self {
+            deepseek_parameters: false,
             model: model.into(),
             id: format!("msg_{request_id}"),
             stream,
@@ -347,6 +448,8 @@ impl NativeEncoder {
             stop_sequence: None,
             wire_started: false,
             pending: Vec::new(),
+            search_outputs: Vec::new(),
+            output_order: Vec::new(),
             blocks: Vec::new(),
             usage: Usage::default(),
             finish: None,
@@ -414,6 +517,7 @@ impl NativeEncoder {
             if let Some(details) = self.usage.cache_creation_details {
                 value["cache_creation"] = json!(details);
             }
+            self.search_usage(&mut value)?;
             return Ok(value);
         }
         let input = self
@@ -440,15 +544,43 @@ impl NativeEncoder {
         if let Some(details) = self.usage.cache_creation_details {
             value["cache_creation"] = json!(details);
         }
+        self.search_usage(&mut value)?;
         Ok(value)
+    }
+    fn search_usage(&self, value: &mut Value) -> Result<(), RelayError> {
+        if let Some(search) = self.usage.search {
+            if !matches!(
+                search.provider,
+                crate::routing::SearchProvider::AnthropicMessagesV1
+                    | crate::routing::SearchProvider::DashscopeAnthropicV1
+            ) {
+                return Err(RelayError::Unsupported(
+                    "foreign hosted usage cannot be emitted as Anthropic",
+                ));
+            }
+            if let Some(calls) = search.calls {
+                value["server_tool_use"] = json!({"web_search_requests":calls});
+            }
+        }
+        Ok(())
     }
     fn content(&self, i: usize, empty: bool) -> Result<Value, RelayError> {
         let b = &self.blocks[i];
         let s = if empty { "" } else { &b.text };
         Ok(match &b.kind {
-            BlockKind::Text => json!({"type":"text","text":s}),
+            BlockKind::Text => {
+                let mut value = json!({"type":"text","text":s});
+                if !empty && !b.citations.is_empty() {
+                    value["citations"] = json!(b.citations);
+                }
+                value
+            }
             BlockKind::Thinking => {
-                json!({"type":"thinking","thinking":s,"signature":if empty{""}else{&b.signature}})
+                if self.deepseek_parameters && b.signature.is_empty() {
+                    json!({"type":"thinking","thinking":s})
+                } else {
+                    json!({"type":"thinking","thinking":s,"signature":if empty{""}else{&b.signature}})
+                }
             }
             BlockKind::Tool { id, name } => {
                 json!({"type":"tool_use","id":id,"name":name,"input":if empty{json!({})}else{serde_json::from_str::<Unique>(s).map_err(|_|RelayError::Protocol("invalid tool JSON"))?.0}})
@@ -472,7 +604,7 @@ impl NativeEncoder {
             Event::Block { index, kind } => {
                 if self.finish.is_some()
                     || *index != self.blocks.len()
-                    || self.blocks.len() >= self.limits.max_blocks
+                    || self.output_order.len() >= self.limits.max_blocks
                     || self.blocks.iter().any(|b| !b.ended)
                 {
                     return Err(RelayError::Protocol("invalid block order"));
@@ -497,11 +629,14 @@ impl NativeEncoder {
                     text: String::new(),
                     signature: String::new(),
                     ended: false,
+                    citations: Vec::new(),
+                    wire_index: self.output_order.len(),
                 });
+                self.output_order.push(OutputSlot::Block(*index));
                 if self.stream {
                     out.push(self.packet(
                         "content_block_start",
-                        json!({"index":index,"content_block":self.content(*index,true)?}),
+                        json!({"index":self.blocks[*index].wire_index,"content_block":self.content(*index,true)?}),
                     )?);
                 }
             }
@@ -529,7 +664,10 @@ impl NativeEncoder {
                     _ => return Err(RelayError::Unsupported("native content")),
                 };
                 if self.stream {
-                    out.push(self.packet("content_block_delta", json!({"index":index,"delta":d}))?);
+                    out.push(self.packet(
+                        "content_block_delta",
+                        json!({"index":self.blocks[*index].wire_index,"delta":d}),
+                    )?);
                 }
             }
             Event::Signature {
@@ -552,7 +690,7 @@ impl NativeEncoder {
                 if self.stream {
                     out.push(self.packet(
                         "content_block_delta",
-                        json!({"index":index,"delta":{"type":"signature_delta","signature":value}}),
+                        json!({"index":self.blocks[*index].wire_index,"delta":{"type":"signature_delta","signature":value}}),
                     )?);
                 }
             }
@@ -564,7 +702,10 @@ impl NativeEncoder {
                 if b.ended {
                     return Err(RelayError::Protocol("duplicate block end"));
                 }
-                if matches!(b.kind, BlockKind::Thinking) && b.signature.is_empty() {
+                if !self.deepseek_parameters
+                    && matches!(b.kind, BlockKind::Thinking)
+                    && b.signature.is_empty()
+                {
                     return Err(RelayError::Unsupported("unsigned native thinking"));
                 }
                 if matches!(b.kind, BlockKind::Tool { .. })
@@ -577,7 +718,10 @@ impl NativeEncoder {
                 }
                 b.ended = true;
                 if self.stream {
-                    out.push(self.packet("content_block_stop", json!({"index":i}))?);
+                    out.push(self.packet(
+                        "content_block_stop",
+                        json!({"index":self.blocks[*i].wire_index}),
+                    )?);
                 }
             }
             Event::Usage(u) => {
@@ -588,6 +732,75 @@ impl NativeEncoder {
                     .is_some_and(|n| n > u64::from(self.limits.max_output_tokens))
                 {
                     return Err(RelayError::Limit("output tokens"));
+                }
+            }
+            Event::SearchOutput { protocol, value } => {
+                if *protocol != UpstreamProtocol::Anthropic {
+                    return Err(RelayError::Unsupported(
+                        "hosted search cannot cross protocols",
+                    ));
+                }
+                super::search::anthropic_search_block(value)?;
+                let key = value
+                    .get("id")
+                    .or_else(|| value.get("tool_use_id"))
+                    .ok_or(RelayError::Protocol("missing hosted search identity"))?;
+                if let Some(old) = self.search_outputs.iter().find(|old| {
+                    old["type"] == value["type"]
+                        && old.get("id").or_else(|| old.get("tool_use_id")) == Some(key)
+                }) {
+                    if old != value {
+                        return Err(RelayError::Protocol("hosted search output changed"));
+                    }
+                } else {
+                    if self.search_outputs.len().saturating_add(self.blocks.len())
+                        >= self.limits.max_blocks
+                    {
+                        return Err(RelayError::Limit("hosted search blocks"));
+                    }
+                    if self.blocks.iter().any(|block| !block.ended) {
+                        return Err(RelayError::Protocol(
+                            "hosted search interrupted an open block",
+                        ));
+                    }
+                    self.account(value.to_string().len())?;
+                    let wire_index = self.output_order.len();
+                    self.output_order
+                        .push(OutputSlot::Hosted(self.search_outputs.len()));
+                    self.search_outputs.push(value.clone());
+                    if self.stream {
+                        out.push(self.packet(
+                            "content_block_start",
+                            json!({"index":wire_index,"content_block":value}),
+                        )?);
+                        out.push(self.packet("content_block_stop", json!({"index":wire_index}))?);
+                    }
+                }
+            }
+            Event::Citations {
+                index,
+                protocol,
+                values,
+            } => {
+                if *protocol != UpstreamProtocol::Anthropic {
+                    return Err(RelayError::Unsupported("foreign search citations"));
+                }
+                let block = self
+                    .blocks
+                    .get(*index)
+                    .ok_or(RelayError::Protocol("unknown citation block"))?;
+                if !matches!(block.kind, BlockKind::Text) || !values.starts_with(&block.citations) {
+                    return Err(RelayError::Protocol("invalid citation transition"));
+                }
+                let old = block.citations.len();
+                for citation in &values[old..] {
+                    self.account(citation.to_string().len())?;
+                }
+                self.blocks[*index].citations = values.clone();
+                if self.stream {
+                    for citation in &values[old..] {
+                        out.push(self.packet("content_block_delta", json!({"index":self.blocks[*index].wire_index,"delta":{"type":"citations_delta","citation":citation}}))?);
+                    }
                 }
             }
             Event::StopSequence(sequence) => {
@@ -663,8 +876,13 @@ impl NativeEncoder {
             )?);
             out.push(self.packet("message_stop", json!({}))?);
         } else {
-            let content = (0..self.blocks.len())
-                .map(|i| self.content(i, false))
+            let content = self
+                .output_order
+                .iter()
+                .map(|slot| match *slot {
+                    OutputSlot::Block(i) => self.content(i, false),
+                    OutputSlot::Hosted(i) => Ok(self.search_outputs[i].clone()),
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let v = json!({"id":self.id,"type":"message","role":"assistant","model":self.model,"content":content,"stop_reason":reason,"stop_sequence":self.stop_sequence,"usage":usage});
             let b = serde_json::to_vec(&v).map_err(|_| RelayError::Protocol("encoding"))?;

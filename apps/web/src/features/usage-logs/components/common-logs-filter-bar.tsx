@@ -54,7 +54,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { readUsageStatisticsScope } from '../lib/statistics'
-import { getDefaultTimeRange } from '../lib/utils'
+import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
@@ -63,6 +63,7 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
+import { UsageCsvExport } from './usage-csv-export'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -502,7 +503,24 @@ export function CommonLogsFilterBar<TData>(
     <LogsFilterToolbar
       table={props.table}
       stats={statsBar}
-      actionStart={sensitiveToggle}
+      actionStart={
+        <>
+          {sensitiveToggle}
+          <UsageCsvExport
+            scope={scope}
+            isAdmin={isAdmin}
+            params={buildApiParams({
+              page: 1,
+              pageSize: 100,
+              isAdmin,
+              searchParams: {
+                ...buildSearchParams(searchState.filters, 'common'),
+                type: [searchState.logType],
+              },
+            })}
+          />
+        </>
+      }
       primaryFilters={
         <>
           {dateRangeFilter}

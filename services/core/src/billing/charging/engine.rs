@@ -68,6 +68,8 @@ mod trust_admission_tests {
             id: "trust-request".into(),
             fingerprint: [1; 32],
             price: Price {
+                embedding: None,
+                search: None,
                 user_trust: None,
                 image: None,
                 upstream_cost_group_ppm: None,
@@ -134,6 +136,7 @@ fn counted_api_activity(usage: Usage) -> bool {
             || usage.cached > 0
             || usage.output > 0
             || usage.cache_creation.is_some_and(|v| v.total > 0)
+            || usage.search.is_some_and(|search| search.has_positive())
             || usage.image.is_some_and(|v| v.output_images > 0)
             || usage.upstream_cost_atto_usd.is_some_and(|v| v > 0))
 }
@@ -162,6 +165,7 @@ mod activity_tests {
             Usage {
                 input: 1,
                 cache_creation: Some(CacheCreationUsage {
+                    twelve_hour: None,
                     total: 1,
                     five_minute: None,
                     one_hour: None,
@@ -236,6 +240,7 @@ fn decode(row: PgRow) -> Result<Stored> {
             reserved: row.try_get("reserved")?,
             usage: cache_evidence::restore(
                 Usage {
+                    embedding: None,
                     image: row
                         .try_get::<Option<Value>, _>("image_usage")?
                         .map(serde_json::from_value)
@@ -246,6 +251,7 @@ fn decode(row: PgRow) -> Result<Stored> {
                         .map(|v| v.parse::<u128>().map_err(|_| Error::Storage))
                         .transpose()?,
                     cache_creation: None,
+                    search: None,
                     input: row.try_get("input_tokens")?,
                     cached: row.try_get("cached_tokens")?,
                     output: row.try_get("output_tokens")?,
@@ -263,6 +269,27 @@ fn decode(row: PgRow) -> Result<Stored> {
         .price
         .validate_actor(stored.charge.actor_user_id)
         .map_err(|_| Error::Storage)?;
+    if stored.charge.price.search.is_some() || stored.charge.price.embedding.is_some() {
+        if ((stored.charge.price.search.is_some() && stored.charge.usage.search.is_none())
+            || (stored.charge.price.embedding.is_some() && stored.charge.usage.embedding.is_none()))
+            && (stored.charge.usage != Usage::default()
+                || (stored.charge.state == "settled"
+                    && stored.charge.outcome.as_deref() == Some("completed")))
+        {
+            return Err(Error::Storage);
+        }
+    }
+    if stored.charge.price.search.is_some()
+        || stored.charge.usage.search.is_some()
+        || stored.charge.price.embedding.is_some()
+        || stored.charge.usage.embedding.is_some()
+    {
+        stored
+            .charge
+            .price
+            .cost(stored.charge.usage)
+            .map_err(|_| Error::Storage)?;
+    }
     let cache_tariff = stored
         .charge
         .price
@@ -291,7 +318,7 @@ fn decode(row: PgRow) -> Result<Stored> {
         {
             return Err(Error::Storage);
         }
-        if tariff.cache_creation_mode.is_some() {
+        if tariff.cache_creation_mode.is_some() || tariff.tariff.revision == 4 {
             stored
                 .charge
                 .price
@@ -1007,6 +1034,12 @@ impl Charging {
         outcome: Outcome,
         evidence: Option<&str>,
     ) -> Result<Charge> {
+        if outcome == Outcome::Completed
+            && ((charge.price.search.is_some() && usage.search.is_none())
+                || (charge.price.embedding.is_some() && usage.embedding.is_none()))
+        {
+            return Err(Error::Invalid);
+        }
         let amount = Self::check_usage(&charge, usage)?;
         self.ledger
             .apply(c, command(&charge, "settle", Change::Settle { amount })?)

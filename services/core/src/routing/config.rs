@@ -33,6 +33,10 @@ pub enum Protocol {
     Gemini,
     #[serde(rename = "system_one")]
     SystemOne,
+    #[serde(rename = "deepseek_tools")]
+    DeepSeekTools,
+    #[serde(rename = "ali_multimodal_embedding")]
+    AliMultimodalEmbedding,
 }
 
 /// A base URL, never a URL carrying credentials. This type is INTERNAL config.

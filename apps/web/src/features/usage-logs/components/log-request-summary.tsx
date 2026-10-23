@@ -25,6 +25,7 @@ import { useHistoricalQuotaMoney } from '@/hooks/use-historical-quota-money'
 import { formatTokens } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
+import { embeddingUsageQuantities } from '../lib/embedding-usage'
 import {
   hasNetConsumptionMetadata,
   logNetConsumptionAmounts,
@@ -32,7 +33,8 @@ import {
 } from '../lib/money'
 import { usageReceiptState } from '../lib/receipt-state'
 import { logRecovery, safeLogDiagnostic } from '../lib/recovery'
-import { logUsageQuantity } from '../lib/usage-quantity'
+import { searchUsageQuantities } from '../lib/search-usage'
+import { cacheWrite12hQuantity, logUsageQuantity } from '../lib/usage-quantity'
 import type { LogOtherData } from '../types'
 
 export function LogRequestSummary({
@@ -176,6 +178,30 @@ export function LogRequestSummary({
               : formatTokens(other.cache_creation_tokens)}
           </dd>
         </div>
+        {other && 'cache_creation_tokens_12h' in other && (
+          <div>
+            <dt className='text-muted-foreground'>
+              {t('12-hour cache writes')}
+            </dt>
+            <dd className='tabular-nums'>
+              {cacheWrite12hQuantity(
+                other,
+                log.token_usage_available
+              )?.toLocaleString() ?? t('Unknown')}
+            </dd>
+          </div>
+        )}
+        {[
+          ...searchUsageQuantities(other, log.token_usage_available),
+          ...embeddingUsageQuantities(other, log.token_usage_available),
+        ].map((quantity) => (
+          <div key={quantity.label}>
+            <dt className='text-muted-foreground'>{t(quantity.label)}</dt>
+            <dd className='tabular-nums'>
+              {quantity.count?.toLocaleString() ?? t('Unknown')}
+            </dd>
+          </div>
+        ))}
         {(other?.audio_usage_status != null || audioSeconds != null) && (
           <div>
             <dt className='text-muted-foreground'>

@@ -12,7 +12,7 @@ pub struct HumanGrantEngine {
     pub store: HumanGrantStore,
     pub origin: String,
     pub local: bool,
-    pub mail: Option<std::sync::Arc<super::mail::SmtpMailer>>,
+    pub mail: Option<std::sync::Arc<super::mail::Mailer>>,
 }
 
 impl HumanGrantEngine {

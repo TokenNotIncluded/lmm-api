@@ -101,7 +101,9 @@ import type {
   TokenUnit,
   PriceDisplayCurrency,
 } from '../types'
+import { CacheWritePrices } from './cache-write-prices'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
+import { EmbeddingPrices } from './embedding-prices'
 import { ImagePrices } from './image-prices'
 import { ModelAvailability } from './model-availability'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
@@ -110,6 +112,7 @@ import { ModelDetailsPerformance } from './model-details-performance'
 import { ModelRuntimeBadge } from './model-runtime-badge'
 import { PricingContextLabel } from './pricing-context-label'
 import { RequestEstimator } from './request-estimator'
+import { SearchPrices } from './search-prices'
 import { UpstreamCostPricing } from './upstream-cost-pricing'
 
 // ----------------------------------------------------------------------------
@@ -1065,6 +1068,9 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               displayCurrency={displayCurrency}
             />
+            <CacheWritePrices model={props.model} />
+            <SearchPrices model={props.model} />
+            <EmbeddingPrices model={props.model} />
             <ImagePrices model={props.model} />
             {isDynamic && (
               <DynamicPricingBreakdown

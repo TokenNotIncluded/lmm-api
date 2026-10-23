@@ -1,8 +1,9 @@
 //! Provider decoders share a bounded block model. Usage counters are cumulative.
+use super::search::{SearchBinding, SearchMeter};
 use super::sse::Frame;
 use super::{
-    BlockKind, CacheCreationDetails, Event, FinishReason, Limits, RelayError, UpstreamProtocol,
-    Usage,
+    BlockKind, CacheCreationDetails, Event, FinishReason, Limits, OpenAiCacheWriteDetails,
+    RelayError, UpstreamProtocol, Usage,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ struct Slot {
 pub(crate) struct Decoder {
     protocol: UpstreamProtocol,
     cache_creation_mode: Option<CacheCreationMode>,
+    deepseek_parameters: bool,
     started: bool,
     source_id: Option<String>,
     done: bool,
@@ -27,6 +29,10 @@ pub(crate) struct Decoder {
     blocks: BTreeMap<Key, Slot>,
     max_blocks: usize,
     gemini_calls: u64,
+    search: Option<SearchMeter>,
+    citations: BTreeMap<Key, Vec<Value>>,
+    server_blocks: BTreeMap<Key, (Value, String, bool)>,
+    tool_argument_bytes: usize,
 }
 fn text(v: &Value) -> Result<&str, RelayError> {
     v.as_str()
@@ -70,6 +76,18 @@ fn cache_creation_details(v: &Value) -> Result<Option<CacheCreationDetails>, Rel
         .map_err(|_| RelayError::Protocol("invalid cache creation details"))
 }
 
+fn openai_cache_write_details(v: &Value) -> Result<Option<OpenAiCacheWriteDetails>, RelayError> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    if !v.is_object() {
+        return Err(RelayError::Protocol("invalid OpenAI cache write details"));
+    }
+    serde_json::from_value(v.clone())
+        .map(Some)
+        .map_err(|_| RelayError::Protocol("invalid OpenAI cache write details"))
+}
+
 fn cache_creation_usage(u: &mut Usage, v: &Value, details_key: &str) -> Result<(), RelayError> {
     u.cache_creation_input_tokens = counter(v, "cache_creation_input_tokens")?;
     u.cache_creation_details = cache_creation_details(&v[details_key])?;
@@ -104,6 +122,7 @@ fn anthropic_stop_sequence(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     usage_with_cache_creation_mode(protocol, v, None)
 }
@@ -224,6 +243,10 @@ pub(crate) fn usage_with_cache_creation_mode(
             }
             u.cache_creation_input_tokens = Some(alias);
         }
+        // Lifetimes are provider observations, not a consequence of requested
+        // cache retention. Missing aggregate or lifetime fields remain unknown.
+        u.openai_cache_write_details =
+            openai_cache_write_details(&input_details["cache_write_tokens_details"])?;
         if let Some(total) = counter(v, "total_tokens")? {
             let known = u
                 .input_tokens
@@ -268,18 +291,21 @@ fn finish_reason(
         _ => Err(RelayError::Protocol("unsupported upstream finish reason")),
     }
 }
-fn plain_response_part(part: &Value) -> Result<(), RelayError> {
+fn plain_response_part(part: &Value, search: bool) -> Result<(), RelayError> {
     if part
         .get("annotations")
         .is_some_and(|a| !a.is_null() && a.as_array().is_none_or(|a| !a.is_empty()))
     {
-        return Err(RelayError::Protocol(
-            "annotated Responses output is not supported",
-        ));
+        if !search {
+            return Err(RelayError::Protocol(
+                "annotated Responses output requires a search contract",
+            ));
+        }
+        super::search::response_citations(&part["annotations"])?;
     }
     Ok(())
 }
-fn plain_response_item(item: &Value) -> Result<(), RelayError> {
+fn plain_response_item(item: &Value, search: bool) -> Result<(), RelayError> {
     if item.get("encrypted_content").is_some_and(|v| !v.is_null()) {
         return Err(RelayError::Protocol(
             "encrypted Responses output is not supported",
@@ -290,18 +316,18 @@ fn plain_response_item(item: &Value) -> Result<(), RelayError> {
             .as_array()
             .ok_or(RelayError::Protocol("invalid Responses content"))?
         {
-            plain_response_part(part)?;
+            plain_response_part(part, search)?;
         }
     }
     Ok(())
 }
-fn plain_response(response: &Value) -> Result<(), RelayError> {
+fn plain_response(response: &Value, search: bool) -> Result<(), RelayError> {
     if let Some(items) = response.get("output").filter(|v| !v.is_null()) {
         for item in items
             .as_array()
             .ok_or(RelayError::Protocol("invalid Responses output"))?
         {
-            plain_response_item(item)?;
+            plain_response_item(item, search)?;
         }
     }
     Ok(())
@@ -320,6 +346,7 @@ impl Decoder {
         Self {
             protocol,
             cache_creation_mode,
+            deepseek_parameters: false,
             started: false,
             source_id: None,
             done: false,
@@ -327,11 +354,190 @@ impl Decoder {
             blocks: BTreeMap::new(),
             max_blocks: limits.max_blocks,
             gemini_calls: 0,
+            search: None,
+            citations: BTreeMap::new(),
+            server_blocks: BTreeMap::new(),
+            tool_argument_bytes: limits.tool_argument_bytes,
         }
     }
 
+    pub(crate) fn with_search_contract(
+        mut self,
+        binding: Option<SearchBinding>,
+        limits: &Limits,
+    ) -> Self {
+        self.search = binding.map(|binding| SearchMeter::new(binding, limits));
+        self
+    }
+
+    pub(crate) fn with_deepseek_parameters(mut self, enabled: bool) -> Self {
+        self.deepseek_parameters = enabled;
+        self
+    }
+
+    fn search_observation(
+        &mut self,
+        value: &Value,
+        terminal: bool,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        let Some(search) = &mut self.search else {
+            return super::search::reject_uncontracted_usage(value);
+        };
+        let observed = search.observe(value, terminal)?;
+        if let Some(Event::Usage(usage)) = out
+            .iter_mut()
+            .rev()
+            .find(|event| matches!(event, Event::Usage(_)))
+        {
+            usage.search = Some(observed);
+        } else {
+            out.push(Event::Usage(Usage {
+                search: Some(observed),
+                cache_creation_mode: self.cache_creation_mode,
+                ..Usage::default()
+            }));
+        }
+        Ok(())
+    }
+
+    fn native_search(&mut self, value: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        let meter = self
+            .search
+            .as_mut()
+            .ok_or(RelayError::Protocol("uncontracted hosted search output"))?;
+        if self.protocol == UpstreamProtocol::Responses {
+            meter.item(value)?;
+        }
+        out.push(Event::SearchOutput {
+            protocol: self.protocol,
+            value: value.clone(),
+        });
+        // Completed item evidence must reach the durable usage checkpoint even
+        // if the upstream disconnects before response.completed.
+        if self.protocol == UpstreamProtocol::Responses {
+            self.search_observation(&Value::Null, false, out)?;
+        }
+        Ok(())
+    }
+
+    fn citations(
+        &mut self,
+        key: Key,
+        value: &Value,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        if value.is_null() {
+            return Ok(());
+        }
+        let values = if self.protocol == UpstreamProtocol::Responses {
+            super::search::response_citations(value)?
+        } else {
+            super::search::anthropic_citations(value)?
+        };
+        if values.is_empty() {
+            return Ok(());
+        }
+        if self.search.is_none() {
+            return Err(RelayError::Protocol("uncontracted search citations"));
+        }
+        let index = self
+            .blocks
+            .get(&key)
+            .ok_or(RelayError::Protocol("citations without a text block"))?
+            .index;
+        if let Some(previous) = self.citations.get(&key) {
+            if values.len() < previous.len() || !values.starts_with(previous) {
+                return Err(RelayError::Protocol("search citations changed"));
+            }
+        }
+        self.citations.insert(key, values.clone());
+        out.push(Event::Citations {
+            index,
+            protocol: self.protocol,
+            values,
+        });
+        Ok(())
+    }
+
+    fn response_inventory(
+        &mut self,
+        value: &Value,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        if self.search.is_none() {
+            return Ok(());
+        }
+        if let Some(items) = value.get("output") {
+            for (i, item) in items
+                .as_array()
+                .ok_or(RelayError::Protocol("invalid Responses output"))?
+                .iter()
+                .enumerate()
+            {
+                if matches!(
+                    item["type"].as_str(),
+                    Some("web_search_call" | "x_search_call")
+                ) {
+                    self.native_search(item, out)?;
+                } else if item["type"] == "message" {
+                    for (j, part) in item["content"]
+                        .as_array()
+                        .ok_or(RelayError::Protocol("invalid response content"))?
+                        .iter()
+                        .enumerate()
+                    {
+                        if part["type"] == "output_text" {
+                            let key = (i as u64, j as u64);
+                            if !self.blocks.contains_key(&key) {
+                                self.simple(key, BlockKind::Text, text(&part["text"])?, out)?;
+                            }
+                            self.citations(key, &part["annotations"], out)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn usage(&self, value: &Value) -> Result<Usage, RelayError> {
-        usage_with_cache_creation_mode(self.protocol, value, self.cache_creation_mode)
+        let mut usage =
+            usage_with_cache_creation_mode(self.protocol, value, self.cache_creation_mode)?;
+        if self.deepseek_parameters && self.protocol == UpstreamProtocol::Chat {
+            let hit = counter(value, "prompt_cache_hit_tokens")?;
+            let miss = counter(value, "prompt_cache_miss_tokens")?;
+            if let Some(hit) = hit {
+                if usage
+                    .cached_input_tokens
+                    .is_some_and(|cached| cached != hit)
+                {
+                    return Err(RelayError::Protocol(
+                        "conflicting DeepSeek cache hit aliases",
+                    ));
+                }
+                usage.cached_input_tokens = Some(hit);
+            }
+            if let Some(total) = usage.input_tokens {
+                let known = usage
+                    .cached_input_tokens
+                    .unwrap_or(0)
+                    .checked_add(miss.unwrap_or(0))
+                    .ok_or(RelayError::Protocol("DeepSeek token overflow"))?;
+                if known > total
+                    || (usage.cached_input_tokens.is_some() && miss.is_some() && known != total)
+                {
+                    return Err(RelayError::Protocol("contradictory DeepSeek prompt usage"));
+                }
+                if usage.cached_input_tokens.is_none() {
+                    return Err(RelayError::Protocol(
+                        "DeepSeek prompt receipt has no cache hit count",
+                    ));
+                }
+            }
+            usage.validate()?;
+        }
+        Ok(usage)
     }
     pub fn is_done(&self) -> bool {
         self.done
@@ -456,6 +662,24 @@ impl Decoder {
         Ok(())
     }
     fn close(&mut self, key: Key, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        if let Some((value, arguments, ended)) = self.server_blocks.get_mut(&key) {
+            if !*ended {
+                if !arguments.is_empty() {
+                    let input: Value = serde_json::from_str(arguments)
+                        .map_err(|_| RelayError::Protocol("invalid hosted search input"))?;
+                    if !input.is_object() {
+                        return Err(RelayError::Protocol("invalid hosted search input"));
+                    }
+                    value["input"] = input;
+                }
+                *ended = true;
+                out.push(Event::SearchOutput {
+                    protocol: UpstreamProtocol::Anthropic,
+                    value: value.clone(),
+                });
+            }
+            return Ok(());
+        }
         let s = self
             .blocks
             .get_mut(&key)
@@ -477,6 +701,9 @@ impl Decoder {
         for key in keys {
             self.close(key, out)?;
         }
+        for key in self.server_blocks.keys().copied().collect::<Vec<_>>() {
+            self.close(key, out)?;
+        }
         Ok(())
     }
     fn finish(&mut self, reason: FinishReason, out: &mut Vec<Event>) -> Result<(), RelayError> {
@@ -491,6 +718,14 @@ impl Decoder {
     fn done(&mut self, out: &mut Vec<Event>) -> Result<(), RelayError> {
         if self.finish.is_none() || self.done {
             return Err(RelayError::Truncated);
+        }
+        if let Some(search) = &mut self.search {
+            let usage = search.complete()?;
+            out.push(Event::Usage(Usage {
+                search: Some(usage),
+                cache_creation_mode: self.cache_creation_mode,
+                ..Usage::default()
+            }));
         }
         self.done = true;
         out.push(Event::Done);
@@ -511,8 +746,12 @@ impl Decoder {
             self.done(&mut out)?;
             return Ok(out);
         }
-        let v: Value = serde_json::from_str(&frame.data)
-            .map_err(|_| RelayError::Protocol("invalid SSE JSON"))?;
+        let v: Value = if self.search.is_some() || self.deepseek_parameters {
+            super::native_anthropic::unambiguous_json(frame.data.as_bytes())
+        } else {
+            serde_json::from_str(&frame.data)
+        }
+        .map_err(|_| RelayError::Protocol("invalid SSE JSON"))?;
         if !v.is_object() {
             return Err(RelayError::Protocol("upstream event is not an object"));
         }
@@ -552,7 +791,7 @@ impl Decoder {
         match self.protocol {
             UpstreamProtocol::Chat => self.chat(v, true, &mut out)?,
             UpstreamProtocol::Responses => {
-                plain_response(v)?;
+                plain_response(v, self.search.is_some())?;
                 self.start(v["id"].as_str(), &mut out)?;
                 for (i, item) in v["output"]
                     .as_array()
@@ -562,6 +801,9 @@ impl Decoder {
                 {
                     let i = i as u64;
                     match item["type"].as_str() {
+                        Some("web_search_call" | "x_search_call") => {
+                            self.native_search(item, &mut out)?
+                        }
                         Some("function_call") => {
                             self.block(
                                 (i, u64::MAX),
@@ -590,15 +832,46 @@ impl Decoder {
                                     }
                                 };
                                 self.simple((i, j as u64), kind, s, &mut out)?;
+                                self.citations((i, j as u64), &p["annotations"], &mut out)?;
                             }
                         }
                         Some("reasoning") => {
-                            for (j, p) in item["summary"]
+                            let parts = if self.deepseek_parameters {
+                                if item.get("summary").is_some_and(|summary| {
+                                    summary.as_array().is_none_or(|parts| !parts.is_empty())
+                                }) {
+                                    return Err(RelayError::Protocol(
+                                        "DeepSeek reasoning summary cannot replace its content",
+                                    ));
+                                }
+                                &item["content"]
+                            } else {
+                                if item.get("content").is_some_and(|content| {
+                                    content.as_array().is_none_or(|parts| !parts.is_empty())
+                                }) {
+                                    return Err(RelayError::Protocol(
+                                        "plaintext Responses reasoning requires a supplier contract",
+                                    ));
+                                }
+                                &item["summary"]
+                            };
+                            for (j, p) in parts
                                 .as_array()
                                 .ok_or(RelayError::Protocol("invalid reasoning summary"))?
                                 .iter()
                                 .enumerate()
                             {
+                                if p["type"]
+                                    != if self.deepseek_parameters {
+                                        "reasoning_text"
+                                    } else {
+                                        "summary_text"
+                                    }
+                                {
+                                    return Err(RelayError::Protocol(
+                                        "invalid reasoning part type",
+                                    ));
+                                }
                                 self.simple(
                                     (i, j as u64),
                                     BlockKind::Thinking,
@@ -628,6 +901,7 @@ impl Decoder {
                     self.anthropic_block((0, i as u64), b, false, &mut out)?;
                 }
                 out.push(Event::Usage(self.usage(&v["usage"])?));
+                self.search_observation(v, true, &mut out)?;
                 anthropic_stop_sequence(v, text(&v["stop_reason"])?, &mut out)?;
                 self.finish(
                     finish_reason(self.protocol, text(&v["stop_reason"])?, self.tools())?,
@@ -725,6 +999,12 @@ impl Decoder {
         if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
             out.push(Event::Usage(self.usage(u)?));
         }
+        self.search_observation(v, full, out)?;
+        if let Some(results) = v.get("web_search") {
+            if self.search.is_some() {
+                self.native_search(results, out)?;
+            }
+        }
         Ok(())
     }
     fn anthropic_block(
@@ -735,7 +1015,24 @@ impl Decoder {
         out: &mut Vec<Event>,
     ) -> Result<(), RelayError> {
         match b["type"].as_str() {
-            Some("text") => self.simple(key, BlockKind::Text, text(&b["text"])?, out)?,
+            Some("text") => {
+                self.simple(key, BlockKind::Text, text(&b["text"])?, out)?;
+                self.citations(key, &b["citations"], out)?;
+            }
+            Some("server_tool_use" | "web_search_tool_result") => {
+                if self.search.is_none() {
+                    return Err(RelayError::Protocol("uncontracted server search tool"));
+                }
+                super::search::anthropic_search_block(b)?;
+                if self.blocks.len().saturating_add(self.server_blocks.len()) >= self.max_blocks
+                    || self.server_blocks.contains_key(&key)
+                    || self.blocks.contains_key(&key)
+                {
+                    return Err(RelayError::Limit("hosted search blocks"));
+                }
+                self.server_blocks
+                    .insert(key, (b.clone(), String::new(), false));
+            }
             Some("thinking") => {
                 self.simple(key, BlockKind::Thinking, text(&b["thinking"])?, out)?;
                 if let Some(s) = b.get("signature") {
@@ -764,6 +1061,9 @@ impl Decoder {
             }
             _ => return Err(RelayError::Protocol("unsupported Anthropic content block")),
         }
+        if !stream {
+            self.close(key, out)?;
+        }
         Ok(())
     }
     fn anthropic_event(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
@@ -775,13 +1075,14 @@ impl Decoder {
                 }
                 self.start(v["message"]["id"].as_str(), out)?;
                 out.push(Event::Usage(self.usage(&v["message"]["usage"])?));
+                self.search_observation(&v["message"], false, out)?;
             }
             Some("content_block_start") => {
                 if !self.started {
                     return Err(RelayError::Protocol("content before message start"));
                 }
                 let key = (0, index(&v["index"])?);
-                if self.blocks.contains_key(&key) {
+                if self.blocks.contains_key(&key) || self.server_blocks.contains_key(&key) {
                     return Err(RelayError::Protocol("duplicate content block"));
                 }
                 self.anthropic_block(key, &v["content_block"], true, out)?;
@@ -789,6 +1090,29 @@ impl Decoder {
             Some("content_block_delta") => {
                 let key = (0, index(&v["index"])?);
                 let d = &v["delta"];
+                if let Some((value, arguments, ended)) = self.server_blocks.get_mut(&key) {
+                    if *ended
+                        || value["type"] != "server_tool_use"
+                        || d["type"] != "input_json_delta"
+                        || value["input"]
+                            .as_object()
+                            .is_none_or(|input| !input.is_empty())
+                    {
+                        return Err(RelayError::Protocol("invalid server tool delta"));
+                    }
+                    let delta = text(&d["partial_json"])?;
+                    if arguments.len().saturating_add(delta.len()) > self.tool_argument_bytes {
+                        return Err(RelayError::Limit("server tool arguments"));
+                    }
+                    arguments.push_str(delta);
+                    return Ok(());
+                }
+                if d["type"] == "citations_delta" {
+                    let mut citations = self.citations.get(&key).cloned().unwrap_or_default();
+                    citations.push(d["citation"].clone());
+                    self.citations(key, &serde_json::json!(citations), out)?;
+                    return Ok(());
+                }
                 let kind = &self
                     .blocks
                     .get(&key)
@@ -816,8 +1140,11 @@ impl Decoder {
                     out.push(Event::Usage(self.usage(u)?));
                 }
                 if let Some(r) = v["delta"].get("stop_reason").filter(|r| !r.is_null()) {
+                    self.search_observation(v, true, out)?;
                     anthropic_stop_sequence(&v["delta"], text(r)?, out)?;
                     self.finish(finish_reason(self.protocol, text(r)?, self.tools())?, out)?;
+                } else {
+                    self.search_observation(v, false, out)?;
                 }
             }
             Some("message_stop") => self.done(out)?,
@@ -827,18 +1154,28 @@ impl Decoder {
         Ok(())
     }
     fn responses_event(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        if self.deepseek_parameters
+            && v["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("response.reasoning_summary_"))
+        {
+            return Err(RelayError::Protocol(
+                "DeepSeek reasoning is plaintext content",
+            ));
+        }
         if let Some(item) = v.get("item") {
-            plain_response_item(item)?;
+            plain_response_item(item, self.search.is_some())?;
         }
         if let Some(part) = v.get("part") {
-            plain_response_part(part)?;
+            plain_response_part(part, self.search.is_some())?;
         }
         if let Some(response) = v.get("response") {
-            plain_response(response)?;
+            plain_response(response, self.search.is_some())?;
         }
         match v["type"].as_str() {
             Some("response.created" | "response.in_progress") => {
-                self.start(v["response"]["id"].as_str(), out)?
+                self.start(v["response"]["id"].as_str(), out)?;
+                self.search_observation(&v["response"], false, out)?;
             }
             Some("response.output_item.added") => {
                 if !self.started {
@@ -847,6 +1184,7 @@ impl Decoder {
                 let i = index(&v["output_index"])?;
                 let item = &v["item"];
                 match item["type"].as_str() {
+                    Some("web_search_call" | "x_search_call") => self.native_search(item, out)?,
                     Some("function_call") => {
                         let key = (i, u64::MAX);
                         self.block(
@@ -871,9 +1209,13 @@ impl Decoder {
                 let (kind, s) = match p["type"].as_str() {
                     Some("output_text") => (BlockKind::Text, text(&p["text"])?),
                     Some("refusal") => (BlockKind::Refusal, text(&p["refusal"])?),
+                    Some("reasoning_text") if self.deepseek_parameters => {
+                        (BlockKind::Thinking, text(&p["text"])?)
+                    }
                     _ => return Err(RelayError::Protocol("unsupported response content")),
                 };
                 self.simple(key, kind, s, out)?;
+                self.citations(key, &p["annotations"], out)?;
             }
             Some("response.reasoning_summary_part.added") => {
                 let key = (index(&v["output_index"])?, index(&v["summary_index"])?);
@@ -896,21 +1238,68 @@ impl Decoder {
                 text(&v["delta"])?,
                 out,
             )?,
+            Some("response.reasoning_text.delta") if self.deepseek_parameters => self.delta(
+                (index(&v["output_index"])?, index(&v["content_index"])?),
+                text(&v["delta"])?,
+                out,
+            )?,
+            Some("response.reasoning_text.done") if self.deepseek_parameters => {
+                index(&v["output_index"])?;
+                index(&v["content_index"])?;
+                text(&v["text"])?;
+            }
             Some("response.function_call_arguments.done") => {
                 let key = (index(&v["output_index"])?, u64::MAX);
                 if self.blocks.get(&key).is_some_and(|s| !s.has_text) {
                     self.delta(key, text(&v["arguments"])?, out)?;
                 }
             }
-            Some("response.content_part.done") => self.close(
-                (index(&v["output_index"])?, index(&v["content_index"])?),
-                out,
-            )?,
+            Some("response.content_part.done") => {
+                let key = (index(&v["output_index"])?, index(&v["content_index"])?);
+                self.citations(key, &v["part"]["annotations"], out)?;
+                self.close(key, out)?;
+            }
+            Some("response.output_text.annotation.added") => {
+                let key = (index(&v["output_index"])?, index(&v["content_index"])?);
+                let position = usize::try_from(index(&v["annotation_index"])?)
+                    .map_err(|_| RelayError::Protocol("invalid citation index"))?;
+                let mut citations = self.citations.get(&key).cloned().unwrap_or_default();
+                if position < citations.len() {
+                    if citations[position] != v["annotation"] {
+                        return Err(RelayError::Protocol("citation identity changed"));
+                    }
+                } else if position == citations.len() {
+                    citations.push(v["annotation"].clone());
+                } else {
+                    return Err(RelayError::Protocol("citation index gap"));
+                }
+                self.citations(key, &serde_json::json!(citations), out)?;
+            }
+            Some(
+                "response.web_search_call.in_progress"
+                | "response.web_search_call.searching"
+                | "response.web_search_call.completed"
+                | "response.x_search_call.in_progress"
+                | "response.x_search_call.searching"
+                | "response.x_search_call.completed",
+            ) => {
+                if self.search.is_none() {
+                    return Err(RelayError::Protocol("uncontracted search event"));
+                }
+                index(&v["output_index"])?;
+                text(&v["item_id"])?;
+            }
             Some("response.reasoning_summary_part.done") => self.close(
                 (index(&v["output_index"])?, index(&v["summary_index"])?),
                 out,
             )?,
             Some("response.output_item.done") => {
+                if matches!(
+                    v["item"]["type"].as_str(),
+                    Some("web_search_call" | "x_search_call")
+                ) {
+                    self.native_search(&v["item"], out)?;
+                }
                 let i = index(&v["output_index"])?;
                 let keys: Vec<_> = self
                     .blocks
@@ -946,7 +1335,9 @@ impl Decoder {
             .map(text)
             .transpose()?;
         self.start(id, out)?;
+        self.response_inventory(v, out)?;
         out.push(Event::Usage(self.usage(&v["usage"])?));
+        self.search_observation(v, true, out)?;
         let reason = match v["status"].as_str() {
             Some("completed") => {
                 if self.tools() {
@@ -969,6 +1360,7 @@ impl Decoder {
         if let Some(u) = v.get("usageMetadata") {
             out.push(Event::Usage(self.usage(u)?));
         }
+        self.search_observation(v, false, out)?;
         if v["promptFeedback"].get("blockReason").is_some() {
             self.finish(FinishReason::ContentFilter, out)?;
             return Ok(());
@@ -985,6 +1377,9 @@ impl Decoder {
         for c in candidates {
             if c.get("index").is_some_and(|i| i.as_u64() != Some(0)) {
                 return Err(RelayError::Protocol("invalid Gemini candidate index"));
+            }
+            if let Some(metadata) = c.get("groundingMetadata").filter(|v| !v.is_null()) {
+                self.native_search(metadata, out)?;
             }
             if let Some(parts) = c["content"].get("parts") {
                 for p in parts
@@ -1360,6 +1755,8 @@ mod tests {
     #[test]
     fn a07_usage_wire_round_trip_preserves_cache_creation() {
         let expected = Usage {
+            embedding: None,
+            search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,
             input_tokens: Some(10),
@@ -1367,6 +1764,7 @@ mod tests {
             cached_input_tokens: Some(3),
             cache_creation_input_tokens: Some(2),
             cache_creation_details: None,
+            openai_cache_write_details: None,
             cache_creation_mode: None,
             reasoning_output_tokens: Some(1),
         };
@@ -1718,6 +2116,222 @@ mod tests {
         assert!(events.iter().any(|event| matches!(event, Event::Done)));
         assert!(!events.iter().any(|event| matches!(event, Event::Start(_))));
         assert!(decoder.is_done());
+    }
+}
+
+#[cfg(test)]
+mod openai_cache_write_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn details_key(protocol: UpstreamProtocol) -> &'static str {
+        match protocol {
+            UpstreamProtocol::Chat => "prompt_tokens_details",
+            UpstreamProtocol::Responses => "input_tokens_details",
+            _ => unreachable!(),
+        }
+    }
+
+    fn receipt(protocol: UpstreamProtocol) -> Value {
+        let (input, output) = match protocol {
+            UpstreamProtocol::Chat => ("prompt_tokens", "completion_tokens"),
+            UpstreamProtocol::Responses => ("input_tokens", "output_tokens"),
+            _ => unreachable!(),
+        };
+        let details = details_key(protocol);
+        json!({input:12000,output:10,details:{
+            "cached_tokens":4000,"cache_write_tokens":7000,
+            "cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}
+        }})
+    }
+
+    fn response(protocol: UpstreamProtocol, receipt: Value, stream: bool) -> Value {
+        match protocol {
+            UpstreamProtocol::Chat if stream => json!({
+                "id":"cache-write-response","choices":[{
+                    "index":0,"delta":{"content":"ok"},"finish_reason":"stop"
+                }],"usage":receipt
+            }),
+            UpstreamProtocol::Chat => json!({
+                "id":"cache-write-response","choices":[{
+                    "index":0,"message":{"content":"ok"},"finish_reason":"stop"
+                }],"usage":receipt
+            }),
+            UpstreamProtocol::Responses => {
+                let value = json!({
+                    "id":"cache-write-response","status":"completed","output":[],"usage":receipt
+                });
+                if stream {
+                    json!({"type":"response.completed","response":value})
+                } else {
+                    value
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn both_openai_protocols_preserve_the_reported_lifetime_partition() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let value = usage(protocol, &receipt(protocol)).unwrap();
+            assert_eq!(value.input_tokens, Some(12000));
+            assert_eq!(value.cached_input_tokens, Some(4000));
+            assert_eq!(value.cache_creation_input_tokens, Some(7000));
+            assert_eq!(
+                value.openai_cache_write_details,
+                Some(OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: Some(3000),
+                    ttl_12h_tokens: Some(4000),
+                })
+            );
+            assert_eq!(value.cache_creation_details, None);
+            for (output_protocol, client) in [
+                (UpstreamProtocol::Chat, crate::relay::ClientProtocol::Chat),
+                (
+                    UpstreamProtocol::Responses,
+                    crate::relay::ClientProtocol::Responses,
+                ),
+            ] {
+                assert_eq!(usage(output_protocol, &value.wire(client)).unwrap(), value);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_lifetimes_and_aggregate_are_never_invented() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let key = details_key(protocol);
+            for breakdown in [Value::Null, json!({}), json!({"ttl_12h_tokens":null})] {
+                let mut body = receipt(protocol);
+                body[key]["cache_write_tokens_details"] = breakdown.clone();
+                let value = usage(protocol, &body).unwrap();
+                assert_eq!(
+                    value
+                        .openai_cache_write_details
+                        .and_then(|v| v.ttl_12h_tokens),
+                    None
+                );
+                assert_eq!(value.cache_creation_input_tokens, Some(7000));
+            }
+            let mut body = receipt(protocol);
+            body[key]["cache_write_tokens_details"] = json!({"ttl_12h_tokens":0});
+            assert_eq!(
+                usage(protocol, &body)
+                    .unwrap()
+                    .openai_cache_write_details
+                    .unwrap()
+                    .ttl_12h_tokens,
+                Some(0)
+            );
+            body[key]
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_write_tokens");
+            body[key]["cache_write_tokens_details"] =
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":4000});
+            let value = usage(protocol, &body).unwrap();
+            assert_eq!(value.cache_creation_input_tokens, None);
+            assert_eq!(value.effective_cache_creation_input_tokens().unwrap(), None);
+            assert_eq!(
+                value.openai_cache_write_details.unwrap().ttl_12h_tokens,
+                Some(4000)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_lifetime_objects_counters_and_partitions_are_rejected() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let key = details_key(protocol);
+            for invalid in [
+                json!(false),
+                json!(1),
+                json!("1"),
+                json!([]),
+                json!([3000, 4000]),
+                json!({"ttl_12h_tokens":-1}),
+                json!({"ttl_12h_tokens":1.5}),
+                json!({"ttl_12h_tokens":"4000"}),
+                json!({"ttl_12h_tokens":true}),
+                json!({"ttl_12h_tokens":[]}),
+                json!({"ttl_12h_tokens":{}}),
+                json!({"ttl_12h_tokens":7001}),
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":3999}),
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":4001}),
+                json!({"ttl_30m_tokens":u64::MAX,"ttl_12h_tokens":1}),
+                json!({"ttl_12h_tokens":4000,"unreviewed_lifetime":3000}),
+            ] {
+                let mut body = receipt(protocol);
+                body[key]["cache_write_tokens_details"] = invalid.clone();
+                assert!(usage(protocol, &body).is_err(), "{protocol:?}: {invalid}");
+            }
+            let mut body = receipt(protocol);
+            body["cache_creation_input_tokens"] = json!(6999);
+            assert!(usage(protocol, &body).is_err());
+            body["cache_creation_input_tokens"] = json!(7000);
+            body["cache_creation_details"] = json!({"ephemeral_5m_input_tokens":1});
+            assert!(usage(protocol, &body).is_err());
+        }
+    }
+
+    #[test]
+    fn json_and_sse_terminals_produce_identical_cache_write_evidence() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let expected = usage(protocol, &receipt(protocol)).unwrap();
+            for stream in [false, true] {
+                let mut decoder = Decoder::new(protocol, &Limits::default());
+                let body = response(protocol, receipt(protocol), stream);
+                let mut events = if stream {
+                    decoder
+                        .frame(Frame {
+                            event: None,
+                            data: body.to_string(),
+                        })
+                        .unwrap()
+                } else {
+                    decoder.json(&body).unwrap()
+                };
+                if stream && protocol == UpstreamProtocol::Chat {
+                    events.extend(
+                        decoder
+                            .frame(Frame {
+                                event: None,
+                                data: "[DONE]".into(),
+                            })
+                            .unwrap(),
+                    );
+                }
+                let mut combined = Usage::default();
+                for event in events {
+                    if let Event::Usage(value) = event {
+                        combined.merge(value).unwrap();
+                    }
+                }
+                assert_eq!(combined, expected);
+                assert!(decoder.is_done());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_sse_lifetimes_cannot_form_a_successful_terminal() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let mut body = receipt(protocol);
+            body[details_key(protocol)]["cache_write_tokens_details"]["ttl_12h_tokens"] =
+                json!(7001);
+            let mut decoder = Decoder::new(protocol, &Limits::default());
+            assert!(
+                decoder
+                    .frame(Frame {
+                        event: None,
+                        data: response(protocol, body, true).to_string(),
+                    })
+                    .is_err()
+            );
+            assert!(!decoder.is_done());
+            assert_eq!(decoder.eof().unwrap_err(), RelayError::Truncated);
+        }
     }
 }
 

@@ -43,6 +43,10 @@ pub struct PriceRule {
     pub billing_mode: BillingMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiered: Option<super::TieredTariff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<super::SearchTariff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<super::EmbeddingTariff>,
     pub id: u64,
     pub model: String,
     pub group: String,
@@ -199,9 +203,41 @@ impl CreditQuote {
         usage: Usage,
         semantics: super::InputSemantics,
     ) -> Result<Credits, RoutingError> {
+        self.charge_with_semantics_and_search(usage, semantics, None)
+    }
+
+    pub fn charge_with_search(
+        &self,
+        usage: Usage,
+        search: Option<super::SearchUsage>,
+    ) -> Result<Credits, RoutingError> {
+        self.charge_with_semantics_and_search(usage, super::InputSemantics::Inclusive, search)
+    }
+
+    fn search_surcharge(
+        &self,
+        usage: Option<super::SearchUsage>,
+    ) -> Result<super::SearchSurcharge, RoutingError> {
+        match (self.price.search, usage) {
+            (_, None) => Ok(super::SearchSurcharge::zero()),
+            (Some(tariff), Some(usage)) => tariff.surcharge(usage),
+            (None, Some(usage)) if usage.valid() && !usage.has_positive() => {
+                Ok(super::SearchSurcharge::zero())
+            }
+            _ => Err(RoutingError::InvalidRequest),
+        }
+    }
+
+    fn charge_with_semantics_and_search(
+        &self,
+        usage: Usage,
+        semantics: super::InputSemantics,
+        search: Option<super::SearchUsage>,
+    ) -> Result<Credits, RoutingError> {
+        let surcharge = self.search_surcharge(search)?;
         if let Some(tariff) = self.price.tiered {
             return tariff
-                .charge_with_discount(
+                .charge_with_surcharge(
                     super::TieredUsage {
                         input: usage
                             .input
@@ -218,6 +254,7 @@ impl CreditQuote {
                     self.price.speed_multiplier_ppm,
                     self.conversion.credits_per_usd,
                     self.discount,
+                    surcharge,
                 )
                 .map(Credits);
         }
@@ -239,30 +276,45 @@ impl CreditQuote {
         let denominator = DENOMINATOR
             .checked_mul(divisor)
             .ok_or(RoutingError::PriceOverflow)?;
-        let amount =
-            crate::upstream_cost::ceil_with_discount(numerator, denominator, self.discount)
-                .filter(|amount| *amount <= i64::MAX as u64)
-                .ok_or(RoutingError::PriceOverflow)?;
+        let amount = surcharge.combine_credits(
+            numerator,
+            denominator,
+            self.price.group_multiplier_ppm,
+            self.price.speed_multiplier_ppm,
+            self.conversion.credits_per_usd,
+            self.discount,
+        )?;
         Ok(Credits(amount))
     }
 
     /// Evaluate a revisioned tariff with its authoritative cache TTL evidence.
-    /// The scalar token adapter cannot supply a missing one-hour measurement.
+    /// The scalar token adapter cannot supply a missing TTL measurement.
     pub fn charge_tiered_usage(
         &self,
         usage: super::TieredUsage,
         semantics: super::InputSemantics,
     ) -> Result<Credits, RoutingError> {
+        self.charge_tiered_usage_with_search(usage, semantics, None)
+    }
+
+    pub fn charge_tiered_usage_with_search(
+        &self,
+        usage: super::TieredUsage,
+        semantics: super::InputSemantics,
+        search: Option<super::SearchUsage>,
+    ) -> Result<Credits, RoutingError> {
+        let surcharge = self.search_surcharge(search)?;
         self.price
             .tiered
             .ok_or(RoutingError::InvalidRequest)?
-            .charge_with_discount(
+            .charge_with_surcharge(
                 usage,
                 semantics,
                 self.price.group_multiplier_ppm,
                 self.price.speed_multiplier_ppm,
                 self.conversion.credits_per_usd,
                 self.discount,
+                surcharge,
             )
             .map(Credits)
     }
@@ -281,6 +333,8 @@ fn rounded_amount(numerator: u128, denominator: u128) -> Result<u64, RoutingErro
 pub struct PriceQuote {
     billing_mode: BillingMode,
     tiered: Option<super::CompiledTariff>,
+    search: Option<super::SearchTariff>,
+    embedding: Option<super::EmbeddingTariff>,
     version: u64,
     rule_id: u64,
     rates: TokenRates,
@@ -292,6 +346,9 @@ impl PriceQuote {
     /// Native input-only protocols cannot infer zero rates from the integer
     /// placeholders carried beside a decimal tariff.
     pub fn is_input_only_scalar(&self) -> bool {
+        if self.search.is_some() || self.embedding.is_some() {
+            return false;
+        }
         match (self.billing_mode, self.tiered) {
             (BillingMode::Tokens, None) => {
                 self.rates.output == 0
@@ -305,6 +362,7 @@ impl PriceQuote {
                     && !tariff.uses_cache_read
                     && !tariff.uses_cache_write
                     && !tariff.uses_cache_write_1h
+                    && !tariff.uses_cache_write_12h
                     && tariff.tiers.len() == 1
                     && tariff.tiers[0].up_to_input_tokens.is_none()
                     && tariff.tiers[0].rates.output.numerator == 0
@@ -316,6 +374,12 @@ impl PriceQuote {
     }
     pub fn tiered(&self) -> Option<super::CompiledTariff> {
         self.tiered
+    }
+    pub fn search(&self) -> Option<super::SearchTariff> {
+        self.search
+    }
+    pub fn embedding(&self) -> Option<super::EmbeddingTariff> {
+        self.embedding
     }
     pub fn billing_mode(&self) -> BillingMode {
         self.billing_mode
@@ -376,6 +440,11 @@ impl PriceQuote {
     }
 
     fn numerator(&self, usage: Usage) -> Result<u128, RoutingError> {
+        if self.embedding.is_some() {
+            return Err(RoutingError::InvalidConfig(
+                "multimodal embedding requires measured text and image usage",
+            ));
+        }
         if self.billing_mode == BillingMode::UpstreamCost {
             return Err(RoutingError::InvalidConfig(
                 "upstream cost cannot be inferred from token counts",
@@ -416,6 +485,32 @@ impl PriceSnapshot {
         let mut ids = HashSet::new();
         let mut groups: HashMap<String, ModelPrices> = HashMap::new();
         for rule in &config.rules {
+            if let Some(embedding) = rule.embedding {
+                embedding.validate()?;
+                if rule.billing_mode != BillingMode::Tokens
+                    || rule.tiered.is_some()
+                    || rule.search.is_some()
+                    || [
+                        rule.rates.input,
+                        rule.rates.output,
+                        rule.rates.cache_read,
+                        rule.rates.cache_write,
+                        rule.rates.request,
+                    ]
+                    .iter()
+                    .any(|rate| *rate != 0)
+                {
+                    return Err(RoutingError::InvalidConfig("mixed embedding price"));
+                }
+            }
+            if let Some(search) = rule.search {
+                search.validate()?;
+                if rule.billing_mode == BillingMode::UpstreamCost {
+                    return Err(RoutingError::InvalidConfig(
+                        "search surcharge on total upstream cost",
+                    ));
+                }
+            }
             if !valid_id(rule.id)
                 || !ids.insert(rule.id)
                 || !valid_group(&rule.group)
@@ -471,6 +566,8 @@ impl PriceSnapshot {
             let quote = PriceQuote {
                 billing_mode: rule.billing_mode,
                 tiered,
+                search: rule.search,
+                embedding: rule.embedding,
                 version: config.version,
                 rule_id: rule.id,
                 rates: rule.rates,
@@ -514,6 +611,8 @@ mod upstream_cost_tests {
     #[test]
     fn upstream_cost_rules_reject_fixed_rates_unknown_models_and_speed_fees() {
         let mut rule = PriceRule {
+            embedding: None,
+            search: None,
             billing_mode: BillingMode::UpstreamCost,
             tiered: None,
             id: 1,
@@ -562,6 +661,8 @@ mod explicit_free_group_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 1,
             rules: vec![PriceRule {
+                embedding: None,
+                search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
                 id: 1,
@@ -615,6 +716,8 @@ mod a07_tests {
 
     fn quote(rates: TokenRates) -> PriceQuote {
         PriceQuote {
+            embedding: None,
+            search: None,
             billing_mode: BillingMode::Tokens,
             tiered: None,
             version: 3,

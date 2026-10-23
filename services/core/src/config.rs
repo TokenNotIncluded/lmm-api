@@ -129,6 +129,7 @@ struct DatabaseFile {
 struct IdentityFile {
     humangrant_enabled: bool,
     humangrant_smtp_file: Option<PathBuf>,
+    humangrant_mail_file: Option<PathBuf>,
     registration_enabled: bool,
     password_slots: u32,
     api_key_encryption_key_file: Option<PathBuf>,
@@ -146,6 +147,7 @@ impl Default for IdentityFile {
         Self {
             humangrant_enabled: false,
             humangrant_smtp_file: None,
+            humangrant_mail_file: None,
             registration_enabled: false,
             password_slots: one(),
             api_key_encryption_key_file: None,
@@ -288,6 +290,11 @@ struct RemoteControlFile {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct NotificationsFile {
+    config_file: PathBuf,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CoreFile {
     version: u32,
     #[serde(default)]
@@ -311,6 +318,7 @@ struct CoreFile {
     images: Option<SupportProjectionFile>,
     ingress: Option<IngressFile>,
     remote_control: Option<RemoteControlFile>,
+    notifications: Option<NotificationsFile>,
     edge_access: Option<crate::edge_access::TypedConfig>,
 }
 
@@ -381,6 +389,7 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             || file.bounties.is_some()
             || file.images.is_some()
             || file.remote_control.is_some()
+            || file.notifications.is_some()
             || file.edge_access.is_some())
     {
         return Err(invalid_config(
@@ -560,6 +569,22 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         return Err(invalid_config(
             "HumanGrant requires native Web authentication",
         ));
+    }
+    if file.identity.humangrant_smtp_file.is_some() && file.identity.humangrant_mail_file.is_some()
+    {
+        return Err(invalid_config("choose one HumanGrant mail configuration"));
+    }
+    if let Some(path) = file.identity.humangrant_mail_file {
+        if !file.identity.humangrant_enabled {
+            return Err(invalid_config(
+                "HumanGrant mail requires HumanGrant enabled",
+            ));
+        }
+        absolute_path(&path)?;
+        put(
+            "LMM_CORE_HUMANGRANT_MAIL_FILE",
+            path.to_string_lossy().into_owned(),
+        );
     }
     if let Some(path) = file.identity.humangrant_smtp_file {
         if !file.identity.humangrant_enabled {
@@ -761,6 +786,12 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
     if let Some(remote) = file.remote_control {
         put("LMM_CORE_REMOTE_CONTROL_ORIGIN", remote.origin);
         paths.push(("LMM_CORE_REMOTE_CONTROL_TOKEN_FILE", remote.token_file));
+    }
+    if let Some(notifications) = file.notifications {
+        paths.push((
+            "LMM_CORE_NOTIFICATIONS_CONFIG_FILE",
+            notifications.config_file,
+        ));
     }
     if let Some(ingress) = file.ingress {
         put("LMM_CORE_INGRESS_ACK_URL", ingress.ack_url);
@@ -2289,9 +2320,17 @@ fn model_gateway_with_origins(
                     upstream.protocol,
                     upstream.endpoint.as_str(),
                     config.input_token_ceiling,
-                    // Binding needs a usable positive output capacity. Each
-                    // selected request checks its actual output ceiling.
-                    1,
+                    // Native tools and embeddings have no output-token charge.
+                    // Text requests still require usable generation capacity.
+                    if matches!(
+                        upstream.protocol,
+                        crate::routing::Protocol::DeepSeekTools
+                            | crate::routing::Protocol::AliMultimodalEmbedding
+                    ) {
+                        0
+                    } else {
+                        1
+                    },
                 )
                 .map_err(|_| invalid_config("invalid model provider context binding"))?;
         }
@@ -2301,6 +2340,9 @@ fn model_gateway_with_origins(
         .filter(|u| u.enabled)
         .map(|u| (u.credential.id, u.credential.revision))
         .collect();
+    let mantle_credentials = provider_policy
+        .mantle_credential_references(&upstreams, &config.routing.routes)
+        .map_err(|_| invalid_config("model credential authentication types must be isolated"))?;
     let mut supplied = BTreeSet::new();
     let mut credentials = Vec::new();
     let mut credential_origins = Vec::new();
@@ -2309,8 +2351,11 @@ fn model_gateway_with_origins(
         if !supplied.insert((reference.id, reference.revision)) {
             return Err(invalid_config("duplicate model credential reference"));
         }
-        let (secret, origin) =
-            credential_file(&credential.secret_file, "invalid model upstream credential")?;
+        let (secret, origin) = if mantle_credentials.contains(&(reference.id, reference.revision)) {
+            mantle_credential_file(&credential.secret_file)?
+        } else {
+            credential_file(&credential.secret_file, "invalid model upstream credential")?
+        };
         credential_origins.push(origin);
         credentials.push(crate::model_http::UpstreamCredential { reference, secret });
     }
@@ -2453,6 +2498,35 @@ fn credential_file(path: &Path, invalid: &'static str) -> io::Result<(String, Cr
     if secret.is_empty() || !secret.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(invalid_config(invalid));
     }
+    Ok((
+        secret.to_owned(),
+        credential_origin(path, &opened, invalid)?,
+    ))
+}
+
+/// AWS credentials are a private JSON document. Keep token readers strict and
+/// permit this larger multiline format only for an explicitly bound Mantle ref.
+fn mantle_credential_file(path: &Path) -> io::Result<(String, CredentialOrigin)> {
+    const INVALID: &str = "invalid Mantle upstream credential";
+    let (bytes, opened) = read_file_with_metadata(path, 16 * 1024, true)?;
+    let bytes = zeroize::Zeroizing::new(bytes);
+    let secret = std::str::from_utf8(&bytes)
+        .map_err(|_| invalid_config(INVALID))?
+        .trim();
+    // The reuse helper validates the same closed credential grammar as signing,
+    // without requiring or guessing a signing endpoint during file loading.
+    crate::relay::mantle_credential_reuses(secret, "").map_err(|_| invalid_config(INVALID))?;
+    Ok((
+        secret.to_owned(),
+        credential_origin(path, &opened, INVALID)?,
+    ))
+}
+
+fn credential_origin(
+    path: &Path,
+    opened: &fs::Metadata,
+    invalid: &'static str,
+) -> io::Result<CredentialOrigin> {
     // Reject a replaced or newly linked path before accepting its provenance.
     absolute_path(path)?;
     let canonical_file = fs::canonicalize(path).map_err(|_| invalid_config(invalid))?;
@@ -2467,16 +2541,13 @@ fn credential_file(path: &Path, invalid: &'static str) -> io::Result<(String, Cr
     };
     #[cfg(not(unix))]
     let _ = opened;
-    Ok((
-        secret.to_owned(),
-        CredentialOrigin {
-            canonical_file,
-            #[cfg(unix)]
-            device,
-            #[cfg(unix)]
-            inode,
-        },
-    ))
+    Ok(CredentialOrigin {
+        canonical_file,
+        #[cfg(unix)]
+        device,
+        #[cfg(unix)]
+        inode,
+    })
 }
 #[derive(Default)]
 struct AbuseCredentialRegistry {
@@ -2970,6 +3041,32 @@ mod tests {
         assert!(parse_core_file(b"version=1\n[database]\nurl_file='/missing-db'\n[assistant]\nconfig_file='/missing-policy'\ntoken='secret-literal'\n").is_err());
     }
     #[test]
+    fn humangrant_mail_selector_preserves_legacy_smtp_and_rejects_ambiguous_config() {
+        let prefix = "version=1\n[database]\nurl_file='/nonexistent-lmm-test/db'\n[identity]\nhumangrant_enabled=true\n";
+        let web = "[identity.web]\norigin='https://auth.example.invalid'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\n";
+        for (field, key) in [
+            ("humangrant_smtp_file", "LMM_CORE_HUMANGRANT_SMTP_FILE"),
+            ("humangrant_mail_file", "LMM_CORE_HUMANGRANT_MAIL_FILE"),
+        ] {
+            let document = format!("{prefix}{field}='/nonexistent-lmm-test/mail'\n{web}");
+            let values = parse_core_file(document.as_bytes()).unwrap();
+            assert_eq!(values[key], "/nonexistent-lmm-test/mail");
+            assert!(
+                parse_core_file(
+                    document
+                        .replace("humangrant_enabled=true", "humangrant_enabled=false")
+                        .as_bytes()
+                )
+                .is_err()
+            );
+        }
+        let both = format!(
+            "{prefix}humangrant_smtp_file='/nonexistent-lmm-test/smtp'\nhumangrant_mail_file='/nonexistent-lmm-test/mail'\n{web}"
+        );
+        assert!(parse_core_file(both.as_bytes()).is_err());
+    }
+
+    #[test]
     fn typed_toml_is_versioned_bounded_and_does_not_accept_secret_literals() {
         let minimal = parse_core_file(b"version=1\n").unwrap();
         assert_eq!(minimal["LMM_CORE_LISTEN"], "127.0.0.1:8080");
@@ -3424,6 +3521,132 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn mantle_credentials_are_private_typed_and_never_reused_as_api_keys() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        // The production sidecar is TOML. This test-only writer uses closed
+        // fixture values to preserve that parser boundary while mutating cases.
+        fn config_bytes(value: &serde_json::Value) -> Vec<u8> {
+            fn inline(value: &serde_json::Value) -> String {
+                match value {
+                    serde_json::Value::String(_)
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Number(_) => value.to_string(),
+                    serde_json::Value::Array(values) => format!(
+                        "[{}]",
+                        values.iter().map(inline).collect::<Vec<_>>().join(",")
+                    ),
+                    serde_json::Value::Object(values) => format!(
+                        "{{{}}}",
+                        values
+                            .iter()
+                            .map(|(key, value)| format!("{key}={}", inline(value)))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    serde_json::Value::Null => panic!("TOML fixture does not use null"),
+                }
+            }
+            value
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| format!("{key}={}\n", inline(value)))
+                .collect::<String>()
+                .into_bytes()
+        }
+        let directory = std::env::temp_dir().join(format!(
+            "lmm-mantle-config-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("aws-credential");
+        let session = "s".repeat(5000);
+        let secret = serde_json::json!({
+            "access_key_id":"AKIATEST0000000000",
+            "secret_access_key":"synthetic-mantle-secret-value",
+            "session_token":session,
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&secret).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(credential_file(&path, "invalid").is_err());
+        let endpoint = "https://bedrock-mantle.us-east-1.api.aws";
+        let document = serde_json::json!({
+            "version":1,"input_token_ceiling":100,"lease_seconds":20,"timeout_seconds":3,"max_output_tokens":20,
+            "credentials":[{"reference":{"id":7,"revision":1},"secret_file":path}],
+            "key_groups":[{"key_id":1,"group":"allowed"}],
+            "external_models":[{"upstream_id":1,"upstream_model":"provider-model","protocol":"anthropic_messages","endpoint":endpoint,"max_input_tokens":100,"max_output_tokens":20,"contract_revision":"synthetic-mantle-v1","mantle_sigv4_region":"us-east-1"}],
+            "routing":{"version":1,"groups":[{"name":"allowed","enabled":true}],
+                "upstreams":[{"id":1,"endpoint":endpoint,"protocol":"anthropic_messages","credential":{"id":7,"revision":1},"enabled":true}],
+                "routes":[{"id":1,"model":"model","group":"allowed","enabled":true,"speeds":["standard"],"targets":[{"id":1,"upstream_id":1,"upstream_model":"provider-model","enabled":true,"priority":0,"weight":1,"speeds":["standard"],"payload":"adapt","timeout_ms":5000}],"failover":{"max_attempts":1,"retry_on":[],"allow_replay_after_send":false}}],"aliases":[]},
+            "prices":{"version":1,"rules":[{"id":1,"model":"model","group":"allowed","speed":"standard","rates":{"input":2000000,"output":4000000,"cache_read":500000,"cache_write":0,"request":0},"group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000}]}
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+            .unwrap();
+        let (gateway, _) =
+            model_gateway_with_origins(pool.clone(), &config_bytes(&document), false).unwrap();
+        for value in [
+            "AKIATEST0000000000",
+            "synthetic-mantle-secret-value",
+            &session,
+        ] {
+            assert!(gateway.contains_credential(value));
+        }
+        assert!(!gateway.contains_credential("independent-secret"));
+        let ordinary_file = directory.join("ordinary-credential");
+        fs::write(&ordinary_file, b"independent-secret").unwrap();
+        fs::set_permissions(&ordinary_file, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut separate_refs = document.clone();
+        separate_refs["credentials"].as_array_mut().unwrap().push(
+            serde_json::json!({"reference":{"id":8,"revision":1},"secret_file":ordinary_file}),
+        );
+        separate_refs["routing"]["upstreams"].as_array_mut().unwrap().push(serde_json::json!({"id":2,"endpoint":"https://other.example/v1","protocol":"openai_chat","credential":{"id":8,"revision":1},"enabled":true}));
+        separate_refs["external_models"].as_array_mut().unwrap().push(serde_json::json!({"upstream_id":2,"upstream_model":"other-model","protocol":"openai_chat","endpoint":"https://other.example/v1","max_input_tokens":100,"max_output_tokens":20,"contract_revision":"synthetic-other-v1"}));
+        separate_refs["routing"]["routes"][0]["targets"].as_array_mut().unwrap().push(serde_json::json!({"id":2,"upstream_id":2,"upstream_model":"other-model","enabled":true,"priority":0,"weight":1,"speeds":["standard"],"payload":"adapt","timeout_ms":5000}));
+        assert!(
+            model_gateway_with_origins(pool.clone(), &config_bytes(&separate_refs), false).is_ok()
+        );
+        let mut disabled = separate_refs.clone();
+        disabled["routing"]["upstreams"][0]["enabled"] = false.into();
+        disabled["routing"]["routes"][0]["targets"][0]["enabled"] = false.into();
+        disabled["credentials"].as_array_mut().unwrap().remove(0);
+        assert!(model_gateway_with_origins(pool.clone(), &config_bytes(&disabled), false).is_ok());
+        // Distinct IDs and different files cannot turn either the full AWS
+        // document or its individual secret fields into a Bearer credential.
+        let compact_aws = serde_json::to_string(&serde_json::json!({"access_key_id":"AKIATEST0000000000","secret_access_key":"synthetic-mantle-secret-value"})).unwrap();
+        for value in [
+            &compact_aws,
+            "AKIATEST0000000000",
+            "synthetic-mantle-secret-value",
+        ] {
+            fs::write(&ordinary_file, value).unwrap();
+            assert!(credential_file(&ordinary_file, "invalid").is_ok());
+            assert!(
+                model_gateway_with_origins(pool.clone(), &config_bytes(&separate_refs), false)
+                    .is_err()
+            );
+        }
+        let mut mixed = document.clone();
+        mixed["routing"]["upstreams"].as_array_mut().unwrap().push(serde_json::json!({"id":2,"endpoint":"https://other.example/v1","protocol":"openai_chat","credential":{"id":7,"revision":1},"enabled":false}));
+        // Disabled rows also cannot reinterpret this credential after a change.
+        assert!(model_gateway_with_origins(pool.clone(), &config_bytes(&mixed), false).is_err());
+        let mut wrong_region = document.clone();
+        wrong_region["external_models"][0]["mantle_sigv4_region"] = "eu-west-1".into();
+        assert!(model_gateway_with_origins(pool, &config_bytes(&wrong_region), false).is_err());
+        let link = directory.join("linked");
+        symlink(&path, &link).unwrap();
+        assert!(mantle_credential_file(&link).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(mantle_credential_file(&path).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, b"ordinary-api-key").unwrap();
+        assert!(mantle_credential_file(&path).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn isolated_registry_rejects_normal_provider_file_hardlink_and_normalized_value() {
         use std::os::unix::fs::PermissionsExt;
         let directory = std::env::temp_dir().join(format!(
@@ -3845,6 +4068,31 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
     }
 }
 
+/// Optional notification delivery; provisioning remains an offline operation.
+pub fn notifications_configured() -> bool {
+    setting_os("LMM_CORE_NOTIFICATIONS_CONFIG_FILE").is_some()
+}
+
+pub async fn notifications(
+    database_url: &str,
+) -> io::Result<Option<Arc<crate::notifications::NotificationRuntime>>> {
+    let Some(path) = setting_os("LMM_CORE_NOTIFICATIONS_CONFIG_FILE") else {
+        return Ok(None);
+    };
+    if setting_os("LMM_CORE_WEB_ORIGIN").is_none() {
+        return Err(invalid_config(
+            "notification delivery requires native Web preference access",
+        ));
+    }
+    let config = parse_document::<crate::notifications::WorkerConfig>(&private_file(
+        Path::new(&path),
+        16 * 1024,
+    )?)?;
+    crate::notifications::NotificationRuntime::open(database_url, &config)
+        .await
+        .map(Some)
+}
+
 /// Explicit optional HumanGrant assembly with the exact configured Web origin.
 pub async fn humangrant(
     pool: sqlx::PgPool,
@@ -3855,9 +4103,11 @@ pub async fn humangrant(
         _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
     };
     if !enabled {
-        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
+        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some()
+            || setting_os("LMM_CORE_HUMANGRANT_MAIL_FILE").is_some()
+        {
             return Err(invalid_config(
-                "HumanGrant SMTP requires HumanGrant enabled",
+                "HumanGrant mail requires HumanGrant enabled",
             ));
         }
         return Ok(None);
@@ -3865,11 +4115,27 @@ pub async fn humangrant(
     let origin = setting("LMM_CORE_WEB_ORIGIN")
         .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
     let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
-    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
-        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
-            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
-            .transpose()?;
-    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
+    let mail_file = setting_os("LMM_CORE_HUMANGRANT_MAIL_FILE");
+    let smtp_file = setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE");
+    if mail_file.is_some() && smtp_file.is_some() {
+        return Err(invalid_config("choose one HumanGrant mail configuration"));
+    }
+    let mail = if let Some(path) = mail_file {
+        Some(parse_document::<crate::humangrant::mail::MailConfig>(
+            &private_file(Path::new(&path), 16 * 1024)?,
+        )?)
+    } else {
+        smtp_file
+            .map(|path| {
+                parse_document::<crate::humangrant::mail::SmtpConfig>(&private_file(
+                    Path::new(&path),
+                    16 * 1024,
+                )?)
+                .map(crate::humangrant::mail::MailConfig::Smtp)
+            })
+            .transpose()?
+    };
+    crate::humangrant::runtime::open_with_delivery(pool, &origin, local, mail.as_ref())
         .await
         .map(Some)
 }

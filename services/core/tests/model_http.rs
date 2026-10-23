@@ -52,6 +52,8 @@ fn routes(
     let prices = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            embedding: None,
+            search: None,
             billing_mode: lmm_core::routing::BillingMode::Tokens,
             tiered: None,
             id: 1,
@@ -696,6 +698,8 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
         id: request_id.into(),
         fingerprint: [17; 32],
         price: ChargingPrice {
+            embedding: None,
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -734,6 +738,8 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
             request_id,
             &worker,
             ChargingUsage {
+                search: None,
+                embedding: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,

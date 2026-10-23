@@ -344,6 +344,8 @@ async fn begin(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
 }
 fn price(quote: &ImageQuote) -> Price {
     Price {
+        embedding: None,
+        search: None,
         user_trust: None,
         image: Some(quote.persisted()),
         upstream_cost_group_ppm: None,

@@ -14,11 +14,14 @@ pub mod image_execution;
 pub mod image_http;
 pub mod image_internal;
 pub mod image_price;
-mod image_provider;
+pub(crate) mod image_provider;
 mod native;
+mod native_operations;
 pub mod pricing;
 mod provider_policy;
 mod routing;
+#[cfg(test)]
+mod search_tests;
 #[cfg(test)]
 mod selected_bound_tests;
 mod systemone;
@@ -42,16 +45,18 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 use subtle::ConstantTimeEq;
 
 pub use catalog::{CatalogError, CatalogSurface, CatalogV1};
 pub use honeypot::{HoneypotCredential, HoneypotGateway};
-pub use provider_policy::{ExternalModelContext, ProviderPolicy};
+pub use provider_policy::{
+    ExternalEmbeddingContract, ExternalModelContext, ExternalSearchContract, ProviderPolicy,
+};
 pub use routing::UpstreamCredential;
 pub const SCHEMA: &str = include_str!("../schema/model_gateway.sql");
 
@@ -79,11 +84,25 @@ struct Bridge {
     charging: Charging,
     routing: Arc<crate::routing::Router>,
     credentials: BTreeMap<(u64, u64), String>,
+    mantle_credentials: BTreeSet<(u64, u64)>,
     active: Mutex<BTreeMap<String, Operation>>,
     recovery_cursor: tokio::sync::Mutex<Option<String>>,
     policy: ChargePolicy,
     provider_policy: ProviderPolicy,
     total_timeout: Duration,
+    routing_admin: OnceLock<crate::routing_admin::RoutingAdmin>,
+}
+
+impl Bridge {
+    async fn refresh_routing(&self) -> Result<(), RelayError> {
+        if let Some(admin) = self.routing_admin.get() {
+            admin
+                .refresh()
+                .await
+                .map_err(|_| RelayError::RouteUnavailable)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -99,6 +118,7 @@ pub struct ModelGateway {
     oauth2: Option<crate::identity::grants::LmmIssuer>,
     images: Option<image_execution::ImageService>,
     systemone: systemone::Host,
+    native_operations: native_operations::Host,
 }
 
 impl ModelGateway {
@@ -106,8 +126,16 @@ impl ModelGateway {
     /// Returns no credential material and never stops at the first match.
     pub(crate) fn contains_credential(&self, secret: &str) -> bool {
         let mut matched = subtle::Choice::from(0);
-        for credential in self.bridge.credentials.values() {
+        for (reference, credential) in &self.bridge.credentials {
             matched |= credential.as_bytes().ct_eq(secret.as_bytes());
+            if self.bridge.mantle_credentials.contains(reference) {
+                matched |= subtle::Choice::from(
+                    // Invalid configured material is rejected during construction;
+                    // fail closed if a later invariant is ever violated.
+                    crate::relay::mantle_credential_reuses(credential, secret).unwrap_or(true)
+                        as u8,
+                );
+            }
         }
         bool::from(matched)
             | self
@@ -161,7 +189,69 @@ impl ModelGateway {
         {
             return Err(RelayError::Invalid("unsafe model gateway policy"));
         }
-        let credentials = routing::credential_map(credentials)?;
+        let document = routing
+            .catalog_document()
+            .map_err(|_| RelayError::RouteUnavailable)?;
+        let mantle_credentials = provider_policy
+            .mantle_credential_references(&document.routing.upstreams, &document.routing.routes)?;
+        let credentials = routing::credential_map(credentials, &mantle_credentials)?;
+        let mut ordinary_fingerprints = BTreeSet::new();
+        for (reference, secret) in &credentials {
+            if !mantle_credentials.contains(reference) {
+                if crate::relay::mantle_credential_fingerprints(secret).is_ok() {
+                    return Err(RelayError::Invalid(
+                        "AWS credential document cannot be an API key",
+                    ));
+                }
+                ordinary_fingerprints.insert(<[u8; 32]>::from(Sha256::digest(secret.as_bytes())));
+            }
+        }
+        for reference in &mantle_credentials {
+            if let Some(secret) = credentials.get(reference) {
+                let fields = crate::relay::mantle_credential_fingerprints(secret)?;
+                if fields
+                    .iter()
+                    .any(|digest| ordinary_fingerprints.contains(digest))
+                {
+                    return Err(RelayError::Invalid(
+                        "AWS credential fields must not be reused as API keys",
+                    ));
+                }
+            }
+        }
+        let upstreams: BTreeMap<_, _> = document
+            .routing
+            .upstreams
+            .iter()
+            .map(|upstream| (upstream.id, upstream))
+            .collect();
+        for route in &document.routing.routes {
+            for target in &route.targets {
+                let Some(upstream) = upstreams.get(&target.upstream_id) else {
+                    return Err(RelayError::RouteUnavailable);
+                };
+                if let Some(region) = provider_policy.mantle_region_for_binding(
+                    upstream.id,
+                    &target.upstream_model,
+                    upstream.protocol,
+                    upstream.endpoint.as_str(),
+                ) {
+                    let Some(secret) =
+                        credentials.get(&(upstream.credential.id, upstream.credential.revision))
+                    else {
+                        if upstream.enabled {
+                            return Err(RelayError::RouteUnavailable);
+                        }
+                        continue;
+                    };
+                    crate::relay::validate_mantle_binding(
+                        upstream.endpoint.as_str(),
+                        region,
+                        secret,
+                    )?;
+                }
+            }
+        }
         for group in key_groups.values() {
             routing
                 .catalog(group)
@@ -179,19 +269,23 @@ impl ModelGateway {
             charging: Charging::new(pool.clone(), Arc::new(TransactionalLedger)),
             routing,
             credentials,
+            mantle_credentials,
             active: Mutex::new(BTreeMap::new()),
             recovery_cursor: tokio::sync::Mutex::new(None),
             policy,
             provider_policy,
             total_timeout: limits.total_timeout,
+            routing_admin: OnceLock::new(),
         });
         let relay = Relay::new(bridge.clone(), bridge.clone(), limits.clone())?;
+        catalog_surface.attach_source(Arc::downgrade(&bridge));
         Ok(Self {
             identity: IdentityStore::from_pool(pool).with_dashboard_routing(bridge.routing.clone()),
             access: Arc::new(key_groups),
             bridge,
             relay,
             systemone: systemone::Host::new(&limits),
+            native_operations: native_operations::Host::new(&limits),
             limits,
             local_streaming: false,
             honeypot: None,
@@ -207,6 +301,26 @@ impl ModelGateway {
         }
         self.images = Some(images);
         self
+    }
+    /// Host assembly opts into the installed durable publication contract.
+    /// Every clone shares the next-admission barrier; in-flight prices remain
+    /// the immutable prices already captured by the charging transaction.
+    pub fn enable_routing_admin(
+        &self,
+    ) -> Result<crate::routing_admin::RoutingAdmin, crate::routing_admin::AdminError> {
+        if let Some(admin) = self.bridge.routing_admin.get() {
+            return Ok(admin.clone());
+        }
+        let admin = crate::routing_admin::RoutingAdmin::new(
+            self.bridge.pool.clone(),
+            self.bridge.routing.clone(),
+        )?;
+        let _ = self.bridge.routing_admin.set(admin);
+        self.bridge
+            .routing_admin
+            .get()
+            .cloned()
+            .ok_or(crate::routing_admin::AdminError::Unavailable)
     }
     /// Required by production host assembly after its schema authority check.
     /// No HTTP, Go message or deployment TOML can turn this policy off.
@@ -301,6 +415,7 @@ impl ModelGateway {
             .layer(DefaultBodyLimit::max(self.limits.request_bytes))
             .with_state(self.clone());
         let router = router.merge(systemone::router(self.clone()));
+        let router = router.merge(native_operations::router(self.clone()));
         if self.images.is_some() {
             router.merge(image_api::router(self.clone()))
         } else {
@@ -309,7 +424,7 @@ impl ModelGateway {
     }
 
     pub async fn drain(&self, grace: Duration) -> relay::DrainReport {
-        let (normal, marked, images, systemone) = tokio::join!(
+        let (normal, marked, images, systemone, native_operations) = tokio::join!(
             self.relay.drain(grace),
             async {
                 if let Some(honeypot) = &self.honeypot {
@@ -329,6 +444,7 @@ impl ModelGateway {
                 }
             },
             self.systemone.drain(grace),
+            self.native_operations.drain(grace),
         );
         relay::DrainReport {
             cancelled: normal.cancelled.saturating_add(marked.cancelled),
@@ -336,7 +452,8 @@ impl ModelGateway {
                 .remaining
                 .saturating_add(marked.remaining)
                 .saturating_add(images)
-                .saturating_add(systemone),
+                .saturating_add(systemone)
+                .saturating_add(native_operations),
         }
     }
 
@@ -407,6 +524,7 @@ impl ModelGateway {
             tx.commit()
                 .await
                 .map_err(|_| RelayError::BillingUnavailable)?;
+            self.bridge.refresh_routing().await?;
             return Ok((ModelIdentity::OAuth(source), secret.to_owned(), groups));
         }
         let principal = self.identity.authorize(secret).await.map_err(|e| match e {
@@ -434,6 +552,7 @@ impl ModelGateway {
         if groups.is_empty() {
             return Err(RelayError::Forbidden);
         }
+        self.bridge.refresh_routing().await?;
         Ok((ModelIdentity::Native(principal), secret.to_owned(), groups))
     }
 }

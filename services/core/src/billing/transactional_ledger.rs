@@ -25,6 +25,9 @@ struct Hold {
 }
 
 fn database(error: sqlx::Error) -> LedgerError {
+    if matches!(&error, sqlx::Error::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock) {
+        return LedgerError::Retry;
+    }
     match error.as_database_error().and_then(|e| e.code()).as_deref() {
         Some("40001" | "40P01" | "55P03") => LedgerError::Retry,
         Some("23505") => LedgerError::Conflict,
@@ -50,9 +53,7 @@ async fn effect(
         action,
     };
     request.validate().map_err(|_| LedgerError::Conflict)?;
-    let Json(result): Json<Outcome> = sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-        .bind(Json(request))
-        .fetch_one(c)
+    let result = crate::billing::ledger::post_in_transaction(c, &request)
         .await
         .map_err(database)?;
     match result {

@@ -635,10 +635,7 @@ async fn post(
         reason: format!("Tool market {phase} {id}"),
         action,
     };
-    let Json(result): Json<Outcome> = sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-        .bind(Json(req))
-        .fetch_one(&mut **tx)
-        .await?;
+    let result = crate::billing::ledger::post_in_transaction(&mut **tx, &req).await?;
     match result {
         Outcome::Posted { journal_id, .. } => Ok(journal_id),
         Outcome::Rejected { .. } => Err(Error::Conflict),

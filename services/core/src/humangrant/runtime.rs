@@ -18,13 +18,23 @@ pub async fn open_with_mail(
     local_http: bool,
     smtp: Option<&super::mail::SmtpConfig>,
 ) -> io::Result<(Router, Arc<HumanGrantEngine>)> {
+    let config = smtp.cloned().map(super::mail::MailConfig::Smtp);
+    open_with_delivery(pool, origin, local_http, config.as_ref()).await
+}
+
+pub async fn open_with_delivery(
+    pool: PgPool,
+    origin: &str,
+    local_http: bool,
+    mail: Option<&super::mail::MailConfig>,
+) -> io::Result<(Router, Arc<HumanGrantEngine>)> {
     let canonical = signature::origin(origin, local_http)
         .map_err(|_| io::Error::other("invalid HumanGrant Web origin"))?;
     let store = HumanGrantStore::new(pool);
     check_ready(&store).await?;
     let mut engine = HumanGrantEngine::new(store, canonical, local_http);
-    engine.mail = smtp
-        .map(super::mail::SmtpMailer::open)
+    engine.mail = mail
+        .map(super::mail::Mailer::open)
         .transpose()?
         .map(Arc::new);
     let engine = Arc::new(engine);

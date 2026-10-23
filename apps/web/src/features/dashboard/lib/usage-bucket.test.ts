@@ -77,3 +77,44 @@ test('legacy buckets keep unavailable metadata absent and never acquire zero tok
     assert.throws(() => parseUsageBuckets(value))
   }
 })
+
+test('cache receipt metadata keeps explicit zero, lifetime subsets and unknown values', () => {
+  const value = {
+    ...imageBucket,
+    token_used: 20,
+    output_image_count: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 10,
+    cache_creation_tokens_12h: 8,
+  }
+  assert.deepEqual(usageBucketSchema.parse(value), value)
+  assert.equal(
+    usageBucketSchema.parse({ ...value, cache_creation_tokens: null })
+      .cache_creation_tokens,
+    null
+  )
+  assert.deepEqual(
+    usageBucketSchema.parse({
+      ...imageBucket,
+      cache_read_tokens: null,
+      cache_creation_tokens: null,
+    }),
+    { ...imageBucket, cache_read_tokens: null, cache_creation_tokens: null }
+  )
+})
+
+test('invalid cache quantities and impossible subsets reject the whole response', () => {
+  const text = { ...imageBucket, token_used: 20, output_image_count: 0 }
+  for (const value of [
+    { ...text, cache_read_tokens: -1 },
+    { ...text, cache_read_tokens: 0.5 },
+    { ...text, cache_read_tokens: '0' },
+    { ...text, cache_creation_tokens: Number.MAX_SAFE_INTEGER + 1 },
+    { ...text, cache_read_tokens: 15, cache_creation_tokens: 6 },
+    { ...text, cache_creation_tokens: 5, cache_creation_tokens_12h: 6 },
+    { ...text, cache_creation_tokens_12h: 21 },
+    { ...imageBucket, cache_read_tokens: 0 },
+  ]) {
+    assert.equal(usageBucketSchema.safeParse(value).success, false)
+  }
+})

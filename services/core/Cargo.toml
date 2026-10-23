@@ -19,6 +19,10 @@ resource-acceptance = []
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
 aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes", "alloc"] }
 argon2 = "=0.5.3"
+# Official AWS Apache-2.0 SigV4 implementation; pinned to Rust 1.91-compatible
+# releases. Only HTTP signing is enabled, not the full SDK or STS providers.
+aws-sigv4 = { version = "=1.4.1", default-features = false, features = ["sign-http", "http1"] }
+aws-credential-types = { version = "=1.2.13", default-features = false }
 base64 = "=0.22.1"
 bcrypt = "=0.17.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
@@ -60,6 +64,9 @@ toml = { version = "=1.1.6", default-features = false, features = ["std", "serde
 tonic = "=0.14.6"
 tonic-prost = "=0.14.6"
 tower = { version = "=0.5.3", features = ["util"] }
+# Already locked MIT tracing; suppress the AWS signer's canonical-request TRACE
+# events locally because a signed STS session token is confidential.
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 
 [build-dependencies]
 tonic-prost-build = "=0.14.6"

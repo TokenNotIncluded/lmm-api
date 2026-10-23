@@ -1,6 +1,11 @@
 /* Copyright (C) 2026 LIghtJUNction. AGPL-3.0-or-later. */
 import { z } from 'zod'
 
+import {
+  searchProviders,
+  searchUnitMatchesProvider,
+} from '@/lib/search-metering'
+
 const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const amount = z
   .number()
@@ -68,18 +73,107 @@ export const nativeImageVariantSchema = z
     )
   }, 'Image currency amounts disagree')
 
-export const nativeTokenPriceSchema = z.object({
-  currency: z.literal('USD'),
-  unit: z.literal('million_tokens'),
-  rate_basis: rateBasis,
-  group_multiplier: z.number().finite().nonnegative(),
-  input: amount,
-  output: amount,
-  cache_read: amount,
-  cache_write: z.null(),
-  request: z.null(),
-  final_cost_depends_on_usage: z.literal(true),
-})
+const tokenBound = z
+  .string()
+  .regex(/^[1-9]\d{0,19}$/)
+  .refine(
+    (value) =>
+      /^[1-9]\d{0,19}$/.test(value) &&
+      BigInt(value) <= 18_446_744_073_709_551_615n,
+    'Invalid input token bound'
+  )
+export const nativeCacheWrite12hTierSchema = z
+  .object({
+    up_to_input_tokens: tokenBound.nullable(),
+    input: fraction.strict(),
+    output: fraction.strict(),
+    cache_read: fraction.strict(),
+    cache_write: fraction.strict(),
+    cache_write_12h: fraction.strict(),
+  })
+  .strict()
+const cacheWrite12hTiers = z
+  .array(nativeCacheWrite12hTierSchema)
+  .min(1)
+  .max(4)
+  .refine((tiers) => {
+    let previous = 0n
+    return tiers.every((tier, index) => {
+      const bound = tier.up_to_input_tokens
+      if (index === tiers.length - 1) return bound === null
+      if (bound === null || !/^[1-9]\d{0,19}$/.test(bound)) return false
+      const current = BigInt(bound)
+      if (current <= previous) return false
+      previous = current
+      return true
+    })
+  }, 'Input token bounds must increase and end with an unlimited tier')
+
+export const nativeSearchPriceSchema = z
+  .object({
+    available: z.boolean(),
+    provider: z.enum(searchProviders),
+    unit: z.enum(['call', 'query', 'grounded_request']),
+    usd_per_unit: fraction.strict(),
+    x_posts_fetched_usd_per_unit: fraction.strict().nullable(),
+    x_users_fetched_usd_per_unit: fraction.strict().nullable(),
+  })
+  .strict()
+  .refine(
+    (price) =>
+      searchUnitMatchesProvider(price.provider, price.unit) &&
+      (price.provider === 'xai_responses_v1' ||
+        (price.x_posts_fetched_usd_per_unit === null &&
+          price.x_users_fetched_usd_per_unit === null)),
+    'Search units and price dimensions must match the supplier'
+  )
+export type NativeSearchPrice = z.infer<typeof nativeSearchPriceSchema>
+
+export const nativeEmbeddingPriceSchema = z
+  .object({
+    available: z.boolean(),
+    provider: z.enum(['ali_separate_input_v1', 'ali_inclusive_input_v1']),
+    text_usd_per_million: fraction.strict(),
+    image_usd_per_million: fraction.strict(),
+  })
+  .strict()
+export type NativeEmbeddingPrice = z.infer<typeof nativeEmbeddingPriceSchema>
+
+export const nativeTokenPriceSchema = z
+  .object({
+    currency: z.literal('USD'),
+    unit: z.literal('million_tokens'),
+    rate_basis: rateBasis,
+    group_multiplier: z.number().finite().nonnegative(),
+    input: amount,
+    output: amount,
+    cache_read: amount,
+    cache_write: z.null(),
+    request: z.null(),
+    final_cost_depends_on_usage: z.literal(true),
+    search: nativeSearchPriceSchema.optional(),
+    embedding: nativeEmbeddingPriceSchema.optional(),
+    // Every tier inherits this token price's currency, unit and rate basis.
+    cache_write_12h_tiers: cacheWrite12hTiers.optional(),
+  })
+  .refine(
+    (price) =>
+      !price.embedding ||
+      (price.input === null &&
+        price.output === null &&
+        price.cache_read === null &&
+        !price.search &&
+        !price.cache_write_12h_tiers),
+    'Embedding prices require explicit modality rates without mixed tariff dimensions'
+  )
+  .refine(
+    (price) =>
+      !price.cache_write_12h_tiers ||
+      (price.input === null &&
+        price.output === null &&
+        price.cache_read === null),
+    'Tiered prices cannot also claim a scalar token price'
+  )
 
 export const nativeUpstreamCostPriceSchema = z
   .object({
@@ -251,3 +345,7 @@ export type NativeUpstreamCostPrice = z.infer<
   typeof nativeUpstreamCostPriceSchema
 >
 export type NativeUnavailableReason = z.infer<typeof unavailableReason>
+
+export type NativeCacheWrite12hTier = z.infer<
+  typeof nativeCacheWrite12hTierSchema
+>
