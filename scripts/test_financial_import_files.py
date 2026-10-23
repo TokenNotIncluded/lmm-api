@@ -11,17 +11,25 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import financial_import as F
-from test_financial_import import approval_fixture, material_fixture, snapshot_fixture, source_fixture
+from test_financial_import import (approval_fixture, material_fixture, snapshot_fixture, source_fixture,
+                                   escrow_material_fixture, reseal_escrow)
 from test_migrate_legacy_financial import tables, user
 
 
 class PrivateFileFixture:
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        real_backup_root = getattr(self, "use_real_backup_root", False)
+        if real_backup_root:
+            # The PG driver test retains synthetic source/attempt evidence for
+            # independent review; it must also use actual private path guards.
+            self.temp = SimpleNamespace(name=tempfile.mkdtemp(prefix="api-lmm-driver-synthetic-", dir=F.IDENTITY.BACKUP_ROOT))
+        else:
+            self.temp = tempfile.TemporaryDirectory()
+            self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.addCleanup(patch.stopall)
-        patch.object(F.IDENTITY, "BACKUP_ROOT", self.root).start()
+        if not real_backup_root:
+            patch.object(F.IDENTITY, "BACKUP_ROOT", self.root).start()
         self.input = self.root / "source"
         self.input.mkdir(mode=0o700)
         self.source = source_fixture()
@@ -235,6 +243,117 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
         with self.assertRaisesRegex(F.Error, "offline_approval_mismatch"):
             F.verify_approval(material, F.read_private(output / "opening.private.sql"), approval)
         self.assertEqual(F.PLANNER.parse_json(F.read_private(output / "source-export-proof.private.json"))["source_queries_this_run"], 0)
+
+    def composed_inputs(self):
+        """Create explicitly synthetic raw source + policy/drain review files."""
+        import test_legacy_bounty_basis as bounty
+        import test_legacy_escrow_mapping as mapping
+        import legacy_escrow_mapping as mapper
+        parent, _ = bounty.fixture()
+        entities = {"bounty_projects": [], "bounty_challenges": [], "bounty_disputes": []}
+        for entry in parent["entity_updates"]:
+            row = dict(entry["source"])
+            for key in ("owner_user_id", "participant_user_id"):
+                if key in row:
+                    row[key] = {1: 71, 2: 72}.get(row[key], row[key])
+            entities["bounty_projects" if entry["table"] == bounty.B.BOUNTY_TABLES[0] else "bounty_challenges"].append(row)
+        parent["user_ids"] = [71, 72]
+        parent["entity_updates"] = bounty.B.make_entities({"snapshot_at": parent["snapshot_at"], "entities": entities},
+            {71, 72}, lambda n: (n + 5) // 10, include_bounties=True)
+        bounty.seal(parent)
+        for table in bounty.B.BOUNTY_TABLES:
+            self.tables[table] = []
+        for entry in parent["entity_updates"]:
+            self.tables[entry["table"]].append({**entry["source"], **{key: value["after_credit"] for key, value in entry["updates"].items()}})
+        self.tables["wallet_credit_rebases"] = [{"migration_id": parent["migration_id"], "plan_sha256": parent["plan_sha256"], "plan": parent}]
+        columns = {name: sorted(rows[0]) if rows else (["key", "value"] if name == "options" else ["id"])
+                   for name, rows in self.tables.items()}
+        column_rows = [{"schema": "public", "table_name": name, "column_name": key}
+                       for name in sorted(columns) for key in columns[name]]
+        constraints = [{"schema": "public", "table_name": name, "contype": "p", "definition": "PRIMARY KEY (id)"}
+                       for name in sorted(columns) if "id" in columns[name]]
+        catalog = self.input / "native-catalog-metadata.jsonl"
+        counts = self.input / "native-table-row-count-baseline.jsonl"
+        export = self.input / "source-financial-export.private.jsonl"
+        for path in (catalog, counts, export):
+            path.unlink()
+        F.write_private(self.input, catalog.name, "\n".join(F.canonical(v) for v in ([], [], column_rows, constraints, [], [], [])) + "\n")
+        F.write_private(self.input, counts.name, "\n".join(F.canonical({"table": name, "row_count": len(rows)})
+            for name, rows in sorted(self.tables.items())) + "\n")
+        raw = [{"kind": "identity", "row": self.source_instance},
+               {"kind": "schema", "row": {"schema": "public", "schema_owner": "source_owner"}}]
+        raw += [{"kind": "row", "table": name, "row": row} for name, rows in sorted(self.tables.items()) for row in rows]
+        F.write_private(self.input, export.name, "\n".join(F.canonical(v) for v in raw) + "\n")
+        self.files["source_export"] = {"path": str(export), "sha256": F.IDENTITY.sha256_file(export)}
+        proof = {"source_archive_sha256": self.material["source_archive_sha256"], "source_export_sha256": self.files["source_export"]["sha256"],
+            "metadata_hashes": {p.name: F.IDENTITY.sha256_file(p) for p in (catalog, counts)},
+            "source_column_coverage_exact": True, "source_row_baseline_exact": True,
+            "selected_table_counts": {name: len(rows) for name, rows in self.tables.items()}, "source_instance": self.source_instance}
+        self.write("source_export_proof", proof)
+        schema = {name: [r for r in column_rows if r["table_name"] == name] for name in columns}
+        primary = F.PLANNER.primary_keys_from_catalog(constraints, {n: set(c) for n, c in columns.items()}, "public")
+        plan = F.PLANNER.plan_financial(self.tables, self.source["identities"], source_sha256=self.material["source_archive_sha256"],
+            identity_provenance=self.source["plan"]["identity_provenance"], primary_keys=primary, column_schema=schema)
+        self.source["plan"] = plan
+        for value in (self.source["review"], self.source["reservations"]):
+            value["mapping_sha256"] = plan["mapping_sha256"]
+        for row in self.source["reservations"]["positions"]:
+            row["reserved_units"] = 0
+        self.write("financial_plan", plan)
+        self.write("reservations", self.source["reservations"])
+        self.source["files"] = self.files
+        template = escrow_material_fixture(self.source, self.snapshot)
+        records = [F.PLANNER.parse_json(line) for line in Path(self.files["identity_map"]["path"]).read_text().splitlines()]
+        args = dict(tables=self.tables, identity_records=records, plan=plan, migration_id="synthetic-financial",
+                    observed_at=self.source["observation"]["observed_at"], source_proof=proof)
+        unit = mapping.evidence(args)
+        unit["source_policy_evidence_sha256"] = F.sha(b"SYNTHETIC escrow unit review\r\n")
+        candidate = mapper.build(F.PLANNER, **args, unit_evidence=unit)
+        self.assertEqual(candidate["blockers"], [])
+        template["escrow_unit_evidence"] = unit
+        template["escrow_candidate"] = candidate
+        template["source_review"]["escrow_unit_evidence_sha256"] = F.digest(unit)
+        template["source_files"]["escrow_policy_evidence"]["sha256"] = unit["source_policy_evidence_sha256"]
+        reseal_escrow(template)
+        self.files = template["source_files"]
+        self.write("source_review", template["source_review"])
+        for name in ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence"):
+            self.write(name, template[name])
+        for name, content in (("source_review_evidence", "SYNTHETIC independent economic review\r\n"),
+                              ("escrow_policy_evidence", "SYNTHETIC escrow unit review\r\n"),
+                              ("inflight_process_evidence", "SYNTHETIC drain process log\r\n")):
+            self.write(name, content)
+        for name in F.ESCROW_SOURCE_FILES:
+            setattr(self.args, name, Path(self.files[name]["path"]))
+        self.args.include_legacy_escrow = True
+        self.snapshot["state"]["tables"].update({name: {"rows": 0, "sha256": F.sha(b"")}
+            for name in (*F.ESCROW_TABLES, "core_billing.legacy_escrow_operations")})
+        self.snapshot["state"]["inventory"]["tables"] = sorted(self.snapshot["state"]["tables"])
+
+    def test_composed_prepare_rederives_actual_mapper_and_retains_review_required(self):
+        self.composed_inputs()
+        output = self.output()
+        self.assertEqual(self.prepare(output)["status"], "PREPARED_NOT_APPLIED")
+        material = F.PLANNER.parse_json(F.read_private(output / "material.private.json"))
+        F.verify_source_files(material)
+        self.assertEqual(material["scope"], F.ESCROW_SCOPE)
+        approval = F.PLANNER.parse_json(F.read_private(output / "approval-required.private.json"))
+        self.assertEqual((approval["format_version"], approval["decision"]), (2, "REVIEW_REQUIRED"))
+        for name in ("source_review_evidence", "escrow_policy_evidence", "inflight_process_evidence"):
+            path = Path(material["source_files"][name]["path"])
+            self.assertIn(b"\r\n", path.read_bytes())
+            self.assertEqual(F.sha(path.read_bytes()), material["source_files"][name]["sha256"])
+
+    def test_composed_missing_or_changed_raw_drain_file_never_reaches_writer(self):
+        self.composed_inputs()
+        output = self.output()
+        self.prepare(output)
+        material = F.PLANNER.parse_json(F.read_private(output / "material.private.json"))
+        Path(material["source_files"]["inflight_process_evidence"]["path"]).write_text("SYNTHETIC tampered log")
+        with patch.object(F, "run_sql") as run, self.assertRaisesRegex(F.Error, "source_file_changed"):
+            F.execute(material, approval=approval_fixture(material, F.build_apply_sql(material)),
+                      original_sql=F.build_apply_sql(material), connection={}, output=self.output("never-write"))
+        run.assert_not_called()
 
     def test_source_and_target_same_oid_boot_with_different_timestamp_spelling_rejected(self):
         self.snapshot["instance"]["database_oid"] = "99"

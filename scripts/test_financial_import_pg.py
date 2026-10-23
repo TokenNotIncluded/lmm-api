@@ -26,7 +26,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import financial_import as F
-from test_financial_import import source_fixture, material_fixture
+from test_financial_import import source_fixture, material_fixture, escrow_material_fixture, reseal_escrow
 
 ROOT = Path(__file__).resolve().parents[1]
 # CI service images are pulled by digest and need not have a floating tag.
@@ -444,6 +444,112 @@ class PostgreSQLTests(unittest.TestCase):
         self.rejected_unchanged(self.apply_sql, "financial_replay_conflict")
 
 
+    def composed(self):
+        snapshot = json.loads(self.sql(F.snapshot_sql(self.inventory, "synthetic-financial")).stdout)
+        self.material = escrow_material_fixture(self.source, snapshot, runtime_roles=[self.runtime_role])
+        self.apply_sql = F.build_apply_sql(self.material)
+        self.before = self.full_state()
+
+    def test_composed_escrow_preserves_wallets_and_all_original_rights(self):
+        self.composed()
+        self.assertEqual(json.loads(self.sql(self.apply_sql).stdout)["status"], "COMMITTED")
+        # Independent hand-written values: neither claimant nor original payer
+        # is charged. Both 11 and 7 are credited only to the payer's reserved.
+        payer = self.query("SELECT jsonb_object_agg(bucket,balance_units) FROM core_billing.ledger_accounts a "
+            "JOIN core_billing.balance_state b ON b.ledger_account_id=a.id WHERE a.owner_account_id=1")
+        self.assertEqual(payer, {"wallet": 0, "debt": -120, "reserved": 18, "affiliate": 38})
+        self.assertEqual(self.query("SELECT b.balance_units FROM core_billing.ledger_accounts a JOIN "
+            "core_billing.balance_state b ON b.ledger_account_id=a.id WHERE bucket='clearing'"), 26)
+        self.assertEqual(self.query("SELECT count(*) FROM core_billing.legacy_escrow_projects"), 2)
+        self.assertEqual(self.query("SELECT count(*) FROM core_billing.legacy_escrow_claims"), 3)
+        self.assertEqual(self.query("SELECT count(*) FROM core_billing.legacy_escrow_disputes"), 1)
+        self.assertEqual(self.query("SELECT jsonb_build_array(reward_quota_snapshot,project_escrow_quota_snapshot) "
+            "FROM (SELECT (source->>'reward_quota_snapshot')::bigint reward_quota_snapshot,"
+            "(source->>'project_escrow_quota_snapshot')::bigint project_escrow_quota_snapshot "
+            "FROM core_billing.legacy_escrow_disputes) d"), [500, 1100])
+        self.assertEqual(self.query("SELECT payout_units IS NULL FROM core_billing.legacy_escrow_claims "
+            "WHERE source_challenge_id=1003"), True)
+        self.assertEqual(self.query("SELECT coalesce(sum(balance_units),0) FROM core_billing.balance_state"), 0)
+        after = self.full_state()
+        self.sql(self.apply_sql)
+        self.assertEqual(self.full_state(), after)
+
+    def test_composed_late_escrow_error_rolls_back_wallets_and_sequences(self):
+        self.composed()
+        call = "PERFORM core_billing.import_legacy_escrow_batch(m->'escrow_batch');"
+        # Deliberate test-only SQL mutation after wallet/counter statements.
+        # The actual driver refuses modified SQL by its independent approval.
+        broken = self.apply_sql.replace(call, "PERFORM core_billing.import_legacy_escrow_batch("
+            "jsonb_set(m->'escrow_batch','{projects,1,claims,0,recipient_account_id}','999999'::jsonb));", 1)
+        self.rejected_unchanged(broken, "escrow recipient identity mismatch")
+        self.assertEqual(self.full_state(), self.before)
+        self.assertEqual(json.loads(self.sql(self.apply_sql).stdout)["status"], "COMMITTED")
+
+    def test_composed_failure_after_complete_escrow_rolls_back_all_rights_and_sequences(self):
+        self.composed()
+        call = "PERFORM core_billing.import_legacy_escrow_batch(m->'escrow_batch');"
+        broken = self.apply_sql.replace(call, call + " RAISE EXCEPTION 'synthetic-after-escrow';", 1)
+        self.rejected_unchanged(broken, "synthetic-after-escrow")
+        self.assertEqual(self.full_state(), self.before)
+
+    def test_composed_terminated_backend_after_escrow_recovers_absence(self):
+        self.composed()
+        app = "lmm-financial-" + uuid.uuid4().hex
+        call = "PERFORM core_billing.import_legacy_escrow_batch(m->'escrow_batch');"
+        interrupted = self.apply_sql.replace(call, call +
+            " RAISE NOTICE 'COMPOSED_ESCROW_PAUSED'; PERFORM pg_sleep(30);", 1)
+        with subprocess.Popen(self.command(application_name=app), stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+            process.stdin.write(interrupted)
+            process.stdin.close()
+            process.stdin = None
+            notice = b""
+            deadline = time.monotonic() + 10
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stderr, selectors.EVENT_READ)
+                while b"COMPOSED_ESCROW_PAUSED" not in notice and time.monotonic() < deadline:
+                    if selector.select(timeout=0.2):
+                        chunk = os.read(process.stderr.fileno(), 4096)
+                        if not chunk:
+                            break
+                        notice += chunk
+            self.assertIn(b"COMPOSED_ESCROW_PAUSED", notice)
+            self.assertEqual(self.sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=" +
+                F.literal(self.db) + " AND application_name=" + F.literal(app) + " AND pid<>pg_backend_pid();", admin=True).stdout.strip(), "t")
+            process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(self.full_state(), self.before)
+        self.assertEqual(json.loads(self.sql(F.build_resolve_sql(self.material, app)).stdout)["status"], "NOT_APPLIED")
+        self.assertEqual(self.full_state(), self.before)
+
+    def test_composed_readonly_resolver_matches_already_committed_batch_without_new_money(self):
+        self.composed()
+        app = "lmm-financial-" + uuid.uuid4().hex
+        self.sql(self.apply_sql, application_name=app)
+        after = self.full_state()
+        result = json.loads(self.sql(F.build_resolve_sql(self.material, app)).stdout)
+        self.assertEqual(result["status"], "COMMITTED")
+        self.assertEqual(self.full_state(), after)
+
+    def test_composed_approval_or_migration_conflicts_preserve_money_and_rights(self):
+        self.composed()
+        self.sql(self.apply_sql)
+        other = copy.deepcopy(self.material)
+        other["source_review"]["evidence_sha256"] = "0" * 64
+        other["source_files"]["source_review_evidence"]["sha256"] = "0" * 64
+        reseal_escrow(other)
+        self.rejected_unchanged(F.build_apply_sql(other), "financial_replay_conflict")
+        other = copy.deepcopy(self.material)
+        other["migration_id"] = "different-composed-id"
+        other["escrow_candidate"]["migration_id"] = other["migration_id"]
+        other["escrow_candidate"]["batch_candidate"]["migration_id"] = other["migration_id"]
+        for row in other["opening"] + other["counters"]:
+            row["migration_id"] = other["migration_id"]
+        reseal_escrow(other)
+        self.rejected_unchanged(F.build_apply_sql(other), "financial_other_import_conflict")
+
+
 @unittest.skipUnless(os.environ.get("LMM_FINANCIAL_PG_FIXTURE_RECEIPT"), "matched Core init-db Unix PG18 fixture not requested")
 class UnixPostgreSQLTests(PostgreSQLTests):
     """The same assertions against a locally owned compiled-Core PG18 template."""
@@ -676,6 +782,81 @@ END $fixture_previous_client$;
         type(self).db = self.admin_connection["database"]
         self.sql(self.idle_sql(database) + 'DROP DATABASE "' + database + '";', admin=True)
         self.owned.remove(database)
+
+    def test_composed_driver_real_files_prepare_commit_lost_ack_then_original_attempt_resolution(self):
+        """Full synthetic source/file/real-PG driver composition, no fake DB.
+
+        Only the final transport ACK is discarded. Actual original SQL commits
+        before the driver sees failure; neither the verifier nor snapshot query
+        is replaced. A read-only prefix records exact owned backend identities
+        so fixture cleanup waits only for these completed clients.
+        """
+        import test_financial_import_files as file_tests
+        from test_financial_import import approval_fixture
+        helper = file_tests.PrepareFilesTests("runTest")
+        helper.use_real_backup_root = True
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        helper.composed_inputs()
+        snapshot = json.loads(self.sql(F.snapshot_sql(self.inventory, "synthetic-financial")).stdout)
+        connection = {**self.connection, "database": self.db}
+        target = {"status": "initialized-identity-bound-financial-target", "application_or_worker_started": False,
+            "migration_id": "synthetic-financial", "source_archive_sha256": helper.source["plan"]["source_archive_sha256"],
+            "connection": connection, "instance_identity": snapshot["instance"],
+            "contract": {**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": snapshot["catalog_fingerprint_sha256"],
+                         "trust_policy_seed": snapshot["trust_policy_seed"]}}
+        helper.args.target_receipt = F.write_private(helper.input, "real-target.private.json", F.canonical(target))
+        helper.args.runtime_role = [self.runtime_role]
+        actual_run = F.run_sql
+        drop_ack = [False]
+        executed = []
+        def transport(connection, sql, output, application_name, **kwargs):
+            capture = "SELECT jsonb_build_object('pid',pg_backend_pid(),'backend_start'," \
+                "(SELECT backend_start FROM pg_stat_activity WHERE pid=pg_backend_pid()));\n"
+            code, raw = actual_run(connection, self.idle_sql(self.db) + capture + sql, output, application_name, **kwargs)
+            lines = raw.splitlines()
+            self.assertTrue(lines, "actual PG backend proof missing")
+            backend = json.loads(lines[0])
+            self.assertEqual(set(backend), {"pid", "backend_start"})
+            self.known_backends.setdefault(self.db, []).append(backend)
+            body = "\n".join(lines[1:])
+            executed.append({"application_name": application_name, "exit_code": code, "backend": backend})
+            if drop_ack[0]:
+                self.assertEqual(code, 0, "must actually COMMIT before dropping the ACK")
+                self.assertEqual(json.loads(body)["status"], "COMMITTED")
+                drop_ack[0] = False
+                return 1, ""
+            return code, body
+        prepared = helper.output("real-prepared")
+        with patch.object(F, "run_sql", side_effect=transport):
+            self.assertEqual(F.prepare(helper.args, prepared)["status"], "PREPARED_NOT_APPLIED")
+        material = json.loads((prepared / "material.private.json").read_text())
+        sql = (prepared / "opening.private.sql").read_text()
+        F.verify_source_files(material)
+        approval = approval_fixture(material, sql)  # Explicit synthetic-test approval only.
+        attempt_dir = helper.output("lost-ack-attempt")
+        drop_ack[0] = True
+        with patch.object(F, "run_sql", side_effect=transport):
+            outcome = F.execute(material, approval=approval, original_sql=sql,
+                                connection=connection, output=attempt_dir)
+        self.assertEqual(outcome["status"], "UNKNOWN")
+        original_attempt = json.loads((attempt_dir / "attempt.private.json").read_text())
+        self.assertEqual(original_attempt["operation"], "apply")
+        self.assertEqual(original_attempt["material_sha256"], F.digest(material))
+        after = self.full_state()
+        with patch.object(F, "run_sql", side_effect=transport):
+            resolved = F.execute(material, approval=approval, original_sql=sql, connection=connection,
+                output=helper.output("resolved-original-attempt"), original_attempt=original_attempt)
+        self.assertEqual(resolved["status"], "COMMITTED")
+        self.assertEqual(self.full_state(), after)
+        self.assertEqual(self.query("SELECT count(*) FROM core_billing.legacy_escrow_batch_runs"), 1)
+        self.assertEqual(self.query("SELECT count(*) FROM core_billing.legacy_escrow_projects"), 1)
+        self.assertEqual(self.query("SELECT b.balance_units FROM core_billing.ledger_accounts a JOIN "
+            "core_billing.balance_state b ON b.ledger_account_id=a.id WHERE a.owner_account_id=1 AND bucket='reserved'"), 100)
+        F.write_private(helper.root, "test-provenance.private.json", F.canonical({"synthetic_source_only": True,
+            "production_access": False, "real_postgresql": True, "driver_outcome": "UNKNOWN",
+            "original_attempt_resolved": "COMMITTED", "database": self.db,
+            "executed_transports": executed, "material_sha256": F.digest(material)}) + "\n")
 
     @classmethod
     def tearDownClass(cls):

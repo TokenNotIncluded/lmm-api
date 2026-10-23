@@ -1,6 +1,6 @@
 # 历史余额 opening 导入
 
-当前仅支持**经独立审核、全用户预留为零的期初余额**，写入一个全新、离线、由安装 owner 控制的目标库。
+`migrate-legacy-financial.py` 的 opening 路径仅支持**经独立审核、全用户预留为零的期初余额**，写入一个全新、离线、由安装 owner 控制的目标库。
 入口是 [财务脚本](../scripts/migrate-legacy-financial.py)，具体约束在
 [opening 模块](../scripts/legacy_financial_opening.py)。普通 `--apply` 仍明确拒绝；其他金融领域仍由 planner 保留和分类。
 
@@ -144,6 +144,16 @@ matched，也不授权激活或证明单位与历史部署规则正确。实际�
 来源单位、预留和托管权利仍未证明，`target_state_complete=false`。
 这不生成经济批准或导入 payload，也不替代真实 PostgreSQL 迁移和独立业务验收。
 
+目标清单可用 [`export_financial_target_inventory.py`](../scripts/export_financial_target_inventory.py)
+从已审核的本地 Unix PostgreSQL 目标实际读取。它要求 `--target-receipt`、`--identity-manifest`、
+`--identity-map` 和新的私有 `--output` 目录，在同一只读事务快照内核对实例、schema、身份导入
+receipt、账户归属和实际余额。输入文件、密码文件及工具源码在读取前冻结，输出前再次校验；
+查询期间发生变化就拒绝发布清单。
+
+完整的映射内观察退出 `0` 并写出 `target-wallet-inventory.private.json`。缺桶、缺余额或单位错误
+保留不完整观察并退出 `2`，不会补零或生成可消费清单；实例、输入或连接不符退出 `1`。
+该工具只观察指定身份映射范围；完整托管权利和预留读回由组合导入另行校验。
+
 ## 支持范围
 
 单位固定为整数 `credit_500k_usd`，`1 USD = 500000 credits`。
@@ -263,8 +273,53 @@ Core 的 `billing::legacy_escrow` 为历史悬赏提供单独的资金池：一�
 离线安装 owner 调用 `core_billing.import_legacy_escrow_batch(jsonb)`。整批材料绑定同一 wallet opening 的
 migration、来源 archive、身份 mapping、观察时间及独立审核 proof；函数要求原 wallet opening 的预留为零，
 并拒绝已有运行期资金活动。导入把项目金额从 clearing 记入原付款账户的 reserved，不再扣钱包。
-这是独立的 owner-only SQL 原语，当前 financial CLI 尚未把钱包与悬赏编排为一个完整、已验收的迁移流程。
+这是独立的 owner-only SQL 原语；它的存在不表示真实历史资金已经组合导入或验收。
 proof hash 仅绑定审核材料，不能代替原单位、经济权利和完整批次的人工独立审核。
+
+### 只读生成托管候选
+
+在 `--source-rights-preview` 上显式增加 `--escrow-candidate-preview`，从同一已核验的冻结导出、
+身份映射和财务计划生成 `escrow-candidate.private.json`。它要求完整覆盖项目、挑战、争议和
+母计划来源表，逐行核对母计划的变更后记录，保留原付款人与收款账户。已支付记录不能变成新的待付款；
+历史拒绝保护记录的原数额也不能直接变成当前单位的可付金额。
+
+`--escrow-unit-evidence PATH` 可提供独立的来源单位材料，绑定 archive、export、mapping、身份记录、
+母计划、审计行与原执行代码证据。它只用于候选，不能作为经济批准。没有单位材料或存在来源 blocker 时，
+`batch_candidate=null`，仍保留逐项候选事实和明确的 blocker。退出 `0` 只表示预览成功生成。
+
+stdout 只给计数、状态和拒绝原因；详细资料仅写入私有 Backups 目录。manifest 分别绑定候选和单位
+材料的原文件字节 hash、带类型内容 hash 及 mapper 源码。预览没有数据库连接，不写入资金，
+`approval_created=false`、`source_unit_authority_verified=false`、`inflight_reservations_verified=false`。
+
+### 钱包与托管的显式组合导入
+
+[`financial_import.py`](../scripts/financial_import.py) 的 `--prepare --include-legacy-escrow` 使用独立
+profile `financial-opening-with-legacy-escrow-v1`。它调用现有 Core 原语，将钱包、历史计数与全部托管项目
+放进同一事务；原 opening-only profile 不自动加入托管。新 profile 的材料为版本 `3`，
+来源经济审阅为版本 `2`，旧审阅和旧 SQL 批准不能授权这个新范围。
+
+除原输入外，prepare 必须显式读取以下私有文件：
+
+| 参数 | 绑定内容 |
+| --- | --- |
+| `--escrow-candidate` | 从原冻结来源与身份映射重新计算的完整托管候选 |
+| `--escrow-unit-evidence` | 来源单位及母计划依据 |
+| `--source-review-evidence` | `source_review.evidence_sha256` 对应的经济审阅原文 |
+| `--escrow-policy-evidence` | 单位材料中 `source_policy_evidence_sha256` 对应的原文 |
+| `--inflight-evidence` | 绑定来源、映射、导出、进程身份和完整用户/表范围的排空核对材料 |
+| `--inflight-process-evidence` | 排空核对中 `process_evidence_sha256` 对应的原始进程取证报告 |
+
+来源经济审阅须明确批准 `restore-clearing-to-reserved-without-wallet-debit` 策略。钱包 opening 的 reserved
+为零只表示不把该批托管再次并入钱包预留；组合后每个付款账户的 reserved 必须精确等于其所有恢复项目之和。
+仍须单独证明其他在途款已排空；在线数据库快照、终态计数、一个 hash 或策略枚举不能代替进程证据。
+所需原文也按实际字节绑定；工具只核对材料一致性，不替代独立审阅者对事实的判断。
+
+最终 SQL 批准另用版本 `2`、决策 `approve-offline-opening-with-legacy-escrow`，绑定 scope、material、SQL
+和来源审阅。prepare 生成的模板保持 `REVIEW_REQUIRED`。同 ID 的严格重放、冲突拒绝、完整前态核对及
+UNKNOWN 原 attempt 对账继续有效；不会因为提交回包丢失就换 ID 或自动补执行。
+
+真实来源缺少单位或排空材料时，继续拒绝 prepare/apply。合成 PostgreSQL 演练及产物构建不能抵扣
+真实源经济审核、金融导入对账、运行期付款/退款与整站验收；当前真实批次不能写成已迁移。
 
 运行期 `LegacyEscrowStore` 在同一事务中重新校验原项目 owner 的个人账户 Session。
 付款命令只指定冻结项目、挑战和操作 key，金额与收款账户来自不可变导入记录；不接受调用方指定。
@@ -277,6 +332,8 @@ accepted/submitted 挑战、未解决争议和仍在七日申诉期的拒绝记�
 存在尚未解决的近期权利但缺少 payout basis 时，整批导入拒绝。开放争议没有原生裁决接口，仍保持冻结。
 
 当前模块没有 HTTP 或 Go 入口，也没有新悬赏的提交、裁决完整生命周期；不能据此宣告悬赏功能全部迁移完成。
+冻结为 `accepted` 的权益会阻止关闭，但仍须经过合法提交流程才能付款；当前这条状态流转尚未接通。
+不能把来源状态改成 `submitted` 来代替提交事实或完成支付验收。
 新增表仅授 runtime SELECT，只有 finalize 函数有 EXECUTE；导入、直接表写入和账本序列不授 runtime。
 DDL 参与现有 ledger 组件指纹，仅适用于新离线目标。旧 receipt、旧镜像及旧数据库不能通过更改版本字符串沿用，
 现有站点升级仍须独立演练和审核。
