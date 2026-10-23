@@ -63,7 +63,7 @@ CORE_SEED_CONTRACT = "fresh26-identity5-trust-policy-telegram-empty-v1"
 REVIEWED_COMPONENTS = {
     'humangrant': ('include_str!("../schema/humangrant.sql")', '7d9437a2ee485bc7491c76e755ca481a7a722c4ea9ae7322fe32ac5f8f0090bc'),
     'identity': ('include_str!("../schema/identity.sql")', 'c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9'),
-    'ledger': ('include_str!("../schema/ledger.sql")', '1edf84beaebc03ddc45b52da7f266980b5873905f116e031ef21efbf5fbebe7f'),
+    'ledger': ('include_str!("../schema/ledger.sql")', 'ce973f6fee25904d4fcdc87895ec49e6c53e10c9fb3508df4d7d72ace16df77f'),
     'payments': ('include_str!("../schema/payments.sql")', '9579afddbe5aeb4deb67984e731bcdc6ca405dc619ceede8d92505ecc43f7d39'),
     'charging': ('include_str!("../schema/charging.sql")', '08f0a99e3cc7729627f782ec0341c31353008926b8ec8584c555a6c10dcb53de'),
     'routing': ('include_str!("../schema/routing.sql")', 'd8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e'),
@@ -985,7 +985,7 @@ BEGIN
  OR current_setting('server_version_num')<>{sql_literal(str(target_identity['server_version_num']))}
  OR current_setting('lmm.migration_instance_nonce',true) IS DISTINCT FROM {sql_literal(target_identity['server_instance_nonce'])}
  OR current_setting('port')::int<>{target_identity['port']} OR inet_server_addr() IS NOT NULL
- OR current_setting('listen_addresses')<>'' THEN
+ OR current_setting('listen_addresses') NOT IN ('','localhost','127.0.0.1') THEN
   RAISE EXCEPTION 'target instance identity mismatch';
  END IF;
  IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid()) THEN
@@ -1206,7 +1206,7 @@ COMMIT;
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source-receipt", type=Path, required=True)
-    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned fresh26 receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role:NOLOGIN-owner,login_role:independent-installer,set_role:owner,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses:empty}; contract=current_contract() plus catalog_fingerprint_sha256, allow_initialized_core_seed:true, initialized_core_seed_contract:CORE_SEED_CONTRACT, initialized_core_seed_sha256:fresh_seed_hash_query() result, trust_policy_seed:trust_policy_seed_query() result; application_or_worker_started:false; registry_provisioned:true. Capture and review fresh values; never relabel an old receipt.")
+    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned fresh26 receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role:NOLOGIN-owner,login_role:independent-installer,set_role:owner,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses:empty_or_loopback}; contract=current_contract() plus catalog_fingerprint_sha256, allow_initialized_core_seed:true, initialized_core_seed_contract:CORE_SEED_CONTRACT, initialized_core_seed_sha256:fresh_seed_hash_query() result, trust_policy_seed:trust_policy_seed_query() result; application_or_worker_started:false; registry_provisioned:true. Capture and review fresh values; never relabel an old receipt.")
     parser.add_argument("--output", type=Path, required=True, help="New private directory under ~/Backups; must not already exist")
     parser.add_argument("--migration-id", required=True)
     parser.add_argument("--apply", action="store_true", help="Explicitly execute the private SQL plan against the matching empty initialized target")

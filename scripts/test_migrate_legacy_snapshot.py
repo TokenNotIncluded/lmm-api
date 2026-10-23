@@ -923,6 +923,7 @@ class ImportSqlTests(unittest.TestCase):
         self.assertIn("current_database()<>'synthetic_database'", sql)
         self.assertIn("target instance identity mismatch", sql)
         self.assertIn("target has other database clients", sql)
+        self.assertIn("current_setting('listen_addresses') NOT IN ('','localhost','127.0.0.1')", sql)
         self.assertIn("installed core contract or actual catalog mismatch", sql)
         self.assertIn("int8send(octet_length(convert_to(definition,'UTF8'))", sql)
         self.assertIn("LOCK TABLE core_meta.schema_contract", sql)
