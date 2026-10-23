@@ -321,19 +321,53 @@ UNKNOWN 原 attempt 对账继续有效；不会因为提交回包丢失就换 ID
 真实来源缺少单位或排空材料时，继续拒绝 prepare/apply。合成 PostgreSQL 演练及产物构建不能抵扣
 真实源经济审核、金融导入对账、运行期付款/退款与整站验收；当前真实批次不能写成已迁移。
 
-运行期 `LegacyEscrowStore` 在同一事务中重新校验原项目 owner 的个人账户 Session。
-付款命令只指定冻结项目、挑战和操作 key，金额与收款账户来自不可变导入记录；不接受调用方指定。
-每个挑战最多付款一次，同一项目可多次部分付款；普通 Capture、Release 和 Reverse 不能使用此 opening。
-收款及退款优先归还账户欠款，再进入钱包。相同 key、相同材料可重放；改材料或重复支付拒绝。
-超时或无法确认 COMMIT 时结果为 UNKNOWN，须核对或重放原 key，不能换 key 补付。
+### 导入后的提交、付款与原操作核查
+
+运行期 [`LegacyEscrowStore`](../services/core/src/billing/legacy_escrow.rs) 在同一事务中重新校验
+当前个人账户 Session：提交证据须是冻结挑战的原参与者，付款和关闭须是原项目 owner。
+调用方不能指定金额、收款账户或代替他人的 actor；这些值来自冻结导入记录和已验证的 Session。
+
+原状态为 `accepted`、尚未付款且具有已审核 payout basis 的挑战，由参与者调用 `submit`，提供
+`migration_id`、`source_project_id`、`source_challenge_id`、`operation_key`，以及至少一个 GitHub HTTPS
+issue 或 PR URL。`issue_url`、`pull_request_url` 各最多 512 字节，可选 `submission_note` 最多 2000 字节。
+这些链接是参与者的证据声明；Core 不抓取链接，也不据此证明仓库归属或 PR 作者身份，owner 仍须审阅。
+
+成功提交只追加一条 `legacy_escrow_operations` 事件并增加项目 revision，不产生资金 journal。
+原挑战的 `status`、来源行、来源 hash 和导入金额保持不变，不能把 `accepted` 改为 `submitted` 代替提交。
+每个挑战只允许一次成功提交；换新 key 修改证据或重复提交会拒绝，同项目重复使用同一 PR URL 也会拒绝。
+PR 去重仅覆盖新增的成功提交事件；导入记录没有历史 PR、issue 或仓库字段，不能据此与来源已提交记录去重。
+owner 对这类挑战付款时，必须在 `payout` 命令中用 `submission_operation_key` 精确绑定该成功提交。
+来源本来就是 `submitted` 的挑战保留原付款命令，不接受额外的 `submission_operation_key`。
+
+每个挑战最多付款一次，同一项目可多次部分付款。收款及关闭后的退款优先归还账户欠款，再进入钱包；
+普通 Capture、Release 和 Reverse 不能使用此 opening。成功操作、业务拒绝都保留原 key 的结果；
+相同 Session 身份、相同 key 和完全相同的命令可重放，改材料或重复支付拒绝。
+
+超时、断连或无法确认 COMMIT 时结果为 UNKNOWN，不能当成回滚，也不能换 key 补付。
+`query` 按原 `migration_id`、`source_project_id`、`operation_key` 返回原命令、actor 和 receipt；
+只有项目 owner 或该操作原 actor 可查，可用 `expected_command` 精确核对原命令。
+查询暂时返回 missing 只表示此次读取未看到结果，不能证明原请求已经回滚；继续保留原命令和原 key 核查或重放。
 
 accepted/submitted 挑战、未解决争议和仍在七日申诉期的拒绝记录会保护项目余额。
 历史拒绝记录的原始 reward quota 不自动视为当前单位的可付金额；没有已审核 payout basis 的记录不可付款。
 存在尚未解决的近期权利但缺少 payout basis 时，整批导入拒绝。开放争议没有原生裁决接口，仍保持冻结。
 
-当前模块没有 HTTP 或 Go 入口，也没有新悬赏的提交、裁决完整生命周期；不能据此宣告悬赏功能全部迁移完成。
-冻结为 `accepted` 的权益会阻止关闭，但仍须经过合法提交流程才能付款；当前这条状态流转尚未接通。
-不能把来源状态改成 `submitted` 来代替提交事实或完成支付验收。
-新增表仅授 runtime SELECT，只有 finalize 函数有 EXECUTE；导入、直接表写入和账本序列不授 runtime。
-DDL 参与现有 ledger 组件指纹，仅适用于新离线目标。旧 receipt、旧镜像及旧数据库不能通过更改版本字符串沿用，
-现有站点升级仍须独立演练和审核。
+### 受保护的内部接口与部署边界
+
+[`HTTP adapter`](../services/core/src/billing/legacy_escrow/http.rs) 复用现有 bounties 专用 token 和受保护
+UDS，固定使用 `POST /internal/bounties/v1/legacy-escrow/{submit,payout,close,query}`。
+请求同时携带单值 `Authorization: Bearer <host token>`、`X-Lmm-Protocol: 1` 和
+`X-Lmm-User-Credential: <Session>`；host token 不能代替用户 Session。请求体上限 16 KiB，响应为 `no-store`。
+receipt 区分 `submitted`、`posted`、`rejected`；成功提交不带 journal，零余额关闭也可能不带 journal。
+
+Go 的[类型化客户端](../services/extensions/internal/modules/bounties/legacy_escrow_client.go) 提供
+`SubmitLegacyEscrow`、`PayoutLegacyEscrow`、`CloseLegacyEscrow`、`QueryLegacyEscrowForCommand`。
+核查调用携带完整原命令，不会执行付款；资金写请求遇到断连、5xx 或无效回执时返回 `ErrUnknown`，
+不会自动重试或生成新 key。这是私有内部适配，未增加公开 Go handler、产品 UI 或新的浏览器确认 token。
+用户侧公开付款流程与浏览器确认仍未验收，新悬赏和争议裁决的完整生命周期也未因此完成。
+
+legacy escrow 业务表仅授 runtime SELECT，只有 `legacy_escrow_finalize` 函数有 EXECUTE；导入、直接表写入和账本序列
+不授 runtime。DDL 参与 ledger 组件指纹。全新目标使用匹配版本 `init-db`；已有精确旧 Core 26 库须按
+[显式 ledger 升级流程](archlinux-install-update.md#core-26-ledger-升级)单独演练，不能修改版本字符串沿用旧 receipt。
+资金导入仍只接受符合原前置条件的全新离线目标，并拒绝非空升级回执；schema 升级不会放宽资金候选或授权。
+当前真实目标未执行该升级，真实资金也未 apply；经济审核、来源进程排空及完整业务验收继续作为未完成项。

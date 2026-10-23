@@ -782,19 +782,23 @@ CREATE TABLE core_billing.legacy_escrow_operations (
     migration_id TEXT NOT NULL,
     source_project_id BIGINT NOT NULL,
     source_challenge_id BIGINT,
-    kind TEXT NOT NULL CHECK(kind IN ('payout','close')),
+    kind TEXT NOT NULL CHECK(kind IN ('submit','payout','close')),
     actor_user_id BIGINT NOT NULL REFERENCES core_identity.users(id),
     request JSONB NOT NULL,
     result JSONB NOT NULL,
     FOREIGN KEY(migration_id,source_project_id) REFERENCES core_billing.legacy_escrow_projects(migration_id,source_project_id),
     FOREIGN KEY(migration_id,source_project_id,source_challenge_id)
         REFERENCES core_billing.legacy_escrow_claims(migration_id,source_project_id,source_challenge_id),
-    CHECK((kind='payout')=(source_challenge_id IS NOT NULL))
+    CHECK((kind IN ('submit','payout'))=(source_challenge_id IS NOT NULL))
 );
 CREATE UNIQUE INDEX legacy_escrow_claim_paid_once ON core_billing.legacy_escrow_operations(migration_id,source_challenge_id)
     WHERE kind='payout' AND result->>'status'='posted';
 CREATE UNIQUE INDEX legacy_escrow_close_once ON core_billing.legacy_escrow_operations(migration_id,source_project_id)
     WHERE kind='close' AND result->>'status'='posted';
+CREATE UNIQUE INDEX legacy_escrow_submit_once ON core_billing.legacy_escrow_operations(migration_id,source_challenge_id)
+    WHERE kind='submit' AND result->>'status'='submitted';
+CREATE UNIQUE INDEX legacy_escrow_submit_pr_once ON core_billing.legacy_escrow_operations(migration_id,source_project_id,lower(request->'command'->>'pull_request_url'))
+    WHERE kind='submit' AND result->>'status'='submitted' AND request->'command'->>'pull_request_url'<>'';
 
 CREATE TRIGGER legacy_escrow_batch_immutable BEFORE UPDATE OR DELETE ON core_billing.legacy_escrow_batch_runs FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
 CREATE TRIGGER legacy_escrow_batch_no_truncate BEFORE TRUNCATE ON core_billing.legacy_escrow_batch_runs FOR EACH STATEMENT EXECUTE FUNCTION core_billing.ledger_immutable();
@@ -1054,16 +1058,25 @@ BEGIN
     IF NOT COALESCE(octet_length(p_request::TEXT)<=8192 AND jsonb_typeof(p_request->'migration_id')='string'
         AND migration ~ '^[A-Za-z0-9._:/-]{1,128}$' AND jsonb_typeof(p_request->'operation_key')='string'
         AND op_key ~ '^[A-Za-z0-9._:/-]{1,128}$' AND
-        ((kind='payout' AND core_billing.legacy_escrow_keys(p_request,ARRAY['kind','migration_id','source_project_id','source_challenge_id','operation_key']))
+        ((kind='submit' AND core_billing.legacy_escrow_keys(p_request,ARRAY['kind','migration_id','source_project_id','source_challenge_id','operation_key','issue_url','pull_request_url','submission_note']))
+        OR (kind='payout' AND (core_billing.legacy_escrow_keys(p_request,ARRAY['kind','migration_id','source_project_id','source_challenge_id','operation_key'])
+          OR (core_billing.legacy_escrow_keys(p_request,ARRAY['kind','migration_id','source_project_id','source_challenge_id','operation_key','submission_operation_key'])
+            AND jsonb_typeof(p_request->'submission_operation_key')='string' AND p_request->>'submission_operation_key' ~ '^[A-Za-z0-9._:/-]{1,128}$')))
         OR (kind='close' AND core_billing.legacy_escrow_keys(p_request,ARRAY['kind','migration_id','source_project_id','operation_key']))),FALSE) THEN
         RAISE EXCEPTION 'invalid escrow command' USING ERRCODE='P1000';
     END IF;
     project_id:=core_billing.legacy_escrow_id(p_request->'source_project_id');
-    IF kind='payout' THEN challenge_id:=core_billing.legacy_escrow_id(p_request->'source_challenge_id'); END IF;
+    IF kind IN ('submit','payout') THEN challenge_id:=core_billing.legacy_escrow_id(p_request->'source_challenge_id'); END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended(jsonb_build_array('core-legacy-escrow',op_key)::TEXT,0));
     SELECT * INTO project FROM core_billing.legacy_escrow_projects WHERE migration_id=migration AND source_project_id=project_id;
     IF NOT FOUND THEN RAISE EXCEPTION 'escrow project not found' USING ERRCODE='P1002'; END IF;
-    IF (project.owner_user_id,project.payer_account_id) IS DISTINCT FROM (p_actor_user_id,p_actor_account_id) THEN
+    IF kind='submit' THEN
+        SELECT * INTO claim FROM core_billing.legacy_escrow_claims c WHERE c.migration_id=migration AND c.source_project_id=project_id AND c.source_challenge_id=challenge_id;
+        IF NOT FOUND THEN RAISE EXCEPTION 'escrow frozen claim not found' USING ERRCODE='P1002'; END IF;
+        IF (claim.participant_user_id,claim.recipient_account_id) IS DISTINCT FROM (p_actor_user_id,p_actor_account_id) THEN
+            RAISE EXCEPTION 'escrow original participant required' USING ERRCODE='42501';
+        END IF;
+    ELSIF (project.owner_user_id,project.payer_account_id) IS DISTINCT FROM (p_actor_user_id,p_actor_account_id) THEN
         RAISE EXCEPTION 'escrow original owner required' USING ERRCODE='42501';
     END IF;
     request:=jsonb_build_object('command',p_request,'actor_user_id',p_actor_user_id,'actor_account_id',p_actor_account_id);
@@ -1079,10 +1092,39 @@ BEGIN
         rejection:='open_dispute';
     END IF;
     now_at:=floor(extract(epoch FROM clock_timestamp()))::BIGINT;
-    IF kind='payout' THEN
+    IF kind='submit' THEN
+        -- Evidence is a participant declaration, not proof of repository/author
+        -- ownership. Frozen imports do not contain a repository binding. Never
+        -- fetch these URLs or mutate the imported claim/source hash.
+        IF NOT COALESCE(jsonb_typeof(p_request->'issue_url')='string' AND jsonb_typeof(p_request->'pull_request_url')='string'
+            AND jsonb_typeof(p_request->'submission_note')='string' AND octet_length(p_request->>'submission_note')<=2000
+            AND octet_length(p_request->>'issue_url')<=512 AND octet_length(p_request->>'pull_request_url')<=512
+            AND ((p_request->>'issue_url')<>'' OR (p_request->>'pull_request_url')<>'')
+            AND ((p_request->>'issue_url')='' OR p_request->>'issue_url' ~ '^https://github[.]com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$')
+            AND ((p_request->>'pull_request_url')='' OR p_request->>'pull_request_url' ~ '^https://github[.]com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$')
+            AND p_request->>'issue_url' !~ '/[.]{1,2}/' AND p_request->>'pull_request_url' !~ '/[.]{1,2}/',FALSE) THEN
+            RAISE EXCEPTION 'invalid escrow submission evidence' USING ERRCODE='P1000';
+        END IF;
+        IF rejection IS NULL AND (claim.status<>'accepted' OR claim.paid_at<>0 OR claim.rights_status<>'active_future_reward' OR claim.payout_units IS NULL) THEN rejection:='claim_not_accepted'; END IF;
+        IF rejection IS NULL AND EXISTS(SELECT FROM core_billing.legacy_escrow_operations o WHERE o.migration_id=migration AND o.source_challenge_id=challenge_id AND o.kind='submit' AND o.result->>'status'='submitted') THEN rejection:='claim_already_submitted'; END IF;
+        IF rejection IS NULL AND p_request->>'pull_request_url'<>'' AND EXISTS(SELECT FROM core_billing.legacy_escrow_operations o WHERE o.migration_id=migration AND o.source_project_id=project_id
+            AND o.kind='submit' AND o.result->>'status'='submitted' AND lower(o.request->'command'->>'pull_request_url')=lower(p_request->>'pull_request_url')) THEN rejection:='duplicate_pull_request'; END IF;
+        IF rejection IS NULL THEN
+            UPDATE core_billing.legacy_escrow_state SET revision=revision+1 WHERE migration_id=migration AND source_project_id=project_id RETURNING * INTO state;
+        END IF;
+        result:=jsonb_build_object('status',CASE WHEN rejection IS NULL THEN 'submitted' ELSE 'rejected' END,'code',rejection,
+            'operation_key',op_key,'journal_id',NULL,'remaining_units',state.remaining_units,'revision',state.revision);
+        INSERT INTO core_billing.legacy_escrow_operations VALUES(op_key,migration,project_id,challenge_id,kind,p_actor_user_id,request,result);
+        RETURN result;
+    ELSIF kind='payout' THEN
         SELECT * INTO claim FROM core_billing.legacy_escrow_claims c WHERE c.migration_id=migration AND c.source_project_id=project_id AND c.source_challenge_id=challenge_id;
         IF NOT FOUND THEN RAISE EXCEPTION 'escrow frozen claim not found' USING ERRCODE='P1002'; END IF;
-        IF rejection IS NULL AND (claim.status<>'submitted' OR claim.paid_at<>0 OR claim.rights_status<>'active_future_reward' OR claim.payout_units IS NULL) THEN rejection:='claim_not_submitted'; END IF;
+        IF rejection IS NULL AND (claim.status NOT IN ('accepted','submitted') OR claim.paid_at<>0 OR claim.rights_status<>'active_future_reward' OR claim.payout_units IS NULL) THEN rejection:='claim_not_submitted'; END IF;
+        IF rejection IS NULL AND claim.status='accepted' AND NOT EXISTS(SELECT FROM core_billing.legacy_escrow_operations o
+            WHERE o.operation_key=p_request->>'submission_operation_key' AND o.migration_id=migration AND o.source_project_id=project_id AND o.source_challenge_id=challenge_id
+              AND o.kind='submit' AND o.result->>'status'='submitted' AND o.actor_user_id=claim.participant_user_id
+              AND o.request->>'actor_account_id'=claim.recipient_account_id::TEXT) THEN rejection:='claim_not_submitted'; END IF;
+        IF rejection IS NULL AND claim.status='submitted' AND p_request ? 'submission_operation_key' THEN rejection:='unexpected_submission_key'; END IF;
         IF rejection IS NULL AND EXISTS(SELECT FROM core_billing.legacy_escrow_operations o WHERE o.migration_id=migration AND o.source_challenge_id=challenge_id
             AND o.kind='payout' AND o.result->>'status'='posted') THEN rejection:='claim_already_paid'; END IF;
         amount:=COALESCE(claim.payout_units,0);

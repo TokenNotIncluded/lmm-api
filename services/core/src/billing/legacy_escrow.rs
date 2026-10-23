@@ -1,6 +1,7 @@
-//! Core-only historical bounty escrow. No HTTP, Go port or generic money action.
+//! Core-only historical bounty escrow; extensions carry commands, never money authority.
 //! Offline imports are schema-owner SQL operations; this runtime accepts only an
-//! authenticated original owner's Session. Amount and recipient are frozen at
+//! authenticated original owner's Session for money, or the frozen participant
+//! Session for append-only submission evidence. Amount and recipient are frozen at
 //! import, never supplied by a payout/close caller. One claim is paid once;
 //! multiple claims partially consume one project pool. Open disputes remain
 //! blocked until a separately reviewed native adjudication flow exists.
@@ -18,6 +19,23 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction, types::Json};
 use std::{fmt, time::Duration};
 
+pub mod http;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitCommand {
+    pub migration_id: String,
+    pub source_project_id: i64,
+    pub source_challenge_id: i64,
+    pub operation_key: String,
+    #[serde(default)]
+    pub issue_url: String,
+    #[serde(default)]
+    pub pull_request_url: String,
+    #[serde(default)]
+    pub submission_note: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PayoutCommand {
@@ -25,6 +43,8 @@ pub struct PayoutCommand {
     pub source_project_id: i64,
     pub source_challenge_id: i64,
     pub operation_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_operation_key: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +52,29 @@ pub struct CloseCommand {
     pub migration_id: String,
     pub source_project_id: i64,
     pub operation_key: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Command {
+    Submit(SubmitCommand),
+    Payout(PayoutCommand),
+    Close(CloseCommand),
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryCommand {
+    pub migration_id: String,
+    pub source_project_id: i64,
+    pub operation_key: String,
+    #[serde(default)]
+    pub expected_command: Option<Command>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryReceipt {
+    pub command: Command,
+    pub actor_user_id: i64,
+    pub receipt: Receipt,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -118,7 +161,7 @@ impl fmt::Display for Error {
         f.write_str(match self {
             Self::Invalid => "invalid legacy escrow command",
             Self::Unauthorized => "legacy escrow authentication required",
-            Self::Forbidden => "legacy escrow original owner Session required",
+            Self::Forbidden => "legacy escrow original owner or participant Session required",
             Self::Conflict => "legacy escrow operation parameters conflict",
             Self::Missing => "legacy escrow project not found",
             Self::Retry => "legacy escrow transaction retry exhausted",
@@ -162,13 +205,31 @@ impl LegacyEscrowStore {
     }
 
     // @mark migration.bounty-custody role=implementation
+    pub async fn submit(&self, secret: &str, command: &SubmitCommand) -> Result<Receipt, Error> {
+        if command.source_challenge_id <= 0
+            || command.submission_note.len() > 2000
+            || command.submission_note.contains('\0')
+            || (command.issue_url.is_empty() && command.pull_request_url.is_empty())
+            || !evidence_url(&command.issue_url, "issues")
+            || !evidence_url(&command.pull_request_url, "pull")
+        {
+            return Err(Error::Invalid);
+        }
+        self.execute(
+            secret,
+            serde_json::to_value(Command::Submit(command.clone())).map_err(|_| Error::Invalid)?,
+        )
+        .await
+    }
     pub async fn payout(&self, secret: &str, command: &PayoutCommand) -> Result<Receipt, Error> {
         if command.source_challenge_id <= 0 {
             return Err(Error::Invalid);
         }
-        self.execute(secret, serde_json::json!({"kind":"payout", "migration_id":command.migration_id,
-            "source_project_id":command.source_project_id,"source_challenge_id":command.source_challenge_id,
-            "operation_key":command.operation_key})).await
+        self.execute(
+            secret,
+            serde_json::to_value(Command::Payout(command.clone())).map_err(|_| Error::Invalid)?,
+        )
+        .await
     }
     pub async fn close(&self, secret: &str, command: &CloseCommand) -> Result<Receipt, Error> {
         self.execute(
@@ -177,6 +238,45 @@ impl LegacyEscrowStore {
             "source_project_id":command.source_project_id,"operation_key":command.operation_key}),
         )
         .await
+    }
+    /// Reconcile the immutable original key without creating an operation or
+    /// admitting funds. The publisher may inspect submission evidence; another
+    /// participant cannot inspect someone else's operation.
+    pub async fn query(&self, secret: &str, command: &QueryCommand) -> Result<QueryReceipt, Error> {
+        if !valid_key(&command.migration_id)
+            || !valid_key(&command.operation_key)
+            || command.source_project_id <= 0
+        {
+            return Err(Error::Invalid);
+        }
+        let mut tx = self.begin().await?;
+        let actor = personal_actor(&mut tx, secret).await?;
+        let row: Option<(Json<serde_json::Value>, Json<Receipt>, i64, i64, i64)> = sqlx::query_as(
+            "SELECT o.request,o.result,o.actor_user_id,p.owner_user_id,p.payer_account_id FROM core_billing.legacy_escrow_operations o JOIN core_billing.legacy_escrow_projects p USING(migration_id,source_project_id) WHERE o.migration_id=$1 AND o.source_project_id=$2 AND o.operation_key=$3")
+            .bind(&command.migration_id).bind(command.source_project_id).bind(&command.operation_key).fetch_optional(&mut *tx).await?;
+        let (Json(request), Json(receipt), operation_actor, owner, payer) =
+            row.ok_or(Error::Missing)?;
+        if (owner, payer) != (actor.user_id, actor.owner_account_id)
+            && (operation_actor != actor.user_id
+                || request["actor_account_id"].as_i64() != Some(actor.owner_account_id))
+        {
+            return Err(Error::Forbidden);
+        }
+        let original: Command =
+            serde_json::from_value(request["command"].clone()).map_err(|_| Error::Storage)?;
+        if command
+            .expected_command
+            .as_ref()
+            .is_some_and(|expected| expected != &original)
+        {
+            return Err(Error::Conflict);
+        }
+        tx.commit().await?;
+        Ok(QueryReceipt {
+            command: original,
+            actor_user_id: operation_actor,
+            receipt,
+        })
     }
     async fn execute(&self, secret: &str, command: serde_json::Value) -> Result<Receipt, Error> {
         let valid = |value: &str, max: usize| {
@@ -222,17 +322,19 @@ impl LegacyEscrowStore {
     }
     async fn once(&self, secret: &str, command: &serde_json::Value) -> Result<Receipt, Error> {
         let mut tx = self.begin().await?;
-        let actor = crate::identity::authorize_in_transaction(&mut tx, secret).await?;
-        if actor.credential_kind != CredentialKind::Session
-            || actor.owner.kind != AccountKind::Personal
-            || actor.owner.id != actor.user_id
-        {
-            return Err(Error::Forbidden);
-        }
-        let owner: Option<(i64, i64)> = sqlx::query_as("SELECT owner_user_id,payer_account_id FROM core_billing.legacy_escrow_projects WHERE migration_id=$1 AND source_project_id=$2")
+        let actor = personal_actor(&mut tx, secret).await?;
+        let owner: Option<(i64, i64)> = if command["kind"] == "submit" {
+            sqlx::query_as("SELECT participant_user_id,recipient_account_id FROM core_billing.legacy_escrow_claims WHERE migration_id=$1 AND source_project_id=$2 AND source_challenge_id=$3")
+                .bind(command["migration_id"].as_str().ok_or(Error::Invalid)?)
+                .bind(command["source_project_id"].as_i64().ok_or(Error::Invalid)?)
+                .bind(command["source_challenge_id"].as_i64().ok_or(Error::Invalid)?)
+                .fetch_optional(&mut *tx).await?
+        } else {
+            sqlx::query_as("SELECT owner_user_id,payer_account_id FROM core_billing.legacy_escrow_projects WHERE migration_id=$1 AND source_project_id=$2")
             .bind(command["migration_id"].as_str().ok_or(Error::Invalid)?)
             .bind(command["source_project_id"].as_i64().ok_or(Error::Invalid)?)
-            .fetch_optional(&mut *tx).await?;
+            .fetch_optional(&mut *tx).await?
+        };
         if owner.ok_or(Error::Missing)? != (actor.user_id, actor.owner_account_id) {
             return Err(Error::Forbidden);
         }
@@ -257,4 +359,68 @@ impl LegacyEscrowStore {
         }
         Ok(receipt)
     }
+}
+
+fn valid_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b))
+}
+
+fn evidence_url(value: &str, kind: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    if value.len() > 512 {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || url.username() != ""
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.as_str() != value
+    {
+        return false;
+    }
+    let parts: Vec<_> = url.path().split('/').collect();
+    parts.len() == 5
+        && parts[0].is_empty()
+        && !parts[1].is_empty()
+        && parts[1].len() <= 39
+        && parts[1].as_bytes()[0].is_ascii_alphanumeric()
+        && parts[1]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !parts[2].is_empty()
+        && parts[2] != "."
+        && parts[2] != ".."
+        && parts[2]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        && parts[3] == kind
+        && !parts[4].is_empty()
+        && !parts[4].starts_with('0')
+        && parts[4].bytes().all(|b| b.is_ascii_digit())
+}
+
+async fn personal_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    secret: &str,
+) -> Result<crate::identity::Principal, Error> {
+    let actor = crate::identity::authorize_in_transaction(tx, secret).await?;
+    if actor.credential_kind != CredentialKind::Session
+        || actor.owner.kind != AccountKind::Personal
+        || actor.owner.id != actor.user_id
+    {
+        return Err(Error::Forbidden);
+    }
+    Ok(actor)
 }

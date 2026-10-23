@@ -121,7 +121,8 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"core_database" TO :"runtime_role";
 GRANT USAGE ON SCHEMA core_meta, core_identity, core_billing TO :"runtime_role";
 GRANT SELECT ON core_meta.schema_contract, core_meta.component_contract,
-    core_meta.runtime_contract, core_meta.schema_upgrades, core_meta.component_upgrades TO :"runtime_role";
+    core_meta.runtime_contract, core_meta.schema_upgrades, core_meta.component_upgrades,
+    core_meta.ledger_revisions TO :"runtime_role";
 -- Historical source receipts and logs are imported offline. Runtime only reads.
 GRANT USAGE ON SCHEMA core_history TO :"runtime_role";
 GRANT SELECT ON core_history.sources, core_history.log_records,

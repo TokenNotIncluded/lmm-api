@@ -922,3 +922,51 @@ async fn image_authority_requires_explicit_grants_and_preserves_immutable_facts(
     );
     role.cleanup().await;
 }
+
+#[sqlx::test(migrations = false)]
+async fn ledger_revision_metadata_is_readonly_runtime_evidence(pool: PgPool) {
+    core_schema::init(&pool).await.unwrap();
+    let role = runtime::RuntimeRole::create(&pool).await;
+    runtime_database::check(&role.pool, RequiredCapabilities::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*)FROM core_meta.ledger_revisions")
+            .fetch_one(&role.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let denied =
+        sqlx::query("UPDATE core_meta.ledger_revisions SET procedure=procedure WHERE false")
+            .execute(&role.pool)
+            .await
+            .unwrap_err();
+    assert_eq!(
+        denied.as_database_error().unwrap().code().as_deref(),
+        Some("42501")
+    );
+    sqlx::query(&format!(
+        "REVOKE SELECT ON core_meta.ledger_revisions FROM {}",
+        role.name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+        Err(Error::MissingPrivileges)
+    );
+    sqlx::query(&format!(
+        "GRANT SELECT,UPDATE(procedure) ON core_meta.ledger_revisions TO {}",
+        role.name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+        Err(Error::UnsafePrivileges)
+    );
+    role.cleanup().await;
+}

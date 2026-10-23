@@ -53,7 +53,7 @@ ESCROW_SOURCE_FILES = frozenset({"escrow_candidate", "escrow_unit_evidence", "so
 SOURCE_FILES = frozenset({"archive", "source_receipt", "financial_plan", "source_export",
     "source_export_proof", "identity_map", "identity_manifest", "source_review", "reservations"})
 FRESH_EMPTY_TABLES = (
-    "core_meta.schema_upgrades", "core_meta.component_upgrades",
+    "core_meta.schema_upgrades", "core_meta.component_upgrades", "core_meta.ledger_revisions",
     "core_trust_pricing.user_bases", "core_trust_pricing.legacy_paid_orders",
     "core_telegram_auth.bindings", "core_telegram_auth.flows", "core_telegram_auth.assertions",
 )
@@ -195,12 +195,14 @@ def validate_source_review(review, plan, *, candidate=None, unit_evidence=None, 
         fields |= {"escrow_candidate_sha256", "escrow_unit_evidence_sha256", "escrow_policy", "inflight_policy", "inflight_evidence_sha256"}
     require(type(review) is dict and set(review) == fields, "source_review_shape_invalid")
     require(type(review["format_version"]) is int and review["format_version"] == (2 if composed else 1)
-            and review["scope"] == (ESCROW_SCOPE if composed else SCOPE)
-            and review["decision"] == ("approved-offline-opening-with-legacy-escrow" if composed else "approved-offline-opening")
-            and type(review["credits_per_usd"]) is int and review["credits_per_usd"] == 500000
-            and review["other_rights_policy"] == ("all-other-rights-remain-disabled-pending-separate-import" if composed
-                                                 else "remain-disabled-pending-separate-import"),
-            "source_unit_or_review_unproven")
+            and review["scope"] == (ESCROW_SCOPE if composed else SCOPE), "source_review_profile_invalid")
+    require(type(review["credits_per_usd"]) is int and review["credits_per_usd"] == 500000,
+            "source_unit_invalid")
+    require(review["other_rights_policy"] == ("all-other-rights-remain-disabled-pending-separate-import" if composed
+                                             else "remain-disabled-pending-separate-import"),
+            "source_other_rights_policy_invalid")
+    require(review["decision"] == ("approved-offline-opening-with-legacy-escrow" if composed else "approved-offline-opening"),
+            "source_review_required")
     checked_hash(review["evidence_sha256"], "source_review_evidence_missing")
     for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"):
         require(review[key] == plan.get(key), "source_review_binding_mismatch")
@@ -213,6 +215,13 @@ def validate_source_review(review, plan, *, candidate=None, unit_evidence=None, 
                 "escrow_independent_review_missing_or_mismatched")
 
 
+def validate_review_evidence_files(material):
+    files = material["source_files"]
+    require(files["source_review_evidence"]["sha256"] == material["source_review"]["evidence_sha256"]
+            and files["escrow_policy_evidence"]["sha256"] == material["escrow_unit_evidence"].get("source_policy_evidence_sha256"),
+            "escrow_evidence_file_hash_mismatch")
+
+
 def validate_inflight(material):
     evidence = material.get("inflight_evidence")
     require(type(evidence) is dict and set(evidence) == {"format_version", "scope", "basis", "snapshot_relation",
@@ -220,10 +229,11 @@ def validate_inflight(material):
         "source_application_revision", "observed_at", "drain_completed_at", "source_process_identity",
         "process_evidence_sha256", "positions", "source_table_counts", "unresolved_operations"}, "inflight_evidence_shape_invalid")
     require(type(evidence["format_version"]) is int and evidence["format_version"] == 1
-        and evidence["scope"] == "legacy-nonescrow-inflight-zero-evidence"
-        and evidence["basis"] == "source-application-drain-and-durable-state-reconciliation"
-        and evidence["snapshot_relation"] == "after-drain" and evidence["unresolved_operations"] == [],
-        "inflight_reconciliation_unproven")
+        and evidence["scope"] == "legacy-nonescrow-inflight-zero-evidence", "inflight_evidence_profile_invalid")
+    require(evidence["basis"] == "source-application-drain-and-durable-state-reconciliation"
+        and evidence["snapshot_relation"] == "after-drain", "inflight_source_drain_required")
+    require(type(evidence["unresolved_operations"]) is list and evidence["unresolved_operations"] == [],
+            "inflight_unresolved_operations")
     require(all(evidence[k] == material[k] for k in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"))
         and evidence["source_export_sha256"] == material["source_files"]["source_export"]["sha256"]
         and evidence["source_application_revision"] == material["escrow_unit_evidence"]["source_application_revision"],
@@ -253,15 +263,9 @@ def validate_inflight(material):
             "inflight_process_evidence_file_mismatch")
 
 
-# @mark migration.financial-escrow role=writer
-def validate_escrow(material):
-    """Preflight the composed batch without granting economic authority.
-
-    The source-only mapper is rerun from the actual private files before any
-    write. These checks additionally bind the exact reviewed candidate and the
-    Core SQL batch, and check every intermediate native balance for overflow.
-    """
-    candidate, evidence, batch = (material.get(k) for k in ("escrow_candidate", "escrow_unit_evidence", "escrow_batch"))
+def validate_escrow_source_evidence(material):
+    """Check candidate/unit bindings without economics, a target or SQL creation."""
+    candidate, evidence = (material.get(k) for k in ("escrow_candidate", "escrow_unit_evidence"))
     import legacy_escrow_mapping as mapper
     require(type(evidence) is dict and set(evidence) == mapper.UNIT_FIELDS
             and type(evidence["format_version"]) is int and evidence["format_version"] == 1
@@ -291,6 +295,19 @@ def validate_escrow(material):
     raw = candidate.get("batch_candidate")
     require(type(raw) is dict and set(raw) == {"migration_id", "source_archive_sha256", "mapping_sha256",
             "unit", "observed_at", "projects"}, "escrow_candidate_shape_invalid")
+    return raw
+
+
+# @mark migration.financial-escrow role=writer
+def validate_escrow(material):
+    """Preflight the composed batch without granting economic authority.
+
+    The source-only mapper is rerun from the actual private files before any
+    write. These checks additionally bind the exact reviewed candidate and the
+    Core SQL batch, and check every intermediate native balance for overflow.
+    """
+    raw = validate_escrow_source_evidence(material)
+    candidate, evidence, batch = material["escrow_candidate"], material["escrow_unit_evidence"], material.get("escrow_batch")
     require(type(batch) is dict and digest(batch) == digest({**raw, "review_proof_sha256": material["source_review"]["evidence_sha256"]}),
             "escrow_batch_not_reviewed_candidate")
     require(batch["unit"] == "credit_500k_usd" and all(batch[k] == material[k] for k in
@@ -519,9 +536,7 @@ def validate_material(material: dict) -> None:
     if composed:
         validate_escrow(material)
         validate_inflight(material)
-        require(files["source_review_evidence"]["sha256"] == material["source_review"]["evidence_sha256"]
-                and files["escrow_policy_evidence"]["sha256"] == material["escrow_unit_evidence"].get("source_policy_evidence_sha256"),
-                "escrow_evidence_file_hash_mismatch")
+        validate_review_evidence_files(material)
     needed = (4 * len(material["opening"]), sum(bool(row["available_units"] or row["affiliate_units"] or row["reserved_units"])
                                                for row in material["opening"]))
     if composed:
@@ -924,18 +939,173 @@ def execute(material: dict, *, approval: dict, original_sql: str, connection: di
     return outcome
 
 
-def prepare(args, output: Path) -> dict:
-    """Read an existing frozen export; query only the explicitly selected target."""
-    required = ("plan", "source_receipt", "export_proof", "identity_map", "identity_manifest",
-                "source_review", "reservations", "target_receipt", "migration_id", "runtime_role")
-    require(all(getattr(args, name, None) for name in required), "prepare_arguments_missing")
+PREPARE_ARGUMENTS = ("plan", "source_receipt", "export_proof", "identity_map", "identity_manifest",
+                     "source_review", "reservations", "target_receipt", "migration_id", "runtime_role")
+
+
+def validate_prepare_arguments(args):
+    require(all(getattr(args, name, None) for name in PREPARE_ARGUMENTS), "prepare_arguments_missing")
+    require(all(getattr(args, name, None) is None for name in ("material", "sql", "approval", "resolve_attempt")),
+            "execution_arguments_on_prepare")
     composed = getattr(args, "include_legacy_escrow", False)
     require(all(getattr(args, name, None) for name in ESCROW_SOURCE_FILES) if composed else
             all(getattr(args, name, None) is None for name in ESCROW_SOURCE_FILES), "escrow_profile_arguments_mismatch")
+    return composed
+
+
+def validate_target_receipt(target, plan, migration_id):
+    require(type(target) is dict and target.get("status") == "initialized-identity-bound-financial-target"
+            and target.get("application_or_worker_started") is False
+            and target.get("migration_id") == migration_id
+            and target.get("source_archive_sha256") == plan["source_archive_sha256"], "target_receipt_invalid")
+
+
+# @mark migration.financial-readiness role=implementation
+def check_readiness(args, output: Path) -> dict:
+    """Diagnose existing private prerequisites without SQL or financial outputs.
+
+    Hash/shape/binding checks are not economic approval or evidence of current
+    target/runtime state. Full source replanning and mapper replay remain in
+    prepare/execute; this mode does not duplicate the large raw-row DTO.
+    """
+    composed = validate_prepare_arguments(args)
+    checks, values, files = {}, {}, {}
+
+    def check(name, function, dependencies=()):
+        if any(checks[key]["status"] != "PASS" for key in dependencies):
+            checks[name] = {"status": "BLOCKED", "error_code": "readiness_dependency_unavailable"}
+            return
+        try:
+            function()
+            checks[name] = {"status": "PASS"}
+        except Error as error:
+            # All validators use fixed codes. Never print a path, a source value,
+            # a decoder traceback or an operating-system exception message.
+            code = str(error)
+            checks[name] = {"status": "BLOCKED", "error_code": code if re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code)
+                            else "readiness_validation_failed"}
+        except (OSError, ValueError, TypeError, KeyError, PREFLIGHT.FinancialPreflightError):
+            checks[name] = {"status": "BLOCKED", "error_code": "readiness_input_invalid_or_unavailable"}
+
+    json_inputs = {"plan", "source_receipt", "export_proof", "identity_manifest", "source_review",
+                   "reservations", "target_receipt"}
+    if composed:
+        json_inputs |= {"escrow_candidate", "escrow_unit_evidence", "inflight_evidence"}
+    names = json_inputs | {"identity_map"} | (ESCROW_SOURCE_FILES if composed else frozenset())
+    for name in sorted(names):
+        def load(name=name):
+            path = IDENTITY.private_backup_path(getattr(args, name))
+            before = IDENTITY.sha256_file(path)
+            text = read_private(path)
+            require(bool(text.strip()), "readiness_input_empty")
+            if name in json_inputs:
+                value = PLANNER.parse_json(text)
+                require(type(value) is dict, "readiness_input_shape_invalid")
+                if name == "plan":
+                    require(all(type(value.get(key)) is dict for key in ("public_summary", "source_evidence", "identity_provenance"))
+                            and all(type(row) is dict for row in value["source_evidence"].values())
+                            and all(type(value.get(key, [])) is list and all(type(row) is dict for row in value.get(key, []))
+                                    for key in ("wallet_positions", "wallet_transfers")), "readiness_input_shape_invalid")
+                elif name == "source_receipt":
+                    require(type(value.get("archive")) is dict and type(value.get("source")) is dict
+                            and type(value.get("private_metadata_files")) is list
+                            and all(type(path) is str for path in value["private_metadata_files"]), "readiness_input_shape_invalid")
+                elif name == "target_receipt":
+                    require(type(value.get("connection")) is dict, "readiness_input_shape_invalid")
+                values[name] = value
+            elif name == "identity_map":
+                records = [PLANNER.parse_json(line) for line in text.splitlines() if line]
+                require(all(type(row) is dict for row in records), "readiness_input_shape_invalid")
+                values[name] = records
+            require(IDENTITY.sha256_file(path) == before, "readiness_input_changed")
+            files[name] = {"path": str(path), "sha256": before}
+        check("input_" + name, load)
+
+    def source_binding():
+        source, proof, plan = (values[key] for key in ("source_receipt", "export_proof", "plan"))
+        PLANNER.verify_plan_mapping(plan)
+        require(source.get("status") == "snapshot-restored-baseline-verified-frozen-and-classified", "source_receipt_status_invalid")
+        archive = IDENTITY.private_backup_path(Path(source["archive"]["path"]))
+        archive_hash = IDENTITY.sha256_file(archive)
+        require(archive_hash == source["archive"]["sha256"] == proof["source_archive_sha256"] == plan["source_archive_sha256"],
+                "source_archive_binding_mismatch")
+        raw = IDENTITY.private_backup_path(args.export_proof.with_name("source-financial-export.private.jsonl"))
+        raw_hash = IDENTITY.sha256_file(raw)
+        require(raw_hash == proof["source_export_sha256"], "source_export_file_mismatch")
+        _, _, metadata_hashes, _, _ = PLANNER.metadata(source)
+        require(digest(metadata_hashes) == digest(proof["metadata_hashes"]), "source_export_metadata_hash_mismatch")
+        require(proof.get("source_column_coverage_exact") is True and proof.get("source_row_baseline_exact") is True,
+                "source_export_baseline_unproven")
+        require(digest(proof["selected_table_counts"]) == digest({name: row["row_count"] for name, row in plan["source_evidence"].items()}),
+                "source_export_table_selection_mismatch")
+        provenance = PLANNER.bind_identity_provenance(values["identity_manifest"],
+            map_file_sha256=files["identity_map"]["sha256"], source_archive_sha256=archive_hash)
+        require(digest(provenance) == digest(plan["identity_provenance"]), "identity_provenance_mismatch")
+        identities = PLANNER.identity_index(values["identity_map"])
+        require(digest(identities) == plan["identity_map_sha256"], "identity_map_mismatch")
+        values["observation"] = PLANNER.source_observation(source)
+        files.update(archive={"path": str(archive), "sha256": archive_hash}, source_export={"path": str(raw), "sha256": raw_hash})
+    check("source_file_bindings", source_binding,
+          tuple("input_" + name for name in ("source_receipt", "export_proof", "plan", "identity_manifest", "identity_map")))
+
+    def economic_review():
+        validate_source_review(values["source_review"], values["plan"],
+            **({"candidate": values["escrow_candidate"], "unit_evidence": values["escrow_unit_evidence"],
+                "inflight": values["inflight_evidence"]} if composed else {}))
+    review_inputs = ("source_review", "plan", *( ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence") if composed else ()))
+    check("economic_review", economic_review, tuple("input_" + name for name in review_inputs))
+    check("reservation_evidence", lambda: PLANNER.build_opening_payloads(values["plan"], migration_id=args.migration_id,
+          observation=values["observation"], reservation_reconciliation=values["reservations"]),
+          ("source_file_bindings", "input_reservations"))
+    if composed:
+        def context():
+            plan = values["plan"]
+            return {**{key: plan[key] for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256")},
+                "migration_id": args.migration_id, "source_plan": plan, "source_files": files,
+                "source_review": values["source_review"], "escrow_candidate": values["escrow_candidate"],
+                "escrow_unit_evidence": values["escrow_unit_evidence"], "inflight_evidence": values["inflight_evidence"],
+                "escrow_batch": {"observed_at": values["observation"]["observed_at"]},
+                "counters": [{"user_id": row["source_user_id"]} for row in plan["wallet_positions"]]}
+        check("escrow_unit_and_candidate_bindings", lambda: validate_escrow_source_evidence(context()),
+              ("source_file_bindings", "input_source_review", "input_escrow_candidate", "input_escrow_unit_evidence", "input_inflight_evidence"))
+        check("inflight_source_evidence", lambda: validate_inflight(context()),
+              ("source_file_bindings", "input_source_review", "input_escrow_candidate", "input_escrow_unit_evidence", "input_inflight_evidence", "input_inflight_process_evidence"))
+        check("economic_and_policy_evidence_files", lambda: validate_review_evidence_files(context()),
+              ("source_file_bindings", "input_source_review", "input_escrow_unit_evidence", "input_escrow_candidate", "input_inflight_evidence",
+               "input_source_review_evidence", "input_escrow_policy_evidence"))
+
+    def target_declaration():
+        validate_target_receipt(values["target_receipt"], values["plan"], args.migration_id)
+        roles = args.runtime_role
+        connection = values["target_receipt"]["connection"]
+        owner, login = IDENTITY.connection_roles(connection)
+        require(type(roles) is list and roles and len(roles) == len(set(roles))
+                and all(type(role) is str and IDENTITY.IDENTIFIER.fullmatch(role) for role in roles)
+                and not {owner, login}.intersection(roles), "runtime_roles_invalid")
+    check("target_and_role_declarations", target_declaration, ("input_target_receipt", "input_plan"))
+    blockers = sum(row["status"] == "BLOCKED" for row in checks.values())
+    result = {"format_version": 1, "scope": "financial-offline-readiness-v1",
+        "status": "OFFLINE_CHECK_BLOCKED" if blockers else "OFFLINE_CHECK_PASSED", "checks": checks, "blocker_count": blockers,
+        "target_state": "NOT_CHECKED_OFFLINE", "runtime_provision": "NOT_CHECKED_OFFLINE",
+        "source_plan_rebuilt": False, "source_mapper_rebuilt": False, "economic_authority_verified": False,
+        "can_apply": False, "material_created": False, "approval_created": False, "sql_created": False,
+        "source_queries": 0, "target_queries": 0, "target_writes": 0}
+    write_private(output, "readiness.private.json", canonical(result) + "\n")
+    return result
+
+
+def prepare(args, output: Path) -> dict:
+    """Read an existing frozen export; query only the explicitly selected target."""
+    composed = validate_prepare_arguments(args)
     load = lambda path: PLANNER.parse_json(read_private(path))
     source = load(args.source_receipt)
     plan = load(args.plan)
     identity_manifest = load(args.identity_manifest)
+    source_review = load(args.source_review)
+    escrow_inputs = ({name: load(getattr(args, name)) for name in
+                     ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence")} if composed else {})
+    validate_source_review(source_review, plan, candidate=escrow_inputs.get("escrow_candidate"),
+                           unit_evidence=escrow_inputs.get("escrow_unit_evidence"), inflight=escrow_inputs.get("inflight_evidence"))
     provenance = PLANNER.bind_identity_provenance(identity_manifest,
         map_file_sha256=IDENTITY.sha256_file(IDENTITY.private_backup_path(args.identity_map)),
         source_archive_sha256=source["archive"]["sha256"])
@@ -947,10 +1117,7 @@ def prepare(args, output: Path) -> dict:
         primary_keys=proof["source_primary_keys"], column_schema=proof["source_column_schema"])
     require(digest(rebuilt) == digest(plan), "source_plan_rebuild_mismatch")
     target = load(args.target_receipt)
-    require(target.get("status") == "initialized-identity-bound-financial-target"
-            and target.get("application_or_worker_started") is False
-            and target.get("migration_id") == args.migration_id
-            and target.get("source_archive_sha256") == plan["source_archive_sha256"], "target_receipt_invalid")
+    validate_target_receipt(target, plan, args.migration_id)
     connection = target["connection"]
     code, raw = run_sql(connection, "BEGIN READ ONLY;" + inventory_sql() + ";COMMIT;", output,
         "lmm-financial-preview", readonly=True, label="inventory")
@@ -975,9 +1142,9 @@ def prepare(args, output: Path) -> dict:
     files = {name: {"path": str(IDENTITY.private_backup_path(path)), "sha256": IDENTITY.sha256_file(path)}
              for name, path in paths.items()}
     material = prepare_material(plan, migration_id=args.migration_id, identities=identities,
-        observation=PLANNER.source_observation(source), reservations=load(args.reservations), review=load(args.source_review),
+        observation=PLANNER.source_observation(source), reservations=load(args.reservations), review=source_review,
         snapshot=snapshot, target_contract=target["contract"], runtime_roles=args.runtime_role, source_files=files,
-        **({name: load(getattr(args, name)) for name in ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence")} if composed else {}))
+        **escrow_inputs)
     verify_source_files(material)
     sql = build_apply_sql(material)
     write_private(output, "material.private.json", canonical(material) + "\n")
@@ -1005,16 +1172,22 @@ def main() -> int:
     parser.add_argument("--runtime-role", action="append")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prepare", action="store_true")
+    mode.add_argument("--check-readiness", action="store_true", help="Check existing private source prerequisites only; no database access, material, SQL or approval")
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--resolve-attempt", type=Path)
     args = parser.parse_args()
+    output = None
     try:
-        require(args.prepare or (not args.include_legacy_escrow and all(getattr(args, name) is None for name in ESCROW_SOURCE_FILES)),
+        if args.prepare or args.check_readiness:
+            validate_prepare_arguments(args)
+        require(args.prepare or args.check_readiness or (not args.include_legacy_escrow and all(getattr(args, name) is None for name in ESCROW_SOURCE_FILES)),
                 "escrow_prepare_arguments_on_execution")
         IDENTITY.private_backup_path(args.output.parent, directory=True)
         args.output.mkdir(mode=0o700)
         output = IDENTITY.private_backup_path(args.output, directory=True)
-        if args.prepare:
+        if args.check_readiness:
+            result = check_readiness(args, output)
+        elif args.prepare:
             result = prepare(args, output)
         else:
             require(all((args.material, args.approval, args.sql, args.target_receipt)), "apply_arguments_missing")
@@ -1026,13 +1199,18 @@ def main() -> int:
             result = execute(material, approval=approval, original_sql=read_private(args.sql),
                              connection=target["connection"], output=output, original_attempt=original)
         print(canonical(result))
-        return 2 if result["status"] == "UNKNOWN" else 0
+        return 2 if result["status"] == "UNKNOWN" else 1 if result["status"] == "OFFLINE_CHECK_BLOCKED" else 0
     except BrokenPipeError:
         # A missing console ACK does not cancel a committed database transaction.
         return 2
     except (OSError, ValueError, TypeError, KeyError, Error, PREFLIGHT.FinancialPreflightError, subprocess.TimeoutExpired) as error:
-        print(canonical({"status": "REFUSED", "error_code": str(error) if isinstance(error, Error)
-                         else type(error).__name__}), file=sys.stderr)
+        refusal = {"status": "REFUSED", "error_code": str(error) if isinstance(error, Error) else type(error).__name__}
+        if output is not None:
+            try:
+                write_private(output, "refusal.private.json", canonical(refusal) + "\n")
+            except OSError:
+                pass
+        print(canonical(refusal), file=sys.stderr)
         return 1
 
 

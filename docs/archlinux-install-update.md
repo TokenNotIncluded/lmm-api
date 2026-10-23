@@ -473,12 +473,13 @@ Nginx root 不要再追加 `/dist`。
 ### 只更新 Core
 
 提前核对新 Core 与现有 schema、配置和前端 API 的兼容性，准备好更新包。
-先区分下面三种情况；普通更新不改数据库，也不重启 PostgreSQL。
+先区分数据库契约；普通更新不改数据库，也不重启 PostgreSQL。
 
 | 数据库情况 | 执行方式 |
 | --- | --- |
 | 与新程序的完整 schema 契约相同 | 按下面的普通包更新执行 |
-| 符合已核验的 25 组件前置契约，更新到当前 26 组件候选 | 按下一节的显式 `upgrade-db` 流程离线执行 |
+| 精确匹配保留版本 `a398fa77b` 的旧 26 组件契约 | 按下一节显式升级 ledger；组件数仍为 26 |
+| 符合已核验的 25 组件前置契约 | 先用保留且已核验的旧 26 组件 installer 完成历史中间升级，再独立核验 ledger 升级条件 |
 | 固定的 24 → 25 历史升级 | 仅使用保留且已核验的 25 组件 installer；当前二进制不能代替它 |
 | 旧单体、其他版本或结构有漂移 | 使用该来源对应的迁移安排；不能用 `init-db` 或自动补表代替 |
 
@@ -494,20 +495,19 @@ sudo systemctl restart lmm-core.service
 更新后重新核对 MainPID、`/proc/<PID>/exe` 摘要、readiness 和受影响接口。
 这里不运行 `init-db`、`create-first-owner`、`bootstrap-user` 或 `complete-setup`，也不重建数据库。
 
-### Core 25 → 26：显式离线 schema 升级
+### Core 26 ledger 升级
 
-这段说明对应当前源码中的 `upgrade-db`，不是上表 RC4 候选的能力，也不是旧单体迁移入口。
-只在匹配版本完成验收并交付后使用。全新空库直接用新版本 `init-db` 安装 26 个组件，
-已有库只按匹配的前置契约升级。历史 24 → 25 的 `core-24-to-25-trust-pricing-v1`
-合同保留在[独立升级实现](../services/core/src/core_schema/upgrade.rs)，须使用保留的
-25 组件 installer；不能向当前程序传旧请求来跨过前置版本。
+这段说明对应当前源码中的显式 `upgrade-db`，不是上表 RC4 候选的能力，也不是旧单体迁移入口。
+只在匹配版本完成验收并交付后使用。全新空库直接用新版本 `init-db`；已有精确旧 Core 26 库使用
+`core-26-ledger-escrow-submit-v1`。升级前后均为 26 组件、identity v5，仍须核对完整 schema 指纹，
+不能只看组件数或版本字符串判断兼容。
 
-当前过程只接受 PostgreSQL 18 和[固定的 25 组件前置契约](../services/core/src/core_schema/predecessor25.json)，
-使用 `core-additive-components-v1` 增加 `telegram-auth` 组件及升级回执；
-旧对象定义、权限、业务行和序列状态必须保持一致。
-[请求类型](../services/core/src/core_schema/upgrade.rs)和[25 → 26 校验实现](../services/core/src/core_schema/upgrade/additive.rs)
-只接受编译时固定的增量，不接受任意 SQL、权限或来源声明。
-这一步不代替旧余额、管理员激活、账户折扣或 Telegram 身份绑定来源事实的导入。
+该过程只接受 PostgreSQL 18 和 [`a398fa77b` 的固定旧 26 契约](../services/core/src/core_schema/predecessor26.json)。
+[请求类型](../services/core/src/core_schema/upgrade.rs)和[ledger 升级实现](../services/core/src/core_schema/upgrade/ledger.rs)
+只允许编译时固定的提交事件约束、索引、finalize 函数及 `core_meta.ledger_revisions` 回执增量，
+既有业务行、序列和其余对象及权限保持不变，不接受任意 SQL、授权或来源声明。
+新回执由 owner 写入且不可改删，runtime 只有 SELECT；历史托管表和账本序列仍不授 runtime 直接写权限。
+这一步不导入或批准历史资金，也不代替账户折扣、管理员或 Telegram 身份来源事实的导入。
 
 先准备匹配二进制、备份和恢复材料、完整请求与配置，再进入维护窗口：
 
@@ -521,9 +521,9 @@ sudo systemctl restart lmm-core.service
    `schema-manifest` 原始输出与摘要。该命令不接受 `--config`，也不连接数据库：
 
    ```sh
-   /absolute/verified-old/lmm-core schema-manifest > /absolute/private/core-25-manifest.json
-   /absolute/verified-new/lmm-core schema-manifest > /absolute/private/core-26-manifest.json
-   sha256sum /absolute/private/core-25-manifest.json /absolute/private/core-26-manifest.json
+   /absolute/verified-old26/lmm-core schema-manifest > /absolute/private/core-26-before-ledger-manifest.json
+   /absolute/verified-new/lmm-core schema-manifest > /absolute/private/core-26-after-ledger-manifest.json
+   sha256sum /absolute/private/core-26-before-ledger-manifest.json /absolute/private/core-26-after-ledger-manifest.json
    ```
 
 4. 用私密编辑器保存 `/root/lmm-install/core-upgrade.json`，权限设为 `0600`。
@@ -534,7 +534,7 @@ sudo systemctl restart lmm-core.service
    ```json
    {
      "version": 1,
-     "procedure": "core-additive-components-v1",
+     "procedure": "core-26-ledger-escrow-submit-v1",
      "upgrade_id": "<UNIQUE_STABLE_UPGRADE_ID>",
      "database": {
        "name": "<OBSERVED_DATABASE_NAME>",
@@ -548,8 +548,8 @@ sudo systemctl restart lmm-core.service
        "runtime": "<CORE_RUNTIME_ROLE>",
        "extensions": "<EXTENSIONS_RUNTIME_ROLE>"
      },
-     "predecessor_manifest_sha256": "a9c69e01a631fd9e1b005b892ca855fb19a12041c279d04f19b2e9189d4ea301",
-     "predecessor_catalog_sha256": "0d3ceaaf5a3a25d2c372d3ede66890f69073dcb327100e293070ff47bce534ec",
+     "predecessor_manifest_sha256": "310937ea692be55a4b5070e3d6bc2ddf86071945b717e47359d68d3571fad351",
+     "predecessor_catalog_sha256": "05dcb5fadfc11269de196e3730f9f65ff791bd44d499a6d062fc2b3f9c6c0061",
      "successor_manifest_sha256": "<VERIFIED_NEW_MANIFEST_SHA256>"
    }
    ```
@@ -564,6 +564,8 @@ sudo systemctl restart lmm-core.service
    ```
 
    成功回执为 `protocol = core.upgrade-db.v1`、`status = committed`、`components = 26`。
+   核对实际 successor catalog 摘要、原请求摘要及 `core_meta.ledger_revisions` 中的绑定；
+   仅退出成功或组件数相同不能证明升级到了审核过的 ledger 契约。
    若结果为 `unknown`，保留原请求、ID 和原 backend PID，先检查原连接与回执。
    之后显式重用完全相同的请求：已提交会返回 `already_committed`；
    完整旧契约仍在且没有回执时，该调用可能执行升级，并非只读查询。
@@ -576,6 +578,24 @@ sudo systemctl restart lmm-core.service
 
 普通 `serve` 始终只校验数据库，不执行上述 DDL，不修补权限，也不自动升级。
 Go 扩展保持独立；它没有 Core 升级权限。
+
+[历史资金 writer](legacy-financial-opening.md#钱包与托管的显式组合导入)继续要求全新离线目标，
+并拒绝非空升级回执。ledger 升级成功不会使已有资金候选、旧批准或旧目标自动有效；
+这轮资金导入须在匹配新 `init-db` 的隔离目标重新准备和验证。当前真实目标未执行上述升级，真实资金未 apply，
+来源经济审核和进程排空也仍未完成；本节命令不是生产部署或金融导入的执行记录。
+
+### 历史 25 组件库的中间升级
+
+25 → 旧 26 的 `core-additive-components-v1` 只能使用保留且已核验的 `a398fa77b` 旧 26 installer，
+先核对[固定的 25 组件前置契约](../services/core/src/core_schema/predecessor25.json)及其独立恢复材料。
+该历史请求的 predecessor manifest 为 `a9c69e01a631fd9e1b005b892ca855fb19a12041c279d04f19b2e9189d4ea301`，
+predecessor catalog 为 `0d3ceaaf5a3a25d2c372d3ede66890f69073dcb327100e293070ff47bce534ec`；
+successor manifest 必须来自保留 installer 的实际原始输出。不能把本节 ledger 请求换几个版本字段后跨级执行。
+完成历史中间升级也须重新核对旧 26 实际契约，才能另行准备 ledger 升级。
+本轮未执行此历史路径，当前新二进制不能直接把旧 25 库升级为新 ledger 契约。
+
+更早的 24 → 25 使用保留且已核验的 25 组件 installer 和 `core-24-to-25-trust-pricing-v1`；
+不能向当前程序传旧请求来跨过前置版本，也不能用 `init-db` 覆盖已有库。
 
 ### 只更新 Go 扩展
 

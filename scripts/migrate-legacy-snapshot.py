@@ -63,7 +63,7 @@ CORE_SEED_CONTRACT = "fresh26-identity5-trust-policy-telegram-empty-v1"
 REVIEWED_COMPONENTS = {
     'humangrant': ('include_str!("../schema/humangrant.sql")', '7d9437a2ee485bc7491c76e755ca481a7a722c4ea9ae7322fe32ac5f8f0090bc'),
     'identity': ('include_str!("../schema/identity.sql")', 'c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9'),
-    'ledger': ('include_str!("../schema/ledger.sql")', '50a7290ce860b676c38a2cf291f90e73a6d4422e3c7830ca904c6fbc6713e8ce'),
+    'ledger': ('include_str!("../schema/ledger.sql")', '1edf84beaebc03ddc45b52da7f266980b5873905f116e031ef21efbf5fbebe7f'),
     'payments': ('include_str!("../schema/payments.sql")', '9579afddbe5aeb4deb67984e731bcdc6ca405dc619ceede8d92505ecc43f7d39'),
     'charging': ('include_str!("../schema/charging.sql")', '08f0a99e3cc7729627f782ec0341c31353008926b8ec8584c555a6c10dcb53de'),
     'routing': ('include_str!("../schema/routing.sql")', 'd8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e'),
@@ -91,9 +91,9 @@ REVIEWED_COMPONENTS = {
 CORE_COMPONENTS = frozenset(REVIEWED_COMPONENTS)
 CATALOG_QUERY_SHA256 = "7537b9a1dfd8e813d2aa5103467b8a7e3a444e134dd02617ef622117f0d647a3"
 OAUTH_CATALOG_QUERY_SHA256 = "39f6af7c6f19226a9daf794a5b897c630ca87670be3c1059f406fd8b4884cbca"
-INSTALLER_CONTRACT_SHA256 = "6aea904bb49fae92928ffbbac9550dd969ecc8d904874f0c72a649d240511481"
+INSTALLER_CONTRACT_SHA256 = "748237a4f6641d1495bb22684142b566dad9e48e1642d339ea05d0c2db0996dc"
 REVIEWED_RUST_FILES = {
-    'services/core/src/core_schema.rs': 'd7bced696a25d4e3428783a146fb86570f178125507823afc4b9c855357326bc',
+    'services/core/src/core_schema.rs': '514686a060b8080f404b330ca59cc6c3a57230e4d61357be0b06aff48a630f1b',
     'services/core/src/identity/schema.rs': '37a1f70d63bba63bea18d18729772e4678499f2874cce74efd510917c3823343',
     'services/core/src/identity/grants.rs': 'f54840add7d997dc90e6a4f6f817f61b1fc1ff0acb6c8f5a29d6ae1f19f8b060',
     'services/core/src/identity/mod.rs': 'dd25f2848e46fa018e4aa55aa5d80b9fcf4bf766be2773de204f891637b9cefd',
@@ -207,7 +207,8 @@ def installer_metadata(root: Path | None = None) -> bytes:
     require(len(contracts) == 1, "installer_contract_syntax_unknown")
     _reviewed_constant(source, "UPGRADE_METADATA", 'include_str!("../schema/core_upgrade.sql")')
     _reviewed_constant(source, "ADDITIVE_UPGRADE_METADATA", 'include_str!("../schema/component_upgrade.sql")')
-    data = contracts[0].encode("utf-8") + (root / "services/core/schema/core_upgrade.sql").read_bytes() + (root / "services/core/schema/component_upgrade.sql").read_bytes()
+    _reviewed_constant(source, "LEDGER_REVISION_METADATA", 'include_str!("../schema/ledger_revision.sql")')
+    data = contracts[0].encode("utf-8") + (root / "services/core/schema/core_upgrade.sql").read_bytes() + (root / "services/core/schema/component_upgrade.sql").read_bytes() + (root / "services/core/schema/ledger_revision.sql").read_bytes()
     require(hashlib.sha256(data).hexdigest() == INSTALLER_CONTRACT_SHA256, "installer_source_fingerprint_mismatch")
     return data
 
@@ -228,7 +229,7 @@ def current_contract(root: Path | None = None) -> dict:
              "services/core/src/identity/telegram.rs", "services/core/src/billing/trust_pricing.rs",
              "services/core/schema/core_upgrade.sql", "services/core/schema/component_upgrade.sql",
              "services/core/schema/trust_pricing.sql", "services/core/schema/image_trust_extension.sql",
-             "services/core/schema/telegram_auth.sql"}
+             "services/core/schema/telegram_auth.sql", "services/core/schema/ledger_revision.sql"}
     for expression, _ in REVIEWED_COMPONENTS.values():
         include = re.fullmatch(r'include_str!\("\.\./schema/([a-z_]+\.sql)"\)', expression)
         if include:
@@ -331,7 +332,8 @@ def trust_policy_seed_guard_sql(contract: dict) -> str:
 
 def upgrade_receipts_guard_sql() -> str:
     return ("EXISTS(SELECT 1 FROM core_meta.schema_upgrades) "
-            "OR EXISTS(SELECT 1 FROM core_meta.component_upgrades)")
+            "OR EXISTS(SELECT 1 FROM core_meta.component_upgrades) "
+            "OR EXISTS(SELECT 1 FROM core_meta.ledger_revisions)")
 
 
 def fresh_seed_hash_query() -> str:
@@ -989,7 +991,7 @@ BEGIN
  IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid()) THEN
   RAISE EXCEPTION 'target has other database clients';
  END IF;
- LOCK TABLE core_meta.schema_contract,core_meta.component_contract,core_meta.runtime_contract,core_meta.schema_upgrades,core_meta.component_upgrades,core_migration.import_runs IN ACCESS EXCLUSIVE MODE;
+ LOCK TABLE core_meta.schema_contract,core_meta.component_contract,core_meta.runtime_contract,core_meta.schema_upgrades,core_meta.component_upgrades,core_meta.ledger_revisions,core_migration.import_runs IN ACCESS EXCLUSIVE MODE;
  IF (SELECT count(*) FROM core_meta.schema_contract)<>1 OR NOT EXISTS (SELECT 1 FROM core_meta.schema_contract WHERE singleton AND version={IDENTITY_VERSION} AND encode(fingerprint,'hex')={sql_literal(fingerprint)}) THEN
   RAISE EXCEPTION 'identity contract mismatch';
  END IF;
