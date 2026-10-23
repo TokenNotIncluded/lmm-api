@@ -1028,6 +1028,7 @@ def main() -> int:
     # @mark migration.financial-rights role=cli
     parser.add_argument("--source-rights-preview", action="store_true", help="Audit only a verified frozen export; produce source facts with unknown rights, never opening payloads or approval")
     parser.add_argument("--target-key-inventory", type=Path, help="Optional private offline Key export for source-rights preview comparison only; never reads or writes a target database")
+    parser.add_argument("--target-wallet-inventory", type=Path, help="Optional private offline wallet/debt/affiliate observation for source-rights preview; compares source integers without approving monetary units or reservations")
     opening_modes = parser.add_mutually_exclusive_group()
     opening_modes.add_argument("--opening-preview", action="store_true", help="Prepare only the reviewed-zero opening candidate; never apply other financial families")
     opening_modes.add_argument("--apply-opening", action="store_true", help="Apply one separately approved opening-only batch to a new owned offline target")
@@ -1048,6 +1049,8 @@ def main() -> int:
                 "opening_counters_require_opening_mode")
         require(args.target_key_inventory is None or args.source_rights_preview,
                 "target_key_inventory_requires_source_rights_preview")
+        require(args.target_wallet_inventory is None or args.source_rights_preview,
+                "target_wallet_inventory_requires_source_rights_preview")
         if args.source_rights_preview:
             require(args.reuse_export_proof is not None and not opening_mode and all(value is None for value in
                 (args.target_receipt, args.reservation_evidence, args.reservation_review, args.opening_approval, args.opening_attempt)),
@@ -1114,16 +1117,28 @@ def main() -> int:
                 # Reject bearer strings hidden in untrusted target metadata
                 # before retaining the original bytes in the private output.
                 helper.reject_known_key_secrets(financial, inventory, tokens)
+            wallet_inventory, wallet_inventory_bytes = None, None
+            if args.target_wallet_inventory is not None:
+                wallet_path = IDENTITY.private_backup_path(args.target_wallet_inventory)
+                wallet_inventory_bytes = wallet_path.read_bytes()
+                wallet_inventory = parse_json(wallet_inventory_bytes.decode("utf-8"))
+                helper.validate_target_wallet_inventory(financial, wallet_inventory)
+                helper.reject_known_key_secrets(financial, wallet_inventory, tokens)
             rights = helper.build(financial, tables=tables, identities=identities, plan=plan, proof=proof,
                 identity_map_file_sha256=manifest["identity_map_file_sha256"],
                 identity_manifest_file_sha256=manifest["identity_manifest_file_sha256"], tool_hashes=tool_hashes,
-                target_key_inventory=inventory)
+                target_key_inventory=inventory, target_wallet_inventory=wallet_inventory)
             if inventory_bytes is not None:
                 artifacts["target-key-inventory.private.json"] = inventory_bytes.decode("utf-8")
                 inventory_hash = hashlib.sha256(inventory_bytes).hexdigest()
                 manifest.update(target_key_inventory_file_sha256=inventory_hash,
                     target_key_inventory_typed_sha256=digest(inventory),
                     target_key_inventory_provenance_verified=False)
+            if wallet_inventory_bytes is not None:
+                artifacts["target-wallet-inventory.private.json"] = wallet_inventory_bytes.decode("utf-8")
+                manifest.update(target_wallet_inventory_file_sha256=hashlib.sha256(wallet_inventory_bytes).hexdigest(),
+                    target_wallet_inventory_typed_sha256=digest(wallet_inventory),
+                    target_wallet_inventory_provenance_verified=False)
             rights_text = canonical(rights) + "\n"
             artifacts["source-rights-reconciliation.private.json"] = rights_text
             manifest.update(scope="financial-source-rights-preview-only",
@@ -1146,7 +1161,8 @@ def main() -> int:
                         "source_rights_artifact_copy_hash_mismatch")
             verify_tool_source_hashes(tool_hashes)
             print(canonical(rights["public_summary"]))
-            return 1 if args.target_key_inventory is not None and not rights["key_reconciliation_passed"] else 0
+            return int((args.target_key_inventory is not None and not rights["key_reconciliation_passed"])
+                       or (args.target_wallet_inventory is not None and not rights["wallet_reconciliation_passed"]))
         # Full source facets are private planner materials, not approval.
         full_manifest = build_full_financial_manifest(plan, tables, identities, source_proof=proof,
                                                      source_observation=manifest["source_observation"])
