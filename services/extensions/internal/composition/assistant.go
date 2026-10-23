@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/personalization"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_market"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/personalization"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant_market"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant_services"
 )
 
 func validateAssistantSelection(cfg Config) error {

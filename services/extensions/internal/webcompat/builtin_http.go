@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/wallet"
 )
 
 type BuiltinHTTP struct {

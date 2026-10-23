@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments"
 )
 
 type paymentStatusFake struct {

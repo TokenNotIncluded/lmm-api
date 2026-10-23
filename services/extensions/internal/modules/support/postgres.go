@@ -6,7 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 	"time"
 )
 

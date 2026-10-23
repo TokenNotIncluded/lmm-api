@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	client "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	client "github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
 	_ "github.com/lib/pq"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

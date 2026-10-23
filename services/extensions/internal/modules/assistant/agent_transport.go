@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 )
 
 type CoreAgentTurnPort struct{ client *coreclient.AssistantClient }

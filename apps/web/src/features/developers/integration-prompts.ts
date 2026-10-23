@@ -1,7 +1,7 @@
 /* Copyright (C) 2026 LIghtJUNction. AGPL-3.0-or-later. */
 
 export const LMM_ISSUER = 'https://api.lmm.best'
-export const LMM_SOURCE = 'https://github.com/TokenNotIncluded/api.lmm.best'
+export const LMM_SOURCE = 'https://github.com/TokenNotIncluded/lmm-api'
 
 // Copyable technical artifacts deliberately use English; the surrounding UI is localized.
 export const PRICING_PROMPT = `Integrate LMM model pricing into this project. First inspect its framework, HTTP client, authentication and tests; reuse the existing stack and check dependencies before adding anything. Explain your changes in the language of our conversation.
@@ -15,10 +15,10 @@ Provider: https://api.lmm.best
 6. Add HTTP boundary tests for success, empty catalog, null versus zero prices, different group rates, token versus per-image units, 401/403, 404, 429, timeout and invalid JSON. Do not make paid model requests to test the catalog.
 
 Source contracts:
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/pricing_http.rs
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/model_http/pricing.rs
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/model_http/catalog.rs
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/oauth2_http.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/pricing_http.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/model_http/pricing.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/model_http/catalog.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/oauth2_http.rs
 Deliver the implementation, configuration example without credentials, and test results.`
 
 export const OAUTH_PROMPT = `Integrate LMM OAuth into this project where the provider contract supports it. First inspect the application type and existing auth libraries; check installed dependencies and reuse the current stack. Explain your work in the language of our conversation.
@@ -42,8 +42,8 @@ For a registered native client:
 - Test callback cancellation, mismatched state/issuer, expired/replayed code, denied scopes, timeout, refresh concurrency, token revocation and unavailable discovery with mocks. Do not request a user's password or API key in chat.
 
 Source contract:
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/oauth2_http.rs
-https://github.com/TokenNotIncluded/api.lmm.best/blob/wip/rust-core-go-extensions/services/core/src/identity/grants/protocol.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/oauth2_http.rs
+https://github.com/TokenNotIncluded/lmm-api/blob/wip/rust-core-go-extensions/services/core/src/identity/grants/protocol.rs
 Deliver code only for supported, registered flows; clearly list remaining provider prerequisites and test results.`
 
 export const PRICING_EXAMPLE = `export async function getLmmPricing() {

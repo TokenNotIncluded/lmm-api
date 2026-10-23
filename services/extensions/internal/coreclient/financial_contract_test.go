@@ -3,7 +3,7 @@ package coreclient
 import (
 	"testing"
 
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"

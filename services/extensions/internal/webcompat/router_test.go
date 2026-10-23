@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
 )
 
 // These are in-process transport/lifecycle tests using fake domain ports.

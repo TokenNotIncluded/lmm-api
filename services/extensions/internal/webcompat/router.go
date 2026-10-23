@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 )
 
 // Mount keeps interactive Web traffic separate from the service-token module

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 )
 
 var ErrGiftUnknown = errors.New("assistant_gift_unknown")

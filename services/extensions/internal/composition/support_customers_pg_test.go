@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/support"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/support"
 )
 
 type customerPGAuthority struct{}

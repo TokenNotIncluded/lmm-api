@@ -1,6 +1,6 @@
 //! Persisted Web console contract; no runtime schema or initialization writes.
 //!
-//! Adapted from TokenNotIncluded/api.lmm.best main 7be6ee81a5089a558cad34d95851bcc8bb80061c:
+//! Adapted from TokenNotIncluded/lmm-api main 7be6ee81a5089a558cad34d95851bcc8bb80061c:
 //! apps/api-go/model/mandatory_announcement.go and controller/{mandatory_announcement,setup,misc}.go;
 //! apps/api-rust/src/routes/mandatory_announcements.rs (AGPL-3.0-or-later).
 //! Preserve the Go revision bytes and its transaction-captured acknowledgement response.

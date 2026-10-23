@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/testkit"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/promotions"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/testkit"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/promotions"
 )
 
 var ctx = context.Background()

@@ -1,5 +1,5 @@
 // Copyright (C) 2026 LIghtJUNction. SPDX-License-Identifier: AGPL-3.0-or-later.
-// Web DTOs preserve the contract of TokenNotIncluded/api.lmm.best main
+// Web DTOs preserve the contract of TokenNotIncluded/lmm-api main
 // 6efcb6fb0f6d: apps/api-go/model/tool_market{,_queries,_private,_access}.go.
 package toolmarket
 

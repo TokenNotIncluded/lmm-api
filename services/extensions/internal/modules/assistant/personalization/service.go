@@ -10,9 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	services "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	services "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant_services"
 )
 
 type Service struct {

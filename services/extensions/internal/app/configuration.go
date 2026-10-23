@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
 )
 
 const defaultConfigPath = "/etc/lmm.conf.d/extensions.toml"

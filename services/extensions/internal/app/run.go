@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/composition"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/legal"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/webcompat"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/composition"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/legal"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant_services"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/webcompat"
 )
 
 func Run() error {

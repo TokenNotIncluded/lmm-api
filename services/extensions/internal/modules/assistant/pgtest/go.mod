@@ -1,9 +1,9 @@
-module github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/pgtest
+module github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/pgtest
 
 go 1.25.0
 
 require (
-	github.com/TokenNotIncluded/api.lmm.best/extensions v0.0.0
+	github.com/TokenNotIncluded/lmm-api/extensions v0.0.0
 	github.com/lib/pq v1.10.9
 )
 
@@ -19,4 +19,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 )
 
-replace github.com/TokenNotIncluded/api.lmm.best/extensions => ../../../..
+replace github.com/TokenNotIncluded/lmm-api/extensions => ../../../..

@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
 )
 
 type legacyMeteringDocument struct {

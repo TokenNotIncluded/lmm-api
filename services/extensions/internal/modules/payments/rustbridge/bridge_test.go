@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
+	p "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

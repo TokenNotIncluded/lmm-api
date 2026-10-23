@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 )
 
 // PaymentPublicStatus is the wallet read model. It is not a balance and it

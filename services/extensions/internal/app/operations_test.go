@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/legal"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/legal"
 )
 
 func TestListenerGuardsScriptsBeforeOutermostSharedMux(t *testing.T) {

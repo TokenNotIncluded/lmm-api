@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/toolmarket"
 )
 
 func TestBuiltinAndImageReadinessRequireExactLivePurposeACK(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 	_ "github.com/lib/pq"
 )
 

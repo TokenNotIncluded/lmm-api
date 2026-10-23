@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules"
 )
 
 const (

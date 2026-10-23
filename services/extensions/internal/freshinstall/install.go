@@ -13,14 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/postgresurl"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant_services"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/postgresurl"
 	"github.com/lib/pq"
 )
 

@@ -2,7 +2,7 @@ package composition
 
 import (
 	"errors"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
 	"path/filepath"
 	"strings"
 )

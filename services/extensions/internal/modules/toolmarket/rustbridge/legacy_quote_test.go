@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/toolmarket"
 	"math"
 	"net"
 	"net/http"

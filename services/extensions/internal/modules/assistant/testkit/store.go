@@ -7,8 +7,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/storage"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/storage"
 )
 
 type Store struct {

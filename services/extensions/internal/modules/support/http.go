@@ -1,7 +1,7 @@
 package support
 
 import (
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 	"net/http"
 )
 
