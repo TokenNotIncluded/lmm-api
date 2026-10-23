@@ -706,6 +706,74 @@ async fn readiness_requires_its_purpose_host_bearer_not_personal_session() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+// @mark wallet.http_identity_boundary
+#[sqlx::test(migrations = false)]
+async fn repeated_identity_headers_cannot_prepare_a_transfer(pool: PgPool) {
+    let f = setup(&pool).await;
+    let app = http::internal_router(f.store.clone(), vec![b'x'; 32]).unwrap();
+    let initial: i64 = sqlx::query_scalar("SELECT count(*) FROM core_billing.ledger_journals")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut statuses = Vec::new();
+    for header in ["authorization", "x-lmm-user-credential"] {
+        for second in ["", "ambiguous-other-identity"] {
+            let request = HttpRequest::builder()
+                .method("POST")
+                .uri("/internal/wallet/v1/prepare")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", "x".repeat(32)))
+                .header("x-lmm-user-credential", &f.sender)
+                .header(header, second)
+                .body(Body::from(
+                    serde_json::json!({
+                        "amount_credits": 100,
+                        "request_key": "wallet-duplicate-identity",
+                        "token": "a".repeat(64)
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            statuses.push(app.clone().oneshot(request).await.unwrap().status());
+        }
+    }
+    let transfers: i64 = sqlx::query_scalar("SELECT count(*) FROM core_wallet.transfers")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let journals: i64 = sqlx::query_scalar("SELECT count(*) FROM core_billing.ledger_journals")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(statuses, vec![StatusCode::UNAUTHORIZED; 4]);
+    assert_eq!(transfers, 0);
+    assert_eq!(journals, initial);
+}
+
+#[tokio::test]
+async fn repeated_browser_origin_is_rejected_before_cookie_or_database_access() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unreachable@127.0.0.1:1/unreachable")
+        .unwrap();
+    let app = http::browser_router(Store::new(pool), "https://wallet.example".into()).unwrap();
+    for second in ["https://wallet.example", "https://evil.example", ""] {
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/core/v1/wallet/confirm/create/1")
+            .header("content-type", "application/json")
+            .header("origin", "https://wallet.example")
+            .header("origin", second)
+            .body(Body::from(
+                serde_json::json!({"csrf": "a".repeat(64)}).to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
 #[tokio::test]
 async fn readiness_rejects_wrong_protocol_user_credentials_and_nonempty_body_without_db() {
     let pool = sqlx::postgres::PgPoolOptions::new()
