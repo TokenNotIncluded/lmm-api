@@ -60,23 +60,28 @@ pub fn internal_router(store: Store, token: Vec<u8>) -> Result<Router, Error> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadyInput {}
+// @mark wallet.http_identity_boundary
+fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        None
+    } else {
+        Some(value)
+    }
+}
 async fn ready(
     State(s): State<Internal>,
     h: HeaderMap,
     Json(_): Json<ReadyInput>,
 ) -> Result<Response, Error> {
-    let single = |name: &str| {
-        let mut values = h.get_all(name).iter();
-        let value = values.next().and_then(|v| v.to_str().ok());
-        if values.next().is_some() { None } else { value }
-    };
-    let host = single("authorization")
+    let host = single_header(&h, "authorization")
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(Error::Unauthorized)?;
     if host.len() != s.token.len() || !bool::from(host.as_bytes().ct_eq(&s.token)) {
         return Err(Error::Unauthorized);
     }
-    if single("x-lmm-protocol") != Some("1") {
+    if single_header(&h, "x-lmm-protocol") != Some("1") {
         return Err(Error::Invalid);
     }
     if h.contains_key("x-lmm-user-credential") {
@@ -107,18 +112,13 @@ async fn internal(
     h: HeaderMap,
     Json(i): Json<Input>,
 ) -> Result<Response, Error> {
-    let host = h
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
+    let host = single_header(&h, "authorization")
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(Error::Unauthorized)?;
     if host.len() != s.token.len() || !bool::from(host.as_bytes().ct_eq(&s.token)) {
         return Err(Error::Unauthorized);
     }
-    let session = h
-        .get("x-lmm-user-credential")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(Error::Unauthorized)?;
+    let session = single_header(&h, "x-lmm-user-credential").ok_or(Error::Unauthorized)?;
     let out = match action.as_str() {
         "balance" => serde_json::to_value(s.store.balance(session).await?),
         "prepare" => serde_json::to_value(
@@ -216,7 +216,7 @@ async fn confirm(
     h: HeaderMap,
     Json(i): Json<Confirmation>,
 ) -> Result<Response, Error> {
-    if h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) != Some(&s.origin) {
+    if single_header(&h, "origin") != Some(s.origin.as_str()) {
         return Err(Error::Forbidden);
     }
     let t = s.store.confirm(cookie(&h)?, id, &i.csrf, &kind).await?;
