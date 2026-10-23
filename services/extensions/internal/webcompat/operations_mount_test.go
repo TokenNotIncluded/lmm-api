@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/operations"
 )
 
 func TestMountOperationsSharesAdmissionAndGuardsBothEntries(t *testing.T) {

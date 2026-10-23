@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
 )
 
 func responseBody(t *testing.T, w *httptest.ResponseRecorder) map[string]json.RawMessage {

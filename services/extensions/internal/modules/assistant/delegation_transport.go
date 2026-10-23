@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
+	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

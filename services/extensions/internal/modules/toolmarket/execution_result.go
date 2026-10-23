@@ -4,7 +4,7 @@ package toolmarket
 import (
 	"encoding/json"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/redaction"
 )
 
 // Results written by older versions must pass the same output filter as new

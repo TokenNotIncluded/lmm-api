@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
 )
 
 type assistantGiftFixture struct {

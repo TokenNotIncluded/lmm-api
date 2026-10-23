@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
 )
 
 type StoreService interface {

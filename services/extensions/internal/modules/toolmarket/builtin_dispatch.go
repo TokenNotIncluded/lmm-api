@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/wallet"
 )
 
 type BuiltinContext struct {

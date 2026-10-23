@@ -1,9 +1,9 @@
-module github.com/TokenNotIncluded/api.lmm.best/extensions/protocoltests
+module github.com/TokenNotIncluded/lmm-api/services/extensions/protocoltests
 
 go 1.25.0
 
 require (
-	github.com/TokenNotIncluded/api.lmm.best/extensions v0.0.0
+	github.com/TokenNotIncluded/lmm-api/services/extensions v0.0.0
 	github.com/lib/pq v1.10.9
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.11
@@ -16,4 +16,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 )
 
-replace github.com/TokenNotIncluded/api.lmm.best/extensions => ../../../../services/extensions
+replace github.com/TokenNotIncluded/lmm-api/services/extensions => ../../../../services/extensions

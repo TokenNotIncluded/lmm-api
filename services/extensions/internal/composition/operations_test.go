@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/operations"
 )
 
 func TestOperationsConfigurationRequiresExplicitSelection(t *testing.T) {

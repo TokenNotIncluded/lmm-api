@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 )
 
 // AgentToolScope is copied only from an authenticated Core round receipt. A

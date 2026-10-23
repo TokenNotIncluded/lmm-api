@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
 )
 
 type PaymentsConfig struct {

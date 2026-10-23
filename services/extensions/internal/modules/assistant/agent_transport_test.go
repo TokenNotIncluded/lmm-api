@@ -3,7 +3,7 @@ package assistant
 import (
 	"encoding/hex"
 	"errors"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
 	"strings"
 	"testing"
 )

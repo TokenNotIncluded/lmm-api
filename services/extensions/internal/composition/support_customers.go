@@ -3,8 +3,8 @@ package composition
 import (
 	"context"
 	"errors"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/support"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/support"
 )
 
 func validateSupportCustomersSelection(cfg Config) error {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	p "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
 )
 
 // These are real Go processes and PostgreSQL commits. replayCore is still a

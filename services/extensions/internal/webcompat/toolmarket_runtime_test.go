@@ -2,7 +2,7 @@
 package webcompat
 
 import (
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
 	"net/http"
 	"net/http/httptest"
 	"testing"

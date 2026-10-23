@@ -13,8 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/support"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/support"
 )
 
 // SupportService owns authorization against the real conversation/order parties

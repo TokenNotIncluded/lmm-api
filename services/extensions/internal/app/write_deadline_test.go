@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
 )
 
 type writeDeadlineModule struct{ handler http.Handler }

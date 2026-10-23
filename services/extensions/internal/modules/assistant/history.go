@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 )
 
 const HistoryPrivacyNotice = "你与助手的对话不是私密通信，请勿发送个人信息、密码、API Key、Cookie 或其他凭证。敏感内容会被自动脱敏。"

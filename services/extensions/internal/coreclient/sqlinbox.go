@@ -6,7 +6,7 @@ import (
 	_ "embed"
 	"errors"
 
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

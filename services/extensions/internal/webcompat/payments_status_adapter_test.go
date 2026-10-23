@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
 )
 
 // Development tests exercise the real Service.Get and Mount paths with narrow

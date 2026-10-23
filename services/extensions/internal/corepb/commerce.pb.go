@@ -369,7 +369,7 @@ const file_lmm_core_v1_commerce_proto_rawDesc = "" +
 	"\x0fExecuteCommerce\x12#.lmm.core.v1.ExecuteCommerceRequest\x1a\x1c.lmm.core.v1.CommerceReceipt\x12V\n" +
 	"\rQueryCommerce\x12!.lmm.core.v1.QueryCommerceRequest\x1a\".lmm.core.v1.QueryCommerceResponse\x12V\n" +
 	"\x10CompleteDelivery\x12$.lmm.core.v1.CompleteDeliveryRequest\x1a\x1c.lmm.core.v1.CommerceReceipt\x12\\\n" +
-	"\x11ReconcileCommerce\x12#.lmm.core.v1.ExecuteCommerceRequest\x1a\".lmm.core.v1.QueryCommerceResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\x11ReconcileCommerce\x12#.lmm.core.v1.ExecuteCommerceRequest\x1a\".lmm.core.v1.QueryCommerceResponseBPZNgithub.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_commerce_proto_rawDescOnce sync.Once

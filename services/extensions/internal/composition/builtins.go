@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket/rustbridge"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket/rustbridge"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/wallet"
 )
 
 // BuiltinDependencies contains already-loaded purpose credentials. The caller
