@@ -199,8 +199,71 @@ def key_quota_reconciliation(F, *, tables, identities, plan, target_key_inventor
 
 
 # @mark migration.financial-rights role=implementation
+def validate_target_wallet_inventory(F, inventory):
+    """Validate an offline native-bucket observation, never a monetary approval."""
+    if inventory is None:
+        return {}
+    F.require(type(inventory) is dict and set(inventory) == {"format_version", "scope", "unit", "records"}
+        and type(inventory["format_version"]) is int and inventory["format_version"] == 1
+        and inventory["scope"] == "legacy-wallet-positions" and inventory["unit"] == "credit_500k_usd"
+        and type(inventory["records"]) is list, "reconciliation_target_wallet_inventory_invalid")
+    fields = {"source_user_id", "account_id", "wallet_units", "debt_units_signed", "affiliate_units"}
+    result, accounts = {}, set()
+    for row in inventory["records"]:
+        F.require(type(row) is dict and set(row) == fields, "reconciliation_target_wallet_shape_invalid")
+        for field in ("source_user_id", "account_id"):
+            F.integer(row[field], "reconciliation_target_wallet_identity_invalid", minimum=1)
+        F.require(row["source_user_id"] not in result and row["account_id"] not in accounts,
+                  "reconciliation_target_wallet_duplicate")
+        F.integer(row["wallet_units"], "reconciliation_target_wallet_amount_invalid", minimum=0)
+        F.integer(row["debt_units_signed"], "reconciliation_target_wallet_amount_invalid", maximum=0)
+        F.integer(row["affiliate_units"], "reconciliation_target_wallet_amount_invalid")
+        result[row["source_user_id"]] = row
+        accounts.add(row["account_id"])
+    return result
+
+
+# @mark migration.financial-rights role=implementation
+def wallet_position_reconciliation(F, *, tables, identities, target_wallet_inventory=None):
+    """Compare stored source integers with observed wallet/debt/affiliate buckets.
+
+    Deliberately recompute from raw source, not wallet_positions in the planner.
+    Equal integers do not establish historical currency/unit conversion, runtime
+    reservations, escrow rights, or completeness/authenticity of the observation.
+    """
+    targets = validate_target_wallet_inventory(F, target_wallet_inventory)
+    records = []
+    for source in tables["users"]:
+        uid = source["id"]
+        quota = F.integer(source["quota"], "reconciliation_wallet_source_integer_invalid")
+        facts = {"account_id": identities[uid], "wallet_units": max(quota, 0),
+                 "debt_units_signed": min(quota, 0),
+                 "affiliate_units": F.integer(source["aff_quota"], "reconciliation_wallet_source_integer_invalid")}
+        target = targets.pop(uid, None)
+        mismatches = ([field for field, value in facts.items() if F.digest(target[field]) != F.digest(value)]
+                      if target is not None else [])
+        records.append({"source_user_id": uid, "source_row_sha256": F.digest(source),
+            "expected_source_positions": facts, "observed_target_positions": target,
+            "comparison": "missing_in_target" if target is None else "field_mismatch" if mismatches else "matched",
+            "mismatched_fields": mismatches})
+    for uid, target in sorted(targets.items()):
+        records.append({"source_user_id": uid, "observed_target_positions": target,
+                        "comparison": "unexpected_in_target", "mismatched_fields": []})
+    passed = target_wallet_inventory is not None and all(row["comparison"] == "matched" for row in records)
+    return {"scope": "offline-source-integer-to-target-wallet-debt-affiliate-comparison",
+        "status": "matched-source-integers-only" if passed else "failed", "passed": passed,
+        "target_inventory_supplied": target_wallet_inventory is not None,
+        "target_inventory_sha256": F.digest(target_wallet_inventory) if target_wallet_inventory is not None else None,
+        "target_inventory_provenance_verified": False, "target_inventory_scope_completeness_verified": False,
+        "target_state_complete": False, "source_unit_provenance_verified": False,
+        "reserved_units_verified": False, "escrow_rights_verified": False, "economic_approval_created": False,
+        "record_count": len(records), "comparison_counts": dict(Counter(row["comparison"] for row in records)),
+        "records": records, "target_queries": 0, "target_writes": 0}
+
+
+# @mark migration.financial-rights role=implementation
 def build(F, *, tables, identities, plan, proof, identity_map_file_sha256,
-          identity_manifest_file_sha256, tool_hashes, target_key_inventory=None):
+          identity_manifest_file_sha256, tool_hashes, target_key_inventory=None, target_wallet_inventory=None):
     # Validate key states before any private projection, including grouped state.
     F.map_key_limits(tables.get("tokens", []), identities)
     F.verify_plan_mapping(plan)
@@ -335,14 +398,21 @@ def build(F, *, tables, identities, plan, proof, identity_map_file_sha256,
                 "blocking_reason": "source-model-provenance-and-full-economic-review-not-established"})
     keys = key_quota_reconciliation(F, tables=tables, identities=identities, plan=plan,
                                     target_key_inventory=target_key_inventory)
+    wallet_comparison = wallet_position_reconciliation(F, tables=tables, identities=identities,
+                                                       target_wallet_inventory=target_wallet_inventory)
+    status = ("failed-wallet-reconciliation" if target_wallet_inventory is not None and not wallet_comparison["passed"]
+              else "blocked-for-opening-economic-review" if keys["passed"] else "failed-key-reconciliation")
+    wallet_summary = {key: value for key, value in wallet_comparison.items() if key != "records"}
     spec = importlib.util.spec_from_file_location("legacy_bounty_basis", Path(__file__).with_name("legacy_bounty_basis.py"))
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
     bounty = helper.build(F, tables=tables, identities=identities, plan=plan)
     result = {"format_version": 1, "digest_format": F.DIGEST_FORMAT,
         "scope": "source-rights-reconciliation-only",
-        "status": "blocked-for-opening-economic-review" if keys["passed"] else "failed-key-reconciliation",
+        "status": status,
         "key_reconciliation_passed": keys["passed"],
+        "wallet_reconciliation_passed": wallet_comparison["passed"],
+        "wallet_position_reconciliation": wallet_comparison,
         "source_archive_sha256": proof["source_archive_sha256"], "source_export_sha256": proof["source_export_sha256"],
         "identity_map_file_sha256": identity_map_file_sha256, "identity_manifest_file_sha256": identity_manifest_file_sha256,
         "financial_mapping_sha256": plan["mapping_sha256"], "tool_source_hashes": tool_hashes,
@@ -360,8 +430,10 @@ def build(F, *, tables, identities, plan, proof, identity_map_file_sha256,
         "raw_export_preserved": True, "families_overlap_do_not_sum": True,
         "unprojected_tables_are_not_proven_clear": True,
         "selected_export_is_not_full_database": True, "full_database_rights_cleared": False,
-        "public_summary": {"status": "blocked-for-opening-economic-review" if keys["passed"] else "failed-key-reconciliation",
+        "public_summary": {"status": status,
             "key_reconciliation_passed": keys["passed"],
+            "wallet_reconciliation_passed": wallet_comparison["passed"],
+            "wallet_position_reconciliation": wallet_summary,
             "full_source_manifest_created": False, "raw_source_rows_copied": False,
             "bounty_rebase_lineage": bounty["public_summary"],
             "key_quota_reconciliation": {"status": keys["status"], "record_count": keys["record_count"],

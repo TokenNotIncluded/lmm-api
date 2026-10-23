@@ -122,6 +122,28 @@ matched，也不授权激活或证明单位与历史部署规则正确。实际�
 实现与反例沿用 `migration.financial-rights`，开发者测试见
 [`scripts/test_legacy_key_reconciliation.py`](../scripts/test_legacy_key_reconciliation.py)。
 
+### 钱包、债务和返佣的目标比较
+
+`--source-rights-preview --target-wallet-inventory PATH` 可增加一份独立准备的私有目标观察，
+逐用户比较钱包、债务和返佣三个桶。此参数只用于离线来源预览，不连接或写入数据库，
+不能用于普通 planner 或 opening 模式。文件遵守同样的 `~/Backups` 私有路径和 JSON 检查规则。
+
+清单根字段为 `format_version=1`、`scope=legacy-wallet-positions`、`unit=credit_500k_usd`
+及 `records`。每条记录只含 `source_user_id`、`account_id`、`wallet_units`、
+`debt_units_signed`、`affiliate_units`；身份必须是正整数且用户、账户各自唯一。
+钱包不得为负，债务不得为正，返佣保留有符号整数；布尔值或浮点数不能充当整数。
+不得从迁移计划生成这份目标观察来代替真实读回。
+
+对账直接从冻结来源整数计算期望值，并与已有的来源到计划核对组合使用；逐条输出
+`matched / missing_in_target / unexpected_in_target / field_mismatch`。
+提供清单后，任何非 matched 使 `wallet_reconciliation_passed=false`，命令退出 `1`，
+保留差异报告。未提供清单仍可生成来源预览，但钱包比较不能判为通过。
+完整结果位于 `wallet_position_reconciliation`，清单字节与带类型内容的 hash 分别绑定到 manifest。
+
+即使全部整数匹配，状态也仅为 `matched-source-integers-only`：目标观察的数据库来源与完整性、
+来源单位、预留和托管权利仍未证明，`target_state_complete=false`。
+这不生成经济批准或导入 payload，也不替代真实 PostgreSQL 迁移和独立业务验收。
+
 ## 支持范围
 
 单位固定为整数 `credit_500k_usd`，`1 USD = 500000 credits`。
