@@ -18,6 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type SystemInstanceStatus = 'online' | 'stale'
 
+/** Version and resource facts for one split native service process. */
+export type SystemProcessInfo = {
+  version?: string
+  pid?: number
+  started_at?: number
+  cpu_percent?: number
+  memory_bytes?: number
+  memory_percent?: number
+  threads?: number
+  [key: string]: unknown
+}
+
 export type SystemInstanceInfo = {
   schema_version?: number
   reporter?: {
@@ -57,6 +69,31 @@ export type SystemInstanceInfo = {
       usage_percent?: number
       [key: string]: unknown
     }
+    /** Host-wide sample, distinct from process-level samples below. */
+    system?: {
+      cpu?: {
+        usage_percent?: number
+        cores?: number
+        load_1?: number
+        load_5?: number
+        load_15?: number
+        [key: string]: unknown
+      }
+      memory?: {
+        total_bytes?: number
+        used_bytes?: number
+        free_bytes?: number
+        usage_percent?: number
+        [key: string]: unknown
+      }
+      [key: string]: unknown
+    }
+    /** Core and Extensions process samples, keyed by service name. */
+    processes?: {
+      core?: SystemProcessInfo
+      extensions?: SystemProcessInfo
+      [key: string]: SystemProcessInfo | undefined
+    }
     storage?: {
       total_bytes?: number
       used_bytes?: number
@@ -67,6 +104,30 @@ export type SystemInstanceInfo = {
     [key: string]: unknown
   }
   [key: string]: unknown
+}
+
+export type SystemResourceSnapshot = {
+  schema_version: number
+  observed_at_unix_ms: number
+  sample_window_ms: number
+  system: {
+    logical_cpus: number
+    load_average: {
+      one: number
+      five: number
+      fifteen: number
+    }
+    cpu_usage_percent: number
+    memory_total_bytes: number
+    memory_available_bytes: number
+    memory_used_bytes: number
+    memory_usage_percent: number
+  }
+  processes: {
+    core?: SystemProcessInfo
+    extensions?: SystemProcessInfo
+    [key: string]: SystemProcessInfo | undefined
+  }
 }
 
 export type SystemInstance = {

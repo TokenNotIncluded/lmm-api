@@ -69,9 +69,15 @@ import { cn } from '@/lib/utils'
 import {
   deleteStaleSystemInstance,
   deleteStaleSystemInstances,
+  getNativeSystemResources,
   listSystemInstances,
 } from '../api'
-import type { SystemInstance, SystemInstanceStatus } from '../types'
+import type {
+  SystemInstance,
+  SystemInstanceStatus,
+  SystemProcessInfo,
+  SystemResourceSnapshot,
+} from '../types'
 
 const INSTANCE_POLL_INTERVAL_MS = 30_000
 const INSTANCE_SKELETON_KEYS = [
@@ -394,6 +400,7 @@ function ResourceCell(props: ResourceCellProps) {
 
 type SystemInstancesTableProps = {
   instances: SystemInstance[]
+  native?: SystemResourceSnapshot
   deletingReporterId: string | null
   isDeletingInstance: boolean
   onDeleteStaleInstance: (instance: SystemInstance) => void
@@ -553,6 +560,188 @@ function StorageCell(props: { instance: SystemInstance }) {
         ) : undefined
       }
     />
+  )
+}
+
+function processInfo(
+  instance: SystemInstance,
+  name: 'core' | 'extensions'
+): SystemProcessInfo | undefined {
+  return instance.info?.resources?.processes?.[name]
+}
+
+function RuntimeMetric(props: {
+  label: string
+  value?: number
+  format?: (value: number) => string
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='flex items-center justify-between gap-3 text-xs'>
+      <span className='text-muted-foreground'>{props.label}</span>
+      <span className='font-mono tabular-nums'>
+        {typeof props.value === 'number'
+          ? (props.format?.(props.value) ?? String(props.value))
+          : t('Not sampled')}
+      </span>
+    </div>
+  )
+}
+
+function RuntimeResourceCard(props: {
+  label: string
+  version?: string
+  pid?: number
+  cpuPercent?: number
+  memoryBytes?: number
+  memoryBytesLabel?: string
+  memoryTotalBytes?: number
+  memoryPercent?: number
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='bg-card rounded-md border p-3'>
+      <div className='flex items-center justify-between gap-2'>
+        <span className='text-sm font-medium'>{props.label}</span>
+        {props.version ? (
+          <Badge variant='outline' className='font-mono text-[10px]'>
+            {props.version}
+          </Badge>
+        ) : null}
+      </div>
+      <div className='mt-2 space-y-1.5'>
+        <RuntimeMetric
+          label={t('CPU')}
+          value={props.cpuPercent}
+          format={formatPercent}
+        />
+        <RuntimeMetric
+          label={t('Memory')}
+          value={props.memoryPercent}
+          format={formatPercent}
+        />
+        {typeof props.memoryBytes === 'number' ? (
+          <RuntimeMetric
+            label={props.memoryBytesLabel ?? t('RSS')}
+            value={props.memoryBytes}
+            format={formatBytes}
+          />
+        ) : null}
+        {typeof props.memoryTotalBytes === 'number' ? (
+          <RuntimeMetric
+            label={t('Total')}
+            value={props.memoryTotalBytes}
+            format={formatBytes}
+          />
+        ) : null}
+        <div className='flex items-center justify-between gap-3 text-xs'>
+          <span className='text-muted-foreground'>{t('PID')}</span>
+          <span className='font-mono tabular-nums'>
+            {typeof props.pid === 'number' ? props.pid : t('Not reported')}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type ResourceBreakdownRow = {
+  instance: SystemInstance | null
+  system?: NonNullable<
+    NonNullable<NonNullable<SystemInstance['info']>['resources']>['system']
+  >
+  core?: SystemProcessInfo
+  extensions?: SystemProcessInfo
+}
+
+/**
+ * Shows host-wide samples separately from the two service processes. The
+ * backend may add these fields independently; absent samples stay explicit.
+ */
+function RuntimeResourceBreakdown(props: {
+  instances: SystemInstance[]
+  native?: SystemResourceSnapshot
+}) {
+  const { t } = useTranslation()
+  const rows: ResourceBreakdownRow[] = props.instances.flatMap((instance) => {
+    const resources = instance.info?.resources
+    const system = resources?.system
+    const core = processInfo(instance, 'core')
+    const extensions = processInfo(instance, 'extensions')
+    if (!system && !core && !extensions) return []
+    return [{ instance, system, core, extensions }]
+  })
+  if (props.native) {
+    rows.push({
+      instance: null,
+      system: {
+        cpu: { usage_percent: props.native.system.cpu_usage_percent },
+        memory: {
+          usage_percent: props.native.system.memory_usage_percent,
+          used_bytes: props.native.system.memory_used_bytes,
+          free_bytes: props.native.system.memory_available_bytes,
+          total_bytes: props.native.system.memory_total_bytes,
+        },
+      },
+      core: props.native.processes.core,
+      extensions: props.native.processes.extensions,
+    })
+  }
+  if (rows.length === 0) return null
+
+  return (
+    <section className='mt-4 space-y-3 border-t pt-4'>
+      <div>
+        <h4 className='text-sm font-semibold'>{t('Service resource breakdown')}</h4>
+        <p className='text-muted-foreground mt-0.5 text-xs'>
+          {t(
+            'System samples describe the host. Core and Extensions values describe their own processes.'
+          )}
+        </p>
+      </div>
+      <div className='grid gap-3 lg:grid-cols-3'>
+        {rows.map(({ instance, system, core, extensions }) => {
+          const key = instance ? getReporterId(instance) : 'native-services'
+          return (
+            <div key={key} className='space-y-2'>
+              <div className='text-muted-foreground truncate font-mono text-[11px]'>
+                {instance ? getInstanceDisplayName(instance) : t('Native services')}
+              </div>
+              {system ? (
+                <RuntimeResourceCard
+                  label={t('System')}
+                  cpuPercent={system.cpu?.usage_percent}
+                  memoryBytes={system.memory?.used_bytes}
+                  memoryBytesLabel={t('Used')}
+                  memoryTotalBytes={system.memory?.total_bytes}
+                  memoryPercent={system.memory?.usage_percent}
+                />
+              ) : null}
+              {core ? (
+                <RuntimeResourceCard
+                  label={t('Core process')}
+                  version={core.version}
+                  pid={core.pid}
+                  cpuPercent={core.cpu_percent}
+                  memoryBytes={core.memory_bytes}
+                  memoryPercent={core.memory_percent}
+                />
+              ) : null}
+              {extensions ? (
+                <RuntimeResourceCard
+                  label={t('Extensions process')}
+                  version={extensions.version}
+                  pid={extensions.pid}
+                  cpuPercent={extensions.cpu_percent}
+                  memoryBytes={extensions.memory_bytes}
+                  memoryPercent={extensions.memory_percent}
+                />
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -802,6 +991,10 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
           </TableBody>
         </Table>
       </div>
+      <RuntimeResourceBreakdown
+        instances={props.instances}
+        native={props.native}
+      />
     </>
   )
 }
@@ -823,6 +1016,13 @@ export function SystemInstancesPanel() {
       }
       return res.data
     },
+    staleTime: 30 * 1000,
+    retry: false,
+    refetchInterval: INSTANCE_POLL_INTERVAL_MS,
+  })
+  const nativeResourcesQuery = useQuery({
+    queryKey: ['system-info', 'native-resources'],
+    queryFn: getNativeSystemResources,
     staleTime: 30 * 1000,
     retry: false,
     refetchInterval: INSTANCE_POLL_INTERVAL_MS,
@@ -948,6 +1148,7 @@ export function SystemInstancesPanel() {
       <div className='p-4 sm:p-5'>
         <SystemInstancesList
           instances={instances}
+          native={nativeResourcesQuery.data}
           deletingReporterId={deletingReporterId}
           isDeletingInstance={
             isMutatingInstance || deleteStaleInstancesMutation.isPending

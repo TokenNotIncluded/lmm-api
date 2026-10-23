@@ -43,6 +43,7 @@ pub mod remote_control;
 pub mod routing;
 pub mod runtime_database;
 pub mod support_projection;
+pub mod system_info;
 #[cfg(test)]
 #[path = "../tests/common/runtime.rs"]
 pub(crate) mod test_runtime;
