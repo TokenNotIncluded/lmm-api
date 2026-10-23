@@ -879,18 +879,22 @@ def build_full_financial_manifest(plan: dict, tables: dict[str, list[dict]], ide
     return result
 
 
-def tool_source_hashes(*, source_rights=False) -> dict:
+def tool_source_hashes(*, source_rights=False, escrow_candidate=False) -> dict:
     result = {"importer_sha256": IDENTITY.sha256_file(Path(__file__)),
               "identity_helper_sha256": IDENTITY.sha256_file(Path(IDENTITY.__file__)),
               "financial_preflight_helper_sha256": IDENTITY.sha256_file(Path(FINANCIAL_PREFLIGHT.__file__))}
     if source_rights:
         result["reconciliation_helper_sha256"] = IDENTITY.sha256_file(Path(__file__).with_name("legacy_financial_reconciliation.py"))
         result["bounty_basis_helper_sha256"] = IDENTITY.sha256_file(Path(__file__).with_name("legacy_bounty_basis.py"))
+    if escrow_candidate:
+        result["escrow_mapping_helper_sha256"] = IDENTITY.sha256_file(Path(__file__).with_name("legacy_escrow_mapping.py"))
     return result
 
 
 def verify_tool_source_hashes(expected: dict) -> None:
-    require(tool_source_hashes(source_rights="reconciliation_helper_sha256" in expected) == expected, "financial_tool_source_changed_during_run")
+    require(tool_source_hashes(source_rights="reconciliation_helper_sha256" in expected,
+                              escrow_candidate="escrow_mapping_helper_sha256" in expected) == expected,
+            "financial_tool_source_changed_during_run")
 
 
 def metadata(receipt: dict):
@@ -1029,6 +1033,10 @@ def main() -> int:
     parser.add_argument("--source-rights-preview", action="store_true", help="Audit only a verified frozen export; produce source facts with unknown rights, never opening payloads or approval")
     parser.add_argument("--target-key-inventory", type=Path, help="Optional private offline Key export for source-rights preview comparison only; never reads or writes a target database")
     parser.add_argument("--target-wallet-inventory", type=Path, help="Optional private offline wallet/debt/affiliate observation for source-rights preview; compares source integers without approving monetary units or reservations")
+    parser.add_argument("--escrow-candidate-preview", action="store_true",
+                        help="Include a frozen historical escrow proposal in source-rights preview; never approves or applies it")
+    parser.add_argument("--escrow-unit-evidence", type=Path,
+                        help="Optional private independently established unit evidence for the escrow proposal; not import approval")
     opening_modes = parser.add_mutually_exclusive_group()
     opening_modes.add_argument("--opening-preview", action="store_true", help="Prepare only the reviewed-zero opening candidate; never apply other financial families")
     opening_modes.add_argument("--apply-opening", action="store_true", help="Apply one separately approved opening-only batch to a new owned offline target")
@@ -1051,6 +1059,10 @@ def main() -> int:
                 "target_key_inventory_requires_source_rights_preview")
         require(args.target_wallet_inventory is None or args.source_rights_preview,
                 "target_wallet_inventory_requires_source_rights_preview")
+        require(not args.escrow_candidate_preview or args.source_rights_preview,
+                "escrow_candidate_requires_source_rights_preview")
+        require(args.escrow_unit_evidence is None or args.escrow_candidate_preview,
+                "escrow_unit_evidence_requires_candidate_preview")
         if args.source_rights_preview:
             require(args.reuse_export_proof is not None and not opening_mode and all(value is None for value in
                 (args.target_receipt, args.reservation_evidence, args.reservation_review, args.opening_approval, args.opening_attempt)),
@@ -1060,7 +1072,8 @@ def main() -> int:
                     (args.target_receipt,args.reservation_evidence,args.reservation_review)), "opening_frozen_reviewed_inputs_required")
             require(not (args.apply_opening or args.reconcile_opening) or args.opening_approval is not None, "opening_approval_required")
         require(IDENTITY.MIGRATION_ID.fullmatch(args.migration_id) is not None, "migration_id_invalid")
-        tool_hashes = tool_source_hashes(source_rights=args.source_rights_preview)
+        tool_hashes = tool_source_hashes(source_rights=args.source_rights_preview,
+                                       escrow_candidate=args.escrow_candidate_preview)
         IDENTITY.private_backup_path(args.output.parent, directory=True)
         args.output.mkdir(mode=0o700)
         output = IDENTITY.private_backup_path(args.output, directory=True)
@@ -1070,7 +1083,8 @@ def main() -> int:
         identity_manifest = parse_json(identity_manifest_path.read_text())
         identity_provenance = bind_identity_provenance(identity_manifest, map_file_sha256=IDENTITY.sha256_file(map_path),
                                                       source_archive_sha256=source.get("archive", {}).get("sha256"))
-        identities = identity_index([parse_json(line) for line in map_path.read_text().splitlines() if line])
+        identity_records = [parse_json(line) for line in map_path.read_text().splitlines() if line]
+        identities = identity_index(identity_records)
         tables, proof = (reuse_frozen_export(source, args.reuse_export_proof, output,
                                           publish_proof=not args.source_rights_preview) if args.reuse_export_proof
                          else export_source(source, output))
@@ -1128,6 +1142,27 @@ def main() -> int:
                 identity_map_file_sha256=manifest["identity_map_file_sha256"],
                 identity_manifest_file_sha256=manifest["identity_manifest_file_sha256"], tool_hashes=tool_hashes,
                 target_key_inventory=inventory, target_wallet_inventory=wallet_inventory)
+            if args.escrow_candidate_preview:
+                import legacy_escrow_mapping
+                unit_evidence, unit_bytes = None, None
+                if args.escrow_unit_evidence is not None:
+                    unit_path = IDENTITY.private_backup_path(args.escrow_unit_evidence)
+                    unit_bytes = unit_path.read_bytes()
+                    unit_evidence = parse_json(unit_bytes.decode("utf-8"))
+                    helper.reject_known_key_secrets(financial, unit_evidence, tokens)
+                candidate = legacy_escrow_mapping.build(financial, tables=tables,
+                    identity_records=identity_records, plan=plan, migration_id=args.migration_id,
+                    observed_at=manifest["source_observation"]["observed_at"],
+                    source_proof=proof, unit_evidence=unit_evidence)
+                candidate_text = canonical(candidate) + "\n"
+                artifacts["escrow-candidate.private.json"] = candidate_text
+                manifest.update(escrow_candidate_file_sha256=hashlib.sha256(candidate_text.encode("utf-8")).hexdigest(),
+                                escrow_candidate_typed_sha256=digest(candidate))
+                rights["public_summary"]["escrow_candidate"] = candidate["public_summary"]
+                if unit_bytes is not None:
+                    artifacts["escrow-unit-evidence.private.json"] = unit_bytes.decode("utf-8")
+                    manifest.update(escrow_unit_evidence_file_sha256=hashlib.sha256(unit_bytes).hexdigest(),
+                                    escrow_unit_evidence_typed_sha256=digest(unit_evidence))
             if inventory_bytes is not None:
                 artifacts["target-key-inventory.private.json"] = inventory_bytes.decode("utf-8")
                 inventory_hash = hashlib.sha256(inventory_bytes).hexdigest()
