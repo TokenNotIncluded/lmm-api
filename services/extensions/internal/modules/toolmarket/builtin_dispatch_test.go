@@ -3,7 +3,7 @@ package toolmarket
 import (
 	"context"
 	"encoding/json"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
 	"strings"
 	"testing"
 )

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 LIghtJUNction. AGPL-3.0-or-later.
 package assistant
 
-import "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/redaction"
+import "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
 
 const assistantHistoryMessageMaxRunes = 4000
 const assistantConversationTitleMaxRunes = 120

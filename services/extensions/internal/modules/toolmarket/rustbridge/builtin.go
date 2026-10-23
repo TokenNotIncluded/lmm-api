@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 // AuthorizeBuiltin consumes the Core-owned binding on the private market UDS.

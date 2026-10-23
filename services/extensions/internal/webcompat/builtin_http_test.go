@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/wallet"
+	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
 )
 
 type builtinSessionCore struct {

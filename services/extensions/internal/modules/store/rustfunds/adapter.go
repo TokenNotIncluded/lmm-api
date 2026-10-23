@@ -5,8 +5,8 @@ package rustfunds
 import (
 	"context"
 	"encoding/json"
-	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
 )
 
 type Core interface {

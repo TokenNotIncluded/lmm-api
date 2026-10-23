@@ -4,7 +4,7 @@ package rustbridge
 import (
 	"context"
 	"errors"
-	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 var _ market.CoreLegacyMarketOAuth = (*Adapter)(nil)

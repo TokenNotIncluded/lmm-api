@@ -3,7 +3,7 @@ package app
 import (
 	"errors"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/composition"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/composition"
 )
 
 type ToolMarketBuiltinsConfig struct {

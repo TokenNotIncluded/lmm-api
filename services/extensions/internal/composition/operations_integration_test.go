@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
 )
 
 // Only a newly created, owned private cluster may supply these fixture files.

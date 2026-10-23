@@ -1205,7 +1205,7 @@ const file_lmm_core_v1_payments_proto_rawDesc = "" +
 	"\fCommitRefund\x12!.lmm.core.v1.ResolveRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12O\n" +
 	"\rReleaseRefund\x12!.lmm.core.v1.ResolveRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12V\n" +
 	"\x13ApplyExternalRefund\x12\".lmm.core.v1.ExternalRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12W\n" +
-	"\x11GetPaymentReceipt\x12%.lmm.core.v1.GetPaymentReceiptRequest\x1a\x1b.lmm.core.v1.PaymentReceiptBPZNgithub.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepbb\x06proto3"
+	"\x11GetPaymentReceipt\x12%.lmm.core.v1.GetPaymentReceiptRequest\x1a\x1b.lmm.core.v1.PaymentReceiptBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_payments_proto_rawDescOnce sync.Once

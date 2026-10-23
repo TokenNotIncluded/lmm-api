@@ -1,6 +1,6 @@
 syntax = "proto3";
 package lmm.core.v1;
-option go_package = "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepb";
+option go_package = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepb";
 import "lmm/core/v1/commands.proto";
 
 // Task 10 handoff, NOT registered. User actions need current user authorization

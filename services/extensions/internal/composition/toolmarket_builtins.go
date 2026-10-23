@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
 )
 
 // ToolMarketBuiltinConfig selects purpose-scoped authorities on one Core UDS. No

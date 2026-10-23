@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 func drawingTestServer(t *testing.T, handler http.HandlerFunc) *DrawingAdapter {

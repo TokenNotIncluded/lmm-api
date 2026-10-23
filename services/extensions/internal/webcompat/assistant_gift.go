@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
 )
 
 type AssistantGifts interface {

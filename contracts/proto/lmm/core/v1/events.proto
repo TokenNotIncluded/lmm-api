@@ -1,6 +1,6 @@
 syntax = "proto3";
 package lmm.core.v1;
-option go_package = "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepb";
+option go_package = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepb";
 
 // Durable, service-scoped subscriptions. No user or service secrets in messages.
 // Subscriptions are provisioned by core configuration, NOT by this service.

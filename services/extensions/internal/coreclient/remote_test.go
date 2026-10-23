@@ -2,7 +2,7 @@ package coreclient
 
 import (
 	"context"
-	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
+	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
 	"google.golang.org/grpc/metadata"
 	"strings"
 	"testing"

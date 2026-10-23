@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
 )
 
 // Respond preserves the legacy success/message/data envelope. Errors are

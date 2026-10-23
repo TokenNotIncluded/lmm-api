@@ -13,8 +13,8 @@ output="$root/services/extensions"
 if [[ ${1:-} == --check ]]; then output="$tools/generated"; fi
 mkdir -p "$output/internal/corepb"
 protoc -I "$root/contracts/proto" \
-  --go_out="$output" --go_opt=module=github.com/TokenNotIncluded/lmm-api/services/extensions \
-  --go-grpc_out="$output" --go-grpc_opt=module=github.com/TokenNotIncluded/lmm-api/services/extensions \
+  --go_out="$output" --go_opt=module=github.com/TokenNotIncluded/api.lmm.best/extensions \
+  --go-grpc_out="$output" --go-grpc_opt=module=github.com/TokenNotIncluded/api.lmm.best/extensions \
   "$root/contracts/proto/lmm/core/v1/"*.proto
 # Distro protoc versions change this comment, not the contract.
 sed -i -E 's@^//[[:space:]]+(-[[:space:]]+)?protoc[[:space:]]+v[0-9.]+$@// protoc: proto3 compiler (version header normalized)@' \

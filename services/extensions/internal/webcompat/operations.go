@@ -13,9 +13,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/operations"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
 )
 
 // RegisterOperations installs only the content routes. The parent must supply

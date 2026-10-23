@@ -5,7 +5,7 @@ package toolmarket
 import (
 	"context"
 	"encoding/json"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/redaction"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
 	"strings"
 	"unicode"
 	"unicode/utf8"

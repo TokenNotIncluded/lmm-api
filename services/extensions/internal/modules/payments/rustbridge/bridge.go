@@ -7,9 +7,9 @@ import (
 	"context"
 	"crypto/sha256"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
-	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
-	p "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
+	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

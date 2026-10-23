@@ -1,9 +1,9 @@
-module github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/historypgtest
+module github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/historypgtest
 
 go 1.27.2
 
 require (
-	github.com/TokenNotIncluded/lmm-api/services/extensions v0.0.0
+	github.com/TokenNotIncluded/api.lmm.best/extensions v0.0.0
 	github.com/lib/pq v1.10.9
 )
 
@@ -26,4 +26,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/TokenNotIncluded/lmm-api/services/extensions => ../../../..
+replace github.com/TokenNotIncluded/api.lmm.best/extensions => ../../../..
