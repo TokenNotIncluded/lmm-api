@@ -26,6 +26,9 @@ config/legal/site.json
 
 # Private acceptance evidence, credentials and unrelated recovery material.
 .local-tests/
+/output/
+/.scratch/
+/scripts/.key-rights-test-output/
 undefined/
 .agcc/
 .ruff_cache/
