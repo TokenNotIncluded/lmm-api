@@ -1,6 +1,6 @@
 [Unit]
 Description=@PACKAGE@ (preview)
-Documentation=https://github.com/TokenNotIncluded/lmm-api
+Documentation=https://github.com/TokenNotIncluded/api.lmm.best
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=60

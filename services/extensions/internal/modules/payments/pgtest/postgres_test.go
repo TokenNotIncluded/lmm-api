@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	p "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
+	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
 	_ "github.com/lib/pq"
 )
 

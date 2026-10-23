@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 // SearchConfig is an immutable, host-reviewed provider selection. Queries never

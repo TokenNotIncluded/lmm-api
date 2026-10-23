@@ -11,7 +11,7 @@ import (
 	"mime"
 	"net/http"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 var toolMarketDrawingUploadSlots = make(chan struct{}, 1)

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
 )
 
 type customerRepo struct{ *webMemoryRepo }

@@ -3,7 +3,7 @@ package assistant_services
 import (
 	"context"
 	"encoding/json"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
 	"strings"
 	"testing"
 	"time"

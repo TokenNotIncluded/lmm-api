@@ -102,7 +102,7 @@ def prepare(args: argparse.Namespace, root: Path = ROOT) -> Path:
             f"pkgname={name}", f"pkgver={pkgver}", f"pkgrel={pkgrel}",
             f"pkgdesc={shell('LMM API ' + ('Rust core' if component == 'core' else 'Go extensions') + ' (prebuilt binary)')}",
             "arch=(" + " ".join(shell(a) for a in sorted(archives)) + ")",
-            "url='https://github.com/TokenNotIncluded/lmm-api'",
+            "url='https://github.com/TokenNotIncluded/api.lmm.best'",
             "license=('AGPL-3.0-or-later')",
             f'provides=("lmm-api-{component}=${{pkgver}}" "{program}=${{pkgver}}")',
             "conflicts=(" + " ".join(shell(p) for p in (program, f"{program}-bin", f"lmm-api-{component}")) + ")",
@@ -114,7 +114,7 @@ def prepare(args: argparse.Namespace, root: Path = ROOT) -> Path:
         for arch, data in sorted(archives.items()):
             dependencies = data["info"]["dependencies"]
             lines += ["depends_" + arch + "=(" + " ".join(shell(d) for d in dependencies) + ")",
-                      f"source_{arch}=({shell('https://github.com/TokenNotIncluded/lmm-api/releases/download/' + quote(args.tag, safe='') + '/' + data['archive'])})",
+                      f"source_{arch}=({shell('https://github.com/TokenNotIncluded/api.lmm.best/releases/download/' + quote(args.tag, safe='') + '/' + data['archive'])})",
                       f"sha256sums_{arch}=({shell(data['sha256'])})"]
         lines += ["", "package() {", '  cd "$srcdir" || return 1']
 

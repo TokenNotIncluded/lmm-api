@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 // Synthetic UDS transfer test; independent real CorePG verification is separate.

@@ -140,7 +140,9 @@ GRANT SELECT ON core_billing.ledger_accounts, core_billing.balance_state,
     core_billing.opening_imports, core_billing.account_opening_counters,
     core_billing.legacy_escrow_batch_runs, core_billing.legacy_escrow_projects,
     core_billing.legacy_escrow_claims, core_billing.legacy_escrow_disputes,
-    core_billing.legacy_escrow_state, core_billing.legacy_escrow_operations TO :"runtime_role";
+    core_billing.legacy_escrow_state, core_billing.legacy_escrow_operations,
+    core_billing.legacy_pending_liabilities,
+    core_billing.legacy_pending_liability_receipts TO :"runtime_role";
 -- Imported administrator approval remains owner-only. Runtime reads frozen
 -- facts for guarded identity changes and the complete permission snapshot.
 -- Approval receipts and the migration registry are not runtime inputs.

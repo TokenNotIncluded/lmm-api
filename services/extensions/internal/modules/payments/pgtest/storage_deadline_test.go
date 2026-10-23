@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
-	p "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
 )
 
 // No Core method may run: these probes exercise blocked storage or missing

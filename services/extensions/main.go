@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/app"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/app"
 )
 
 func main() {

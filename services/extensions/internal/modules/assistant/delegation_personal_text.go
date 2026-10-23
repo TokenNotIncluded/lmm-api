@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
 )
 
 // Personal text admission is a separate Core capability. Its text digest is

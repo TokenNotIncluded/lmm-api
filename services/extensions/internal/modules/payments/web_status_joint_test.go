@@ -19,12 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/app"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
-	p "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments/rustbridge"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/webcompat"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/app"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments/rustbridge"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/webcompat"
 	_ "github.com/lib/pq"
 )
 

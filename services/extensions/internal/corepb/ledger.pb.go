@@ -1194,7 +1194,7 @@ const file_lmm_core_v1_ledger_proto_rawDesc = "" +
 	"CoreLedger\x12M\n" +
 	"\n" +
 	"PostLedger\x12\x1e.lmm.core.v1.PostLedgerRequest\x1a\x1f.lmm.core.v1.PostLedgerResponse\x12_\n" +
-	"\x10GetLedgerBalance\x12$.lmm.core.v1.GetLedgerBalanceRequest\x1a%.lmm.core.v1.GetLedgerBalanceResponseBPZNgithub.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepbb\x06proto3"
+	"\x10GetLedgerBalance\x12$.lmm.core.v1.GetLedgerBalanceRequest\x1a%.lmm.core.v1.GetLedgerBalanceResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_ledger_proto_rawDescOnce sync.Once

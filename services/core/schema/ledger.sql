@@ -1173,3 +1173,145 @@ REVOKE ALL ON core_billing.legacy_escrow_batch_runs,core_billing.legacy_escrow_p
 REVOKE ALL ON FUNCTION core_billing.import_legacy_escrow_batch(JSONB),core_billing.legacy_escrow_finalize(JSONB,BIGINT,BIGINT),
     core_billing.legacy_escrow_keys(JSONB,TEXT[]),core_billing.legacy_escrow_uint(JSONB,BOOLEAN),core_billing.legacy_escrow_id(JSONB),core_billing.legacy_escrow_hash(JSONB),
     core_billing.legacy_escrow_guard_state(),core_billing.legacy_escrow_check_remaining() FROM PUBLIC;
+
+-- Historical provider orders that were still unresolved at the source
+-- snapshot.  These are evidence-only liabilities: they never become a
+-- wallet, debt, reserved, affiliate, or ledger balance.  Later provider
+-- evidence is appended to the receipt table below; the original source row
+-- is never updated and no receipt grants spendable units.
+CREATE TABLE core_billing.legacy_pending_liabilities (
+    migration_id TEXT NOT NULL CHECK (migration_id ~ '^[A-Za-z0-9._:/-]{1,128}$'),
+    source_archive_sha256 TEXT NOT NULL CHECK (source_archive_sha256 ~ '^[0-9a-f]{64}$'),
+    mapping_sha256 TEXT NOT NULL CHECK (mapping_sha256 ~ '^[0-9a-f]{64}$'),
+    source_table TEXT NOT NULL CHECK (source_table ~ '^[A-Za-z_][A-Za-z0-9_.-]{0,127}$'),
+    source_row_key TEXT NOT NULL CHECK (source_row_key ~ '^[A-Za-z0-9._:/-]{1,200}$'),
+    source_row_sha256 TEXT NOT NULL CHECK (source_row_sha256 ~ '^[0-9a-f]{64}$'),
+    source_parent_plan_sha256 TEXT CHECK (source_parent_plan_sha256 IS NULL OR source_parent_plan_sha256 ~ '^[0-9a-f]{64}$'),
+    owner_user_id BIGINT NOT NULL CHECK (owner_user_id > 0) REFERENCES core_identity.users(id),
+    owner_account_id BIGINT NOT NULL CHECK (owner_account_id > 0) REFERENCES core_identity.accounts(id),
+    status TEXT NOT NULL CHECK (status IN ('pending','unknown','unpaid','failed','canceled','succeeded','refunded','manual_review')),
+    settlement_state TEXT NOT NULL CHECK (settlement_state IN ('unknown','unresolved','terminal_no_payment','terminal_paid','manual_review')),
+    payload_json JSONB NOT NULL CHECK (jsonb_typeof(payload_json) IN ('object','array','string','number','boolean','null')),
+    amount_raw_json JSONB NOT NULL CHECK (jsonb_typeof(amount_raw_json) IN ('object','array','string','number','boolean','null')),
+    currency_raw_json JSONB NOT NULL CHECK (jsonb_typeof(currency_raw_json) IN ('object','array','string','number','boolean','null')),
+    spendable_units BIGINT NOT NULL DEFAULT 0 CHECK (spendable_units = 0),
+    spendable BOOLEAN NOT NULL DEFAULT FALSE CHECK (spendable = FALSE),
+    observed_at BIGINT NOT NULL CHECK (observed_at BETWEEN -62135596800 AND 253402300799),
+    request JSONB NOT NULL CHECK (jsonb_typeof(request) = 'object'),
+    result JSONB NOT NULL CHECK (jsonb_typeof(result) = 'object'),
+    PRIMARY KEY (migration_id, source_table, source_row_key)
+);
+CREATE INDEX legacy_pending_liabilities_owner
+    ON core_billing.legacy_pending_liabilities(owner_account_id, status);
+CREATE TRIGGER legacy_pending_liabilities_immutable
+    BEFORE UPDATE OR DELETE ON core_billing.legacy_pending_liabilities
+    FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
+CREATE TRIGGER legacy_pending_liabilities_no_truncate
+    BEFORE TRUNCATE ON core_billing.legacy_pending_liabilities
+    FOR EACH STATEMENT EXECUTE FUNCTION core_billing.ledger_immutable();
+
+-- Offline owner-only insert.  The exact request is the idempotency material;
+-- a conflicting replay is rejected and no runtime role receives EXECUTE.
+CREATE FUNCTION core_billing.import_legacy_pending_liability(p_request JSONB) RETURNS JSONB
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+DECLARE
+    migration TEXT := p_request->>'migration_id';
+    source_table_name TEXT := p_request->>'source_table';
+    source_key TEXT := p_request->>'source_row_key';
+    prior core_billing.legacy_pending_liabilities%ROWTYPE;
+    result JSONB;
+BEGIN
+    IF current_user <> pg_get_userbyid((SELECT nspowner FROM pg_namespace WHERE nspname='core_billing')) THEN
+        RAISE EXCEPTION 'pending liability imports require the offline schema owner' USING ERRCODE='42501';
+    END IF;
+    IF current_setting('transaction_isolation') <> 'serializable' OR current_setting('synchronous_commit') <> 'on' THEN
+        RAISE EXCEPTION 'pending liability imports require serializable durable commit' USING ERRCODE='25001';
+    END IF;
+    IF NOT COALESCE(
+        jsonb_typeof(p_request)='object'
+        AND (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(p_request) k) = ARRAY[
+            'amount_raw_json','currency_raw_json','mapping_sha256','migration_id','observed_at',
+            'owner_account_id','owner_user_id','payload_json','request','result','settlement_state',
+            'source_archive_sha256','source_parent_plan_sha256','source_row_key','source_row_sha256',
+            'source_table','spendable','spendable_units','status']::TEXT[]
+        AND migration ~ '^[A-Za-z0-9._:/-]{1,128}$'
+        AND source_table_name ~ '^[A-Za-z_][A-Za-z0-9_.-]{0,127}$'
+        AND source_key ~ '^[A-Za-z0-9._:/-]{1,200}$'
+        AND p_request->>'source_archive_sha256' ~ '^[0-9a-f]{64}$'
+        AND p_request->>'mapping_sha256' ~ '^[0-9a-f]{64}$'
+        AND p_request->>'source_row_sha256' ~ '^[0-9a-f]{64}$'
+        AND (p_request->>'source_parent_plan_sha256' IS NULL OR p_request->>'source_parent_plan_sha256' ~ '^[0-9a-f]{64}$')
+        AND (p_request->>'owner_user_id')::BIGINT > 0
+        AND (p_request->>'owner_account_id')::BIGINT > 0
+        AND p_request->>'status' IN ('pending','unknown','unpaid','failed','canceled','succeeded','refunded','manual_review')
+        AND p_request->>'settlement_state' IN ('unknown','unresolved','terminal_no_payment','terminal_paid','manual_review')
+        AND p_request->>'spendable' = 'false'
+        AND (p_request->>'spendable_units')::BIGINT = 0
+        AND (p_request->>'observed_at')::BIGINT BETWEEN -62135596800 AND 253402300799
+        AND jsonb_typeof(p_request->'payload_json') IN ('object','array','string','number','boolean','null')
+        AND jsonb_typeof(p_request->'amount_raw_json') IN ('object','array','string','number','boolean','null')
+        AND jsonb_typeof(p_request->'currency_raw_json') IN ('object','array','string','number','boolean','null')
+        AND jsonb_typeof(p_request->'request')='object'
+        AND jsonb_typeof(p_request->'result')='object', FALSE) THEN
+        RAISE EXCEPTION 'invalid pending liability import' USING ERRCODE='P1000';
+    END IF;
+    SELECT * INTO prior FROM core_billing.legacy_pending_liabilities
+        WHERE migration_id=migration AND source_table=source_table_name AND source_row_key=source_key;
+    IF FOUND THEN
+        IF prior.request IS DISTINCT FROM p_request THEN
+            RAISE EXCEPTION 'pending liability identity has different parameters' USING ERRCODE='P1001';
+        END IF;
+        RETURN prior.result;
+    END IF;
+    result := jsonb_build_object('status','imported','migration_id',migration,'source_table',source_table_name,
+        'source_row_key',source_key,'spendable',FALSE,'spendable_units',0);
+    INSERT INTO core_billing.legacy_pending_liabilities(
+        migration_id,source_archive_sha256,mapping_sha256,source_table,source_row_key,
+        source_row_sha256,source_parent_plan_sha256,owner_user_id,owner_account_id,status,
+        settlement_state,payload_json,amount_raw_json,currency_raw_json,spendable_units,
+        spendable,observed_at,request,result)
+    VALUES(
+        migration,p_request->>'source_archive_sha256',p_request->>'mapping_sha256',source_table_name,source_key,
+        p_request->>'source_row_sha256',NULLIF(p_request->>'source_parent_plan_sha256',''),
+        (p_request->>'owner_user_id')::BIGINT,(p_request->>'owner_account_id')::BIGINT,p_request->>'status',
+        p_request->>'settlement_state',p_request->'payload_json',p_request->'amount_raw_json',p_request->'currency_raw_json',
+        (p_request->>'spendable_units')::BIGINT,FALSE,(p_request->>'observed_at')::BIGINT,
+        p_request,result);
+    RETURN result;
+EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'retry complete pending liability transaction with original key' USING ERRCODE='40001';
+END $$;
+
+REVOKE ALL ON core_billing.legacy_pending_liabilities FROM PUBLIC;
+REVOKE ALL ON FUNCTION core_billing.import_legacy_pending_liability(JSONB) FROM PUBLIC;
+
+-- Provider reconciliation is append-only as well.  The source liability row
+-- is immutable, so a later status is represented by a new receipt instead of
+-- an UPDATE that would erase the original pending fact.
+CREATE TABLE core_billing.legacy_pending_liability_receipts (
+    migration_id TEXT NOT NULL,
+    source_table TEXT NOT NULL,
+    source_row_key TEXT NOT NULL,
+    evidence_sha256 TEXT NOT NULL CHECK (evidence_sha256 ~ '^[0-9a-f]{64}$'),
+    observed_at BIGINT NOT NULL CHECK (observed_at BETWEEN -62135596800 AND 253402300799),
+    provider TEXT NOT NULL CHECK (provider ~ '^[A-Za-z0-9_.-]{1,64}$'),
+    provider_status TEXT NOT NULL CHECK (length(provider_status) BETWEEN 1 AND 64),
+    settlement_state TEXT NOT NULL CHECK (settlement_state IN ('unknown','unresolved','terminal_no_payment','terminal_paid','manual_review')),
+    provider_payload_json JSONB NOT NULL,
+    spendable_units BIGINT NOT NULL DEFAULT 0 CHECK (spendable_units = 0),
+    spendable BOOLEAN NOT NULL DEFAULT FALSE CHECK (spendable = FALSE),
+    request JSONB NOT NULL CHECK (jsonb_typeof(request) = 'object'),
+    result JSONB NOT NULL CHECK (jsonb_typeof(result) = 'object'),
+    PRIMARY KEY (migration_id, source_table, source_row_key, evidence_sha256),
+    FOREIGN KEY (migration_id, source_table, source_row_key)
+        REFERENCES core_billing.legacy_pending_liabilities(migration_id, source_table, source_row_key)
+);
+CREATE INDEX legacy_pending_liability_receipts_lookup
+    ON core_billing.legacy_pending_liability_receipts(migration_id, source_table, source_row_key, observed_at);
+CREATE TRIGGER legacy_pending_liability_receipts_immutable
+    BEFORE UPDATE OR DELETE ON core_billing.legacy_pending_liability_receipts
+    FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
+CREATE TRIGGER legacy_pending_liability_receipts_no_truncate
+    BEFORE TRUNCATE ON core_billing.legacy_pending_liability_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION core_billing.ledger_immutable();
+REVOKE ALL ON core_billing.legacy_pending_liability_receipts FROM PUBLIC;

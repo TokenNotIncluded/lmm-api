@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
-	services "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant_services"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	services "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
 	_ "github.com/lib/pq"
 )
 

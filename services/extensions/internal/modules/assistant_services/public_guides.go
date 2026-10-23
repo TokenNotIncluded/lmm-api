@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
 	"io"
 	"net/netip"
 	"net/url"

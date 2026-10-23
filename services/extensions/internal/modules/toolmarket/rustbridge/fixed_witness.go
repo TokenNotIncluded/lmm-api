@@ -3,7 +3,7 @@ package rustbridge
 
 import (
 	"context"
-	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 // WithFixedWitness configures a separate installer-owned purpose socket/token.

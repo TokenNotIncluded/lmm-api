@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   snapshot:
-    if: github.repository == 'TokenNotIncluded/lmm-api'
+    if: github.repository == 'TokenNotIncluded/api.lmm.best'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

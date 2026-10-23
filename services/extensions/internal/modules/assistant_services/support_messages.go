@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/redaction"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
 	"strings"
 	"unicode/utf8"
 )

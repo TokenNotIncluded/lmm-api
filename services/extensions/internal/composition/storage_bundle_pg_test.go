@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/freshinstall"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"
 	"github.com/lib/pq"
 )
 

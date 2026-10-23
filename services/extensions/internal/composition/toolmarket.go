@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket/rustbridge"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket/rustbridge"
 )
 
 func validateToolMarketSelection(cfg Config) error {

@@ -8,8 +8,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/storage"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/storage"
 )
 
 // Schema is installed explicitly in a new, separate module database.

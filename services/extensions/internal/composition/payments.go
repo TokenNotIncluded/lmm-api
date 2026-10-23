@@ -13,9 +13,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments/rustbridge"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments/rustbridge"
 )
 
 type paymentDocument struct {

@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/app"
-	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/freshinstall"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/app"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"
 )
 
 func main() {
