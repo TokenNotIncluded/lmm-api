@@ -46,6 +46,7 @@ pub fn router(store: AdminUsersStore) -> Router {
         .merge(super::profile_mutation::routes())
         .route("/core/v1/admin/users", get(users))
         .route("/core/v1/admin/users/groups", get(groups))
+        .route("/core/v1/admin/system-resources", get(system_resources))
         .layer(axum::middleware::from_fn(
             |request: axum::extract::Request, next: axum::middleware::Next| async move {
                 let mut response = next.run(request).await;
@@ -79,4 +80,18 @@ async fn groups(
     let secret = bearer(&headers)?;
     let Query(input) = input.map_err(|_| AdminUsersError::Invalid)?;
     Ok(Json(store.groups(secret, &input).await?))
+}
+
+async fn system_resources(
+    State(store): State<AdminUsersStore>,
+    headers: HeaderMap,
+) -> ReadResult<Json<crate::system_info::Snapshot>> {
+    let secret = bearer(&headers)?;
+    let mut tx = store.begin().await?;
+    AdminUsersStore::authorize(&mut tx, secret).await?;
+    tx.commit().await?;
+    let snapshot = crate::system_info::snapshot()
+        .await
+        .map_err(|_| AdminUsersError::Unavailable)?;
+    Ok(Json(snapshot))
 }

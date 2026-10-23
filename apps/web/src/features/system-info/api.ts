@@ -21,11 +21,19 @@ import { api } from '@/lib/api'
 import type {
   SystemInstanceDeleteResponse,
   SystemInstanceListResponse,
+  SystemResourceSnapshot,
 } from './types'
 
 export async function listSystemInstances() {
   const res = await api.get<SystemInstanceListResponse>(
     '/api/system-info/instances'
+  )
+  return res.data
+}
+
+export async function getNativeSystemResources() {
+  const res = await api.get<SystemResourceSnapshot>(
+    '/core/v1/admin/system-resources'
   )
   return res.data
 }
