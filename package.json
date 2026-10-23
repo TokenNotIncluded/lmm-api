@@ -38,7 +38,7 @@
   },
   "overrides": {
     "brace-expansion": "2.1.1",
-    "dompurify": "3.4.16",
+    "dompurify": "3.4.17",
     "fast-uri": "3.1.2",
     "hono": "4.12.22",
     "ip-address": "10.2.0",
