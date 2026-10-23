@@ -31,6 +31,9 @@ IDENTITY = PLANNER.IDENTITY
 Error = IDENTITY.MappingError
 require = IDENTITY.require
 SCOPE = "financial-opening-only-v1"
+ESCROW_SCOPE = "financial-opening-with-legacy-escrow-v1"
+ESCROW_POLICY = "restore-clearing-to-reserved-without-wallet-debit"
+INFLIGHT_POLICY = "independently-reviewed-zero-nonescrow-inflight"
 SEED = "identity-bound-fresh26-zero-ledger-v2"
 FENCE = 741803121  # Shared with the offline identity importer.
 TABLE_FILTER = "n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'"
@@ -40,6 +43,13 @@ CHANGED_TABLES = (
     "core_billing.ledger_entries", "core_billing.opening_import_runs",
     "core_billing.opening_imports", "core_billing.account_opening_counters",
 )
+ESCROW_TABLES = (
+    "core_billing.legacy_escrow_batch_runs", "core_billing.legacy_escrow_projects",
+    "core_billing.legacy_escrow_claims", "core_billing.legacy_escrow_disputes",
+    "core_billing.legacy_escrow_state",
+)
+ESCROW_SOURCE_FILES = frozenset({"escrow_candidate", "escrow_unit_evidence", "source_review_evidence",
+    "escrow_policy_evidence", "inflight_evidence", "inflight_process_evidence"})
 SOURCE_FILES = frozenset({"archive", "source_receipt", "financial_plan", "source_export",
     "source_export_proof", "identity_map", "identity_manifest", "source_review", "reservations"})
 FRESH_EMPTY_TABLES = (
@@ -165,13 +175,207 @@ def snapshot_sql(inventory: dict, migration_id: str) -> str:
         "'import_runs',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY migration_id),'[]'::jsonb) FROM core_migration.import_runs r));\nCOMMIT;\n"
 
 
-def source_hashes() -> dict:
-    return {**PLANNER.tool_source_hashes(), "financial_writer_sha256": IDENTITY.sha256_file(Path(__file__))}
+def source_hashes(*, escrow=False) -> dict:
+    result = {**PLANNER.tool_source_hashes(), "financial_writer_sha256": IDENTITY.sha256_file(Path(__file__))}
+    if escrow:
+        for name in ("legacy_escrow_mapping.py", "legacy_bounty_basis.py"):
+            result[name] = IDENTITY.sha256_file(Path(__file__).with_name(name))
+    return result
+
+
+def escrow_profile(material):
+    return material.get("scope") == ESCROW_SCOPE
+
+
+def validate_source_review(review, plan, *, candidate=None, unit_evidence=None, inflight=None):
+    composed = candidate is not None or unit_evidence is not None
+    fields = {"format_version", "scope", "decision", "source_archive_sha256", "mapping_sha256",
+              "identity_map_sha256", "credits_per_usd", "evidence_sha256", "other_rights_policy"}
+    if composed:
+        fields |= {"escrow_candidate_sha256", "escrow_unit_evidence_sha256", "escrow_policy", "inflight_policy", "inflight_evidence_sha256"}
+    require(type(review) is dict and set(review) == fields, "source_review_shape_invalid")
+    require(type(review["format_version"]) is int and review["format_version"] == (2 if composed else 1)
+            and review["scope"] == (ESCROW_SCOPE if composed else SCOPE)
+            and review["decision"] == ("approved-offline-opening-with-legacy-escrow" if composed else "approved-offline-opening")
+            and type(review["credits_per_usd"]) is int and review["credits_per_usd"] == 500000
+            and review["other_rights_policy"] == ("all-other-rights-remain-disabled-pending-separate-import" if composed
+                                                 else "remain-disabled-pending-separate-import"),
+            "source_unit_or_review_unproven")
+    checked_hash(review["evidence_sha256"], "source_review_evidence_missing")
+    for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"):
+        require(review[key] == plan.get(key), "source_review_binding_mismatch")
+    if composed:
+        require(type(candidate) is dict and type(unit_evidence) is dict
+                and type(inflight) is dict and review["inflight_evidence_sha256"] == digest(inflight)
+                and review["escrow_candidate_sha256"] == digest(candidate)
+                and review["escrow_unit_evidence_sha256"] == digest(unit_evidence)
+                and review["escrow_policy"] == ESCROW_POLICY and review["inflight_policy"] == INFLIGHT_POLICY,
+                "escrow_independent_review_missing_or_mismatched")
+
+
+def validate_inflight(material):
+    evidence = material.get("inflight_evidence")
+    require(type(evidence) is dict and set(evidence) == {"format_version", "scope", "basis", "snapshot_relation",
+        "source_archive_sha256", "mapping_sha256", "source_export_sha256", "identity_map_sha256",
+        "source_application_revision", "observed_at", "drain_completed_at", "source_process_identity",
+        "process_evidence_sha256", "positions", "source_table_counts", "unresolved_operations"}, "inflight_evidence_shape_invalid")
+    require(type(evidence["format_version"]) is int and evidence["format_version"] == 1
+        and evidence["scope"] == "legacy-nonescrow-inflight-zero-evidence"
+        and evidence["basis"] == "source-application-drain-and-durable-state-reconciliation"
+        and evidence["snapshot_relation"] == "after-drain" and evidence["unresolved_operations"] == [],
+        "inflight_reconciliation_unproven")
+    require(all(evidence[k] == material[k] for k in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"))
+        and evidence["source_export_sha256"] == material["source_files"]["source_export"]["sha256"]
+        and evidence["source_application_revision"] == material["escrow_unit_evidence"]["source_application_revision"],
+        "inflight_source_binding_mismatch")
+    observed = PLANNER.integer(evidence["observed_at"], "inflight_observation_invalid", minimum=1, maximum=253402300799)
+    require(observed == material["escrow_batch"]["observed_at"], "inflight_source_binding_mismatch")
+    PLANNER.integer(evidence["drain_completed_at"], "inflight_drain_not_before_capture", minimum=1, maximum=observed)
+    process = evidence["source_process_identity"]
+    require(type(process) is dict and set(process) == {"pid", "started_at", "binary_sha256"}, "inflight_process_identity_missing")
+    PLANNER.integer(process["pid"], "inflight_process_identity_invalid", minimum=1)
+    PLANNER.integer(process["started_at"], "inflight_process_identity_invalid", minimum=1, maximum=evidence["drain_completed_at"])
+    checked_hash(process["binary_sha256"], "inflight_process_identity_invalid")
+    require(type(evidence["positions"]) is list and len(evidence["positions"]) == len(material["counters"]),
+            "inflight_account_coverage_incomplete")
+    expected = {row["user_id"] for row in material["counters"]}
+    seen = set()
+    for row in evidence["positions"]:
+        require(type(row) is dict and set(row) == {"source_user_id", "reserved_units"}, "inflight_position_invalid")
+        uid = PLANNER.integer(row["source_user_id"], "inflight_position_invalid", minimum=1)
+        require(uid in expected and uid not in seen and type(row["reserved_units"]) is int and row["reserved_units"] == 0,
+                "inflight_nonzero_or_unknown_reserved")
+        seen.add(uid)
+    require(digest(evidence["source_table_counts"]) == digest({name: row["row_count"]
+            for name, row in material["source_plan"]["source_evidence"].items()}), "inflight_source_table_coverage_incomplete")
+    checked_hash(evidence["process_evidence_sha256"], "inflight_process_evidence_missing")
+    require(evidence["process_evidence_sha256"] == material["source_files"]["inflight_process_evidence"]["sha256"],
+            "inflight_process_evidence_file_mismatch")
+
+
+# @mark migration.financial-escrow role=writer
+def validate_escrow(material):
+    """Preflight the composed batch without granting economic authority.
+
+    The source-only mapper is rerun from the actual private files before any
+    write. These checks additionally bind the exact reviewed candidate and the
+    Core SQL batch, and check every intermediate native balance for overflow.
+    """
+    candidate, evidence, batch = (material.get(k) for k in ("escrow_candidate", "escrow_unit_evidence", "escrow_batch"))
+    import legacy_escrow_mapping as mapper
+    require(type(evidence) is dict and set(evidence) == mapper.UNIT_FIELDS
+            and type(evidence["format_version"]) is int and evidence["format_version"] == 1
+            and evidence["scope"] == "legacy-escrow-source-unit-evidence"
+            and evidence["unit"] == "credit_500k_usd" and type(evidence["credits_per_usd"]) is int
+            and evidence["credits_per_usd"] == 500000 and evidence["conversion_policy"] == mapper.POLICY
+            and type(evidence["source_application_revision"]) is str
+            and re.fullmatch(r"[0-9a-f]{40}", evidence["source_application_revision"]) is not None,
+            "escrow_unit_evidence_policy_invalid")
+    require(type(candidate) is dict and candidate.get("blockers") == []
+            and candidate.get("approval_created") is False and type(candidate.get("target_writes")) is int
+            and candidate["target_writes"] == 0 and candidate.get("economic_approval_verified") is False,
+            "escrow_candidate_unresolved")
+    require(all(candidate.get(k) == material[k] for k in ("migration_id", "source_archive_sha256", "mapping_sha256", "identity_map_sha256"))
+            and candidate.get("source_export_sha256") == material["source_files"]["source_export"]["sha256"]
+            and candidate.get("source_unit_evidence_bound") is True
+            and candidate.get("source_unit_authority_verified") is False
+            and candidate.get("unit_evidence_sha256") == digest(evidence)
+            and candidate.get("candidate_sha256") == digest({k: v for k, v in candidate.items() if k not in ("candidate_sha256", "public_summary")}),
+            "escrow_candidate_binding_mismatch")
+    for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"):
+        checked_hash(candidate.get(key), "escrow_candidate_binding_mismatch")
+    require(all(evidence[k] == candidate.get(k) for k in ("source_archive_sha256", "mapping_sha256",
+                "source_export_sha256", "identity_records_sha256")), "escrow_unit_evidence_binding_mismatch")
+    for key in ("parent_plan_sha256", "parent_audit_row_sha256", "source_policy_evidence_sha256"):
+        checked_hash(evidence[key], "escrow_unit_evidence_hash_invalid")
+    raw = candidate.get("batch_candidate")
+    require(type(raw) is dict and set(raw) == {"migration_id", "source_archive_sha256", "mapping_sha256",
+            "unit", "observed_at", "projects"}, "escrow_candidate_shape_invalid")
+    require(type(batch) is dict and digest(batch) == digest({**raw, "review_proof_sha256": material["source_review"]["evidence_sha256"]}),
+            "escrow_batch_not_reviewed_candidate")
+    require(batch["unit"] == "credit_500k_usd" and all(batch[k] == material[k] for k in
+            ("migration_id", "source_archive_sha256", "mapping_sha256")), "escrow_batch_binding_mismatch")
+    observed = PLANNER.integer(batch["observed_at"], "escrow_observation_invalid", minimum=1, maximum=253402300799)
+    require(type(candidate.get("observed_at")) is int and candidate["observed_at"] == observed,
+            "escrow_candidate_binding_mismatch")
+    require(all(type(p["reserved_units"]) is int and p["reserved_units"] == 0 and p["observed_at"] == observed
+                for p in material["opening"]), "escrow_requires_zero_nonescrow_opening_reserves")
+    require(type(batch["projects"]) is list and 1 <= len(batch["projects"]) <= 128,
+            "escrow_project_coverage_invalid")
+    require(len(canonical(batch).encode()) <= 1040000, "escrow_batch_too_large")
+    accounts = {row["personal_account_id"]: row["id"] for row in material["native_users"]}
+    project_ids, claim_ids, dispute_ids, totals = set(), set(), set(), {}
+    opening = PREFLIGHT.preflight_opening_batch(material["opening"])
+    clearing = opening.positions[-1].clearing_after_units
+    require(all(type(p) is dict for p in batch["projects"]), "escrow_project_shape_invalid")
+    for project in sorted(batch["projects"], key=lambda p: PLANNER.integer(p.get("source_project_id"), "escrow_project_id_invalid", minimum=1)):
+        require(type(project) is dict and set(project) == {"source_project_id", "owner_user_id", "payer_account_id",
+            "source_row_sha256", "source_parent_plan_sha256", "escrow_units", "status", "claims", "disputes"},
+            "escrow_project_shape_invalid")
+        pid = PLANNER.integer(project["source_project_id"], "escrow_project_id_invalid", minimum=1)
+        require(pid not in project_ids, "escrow_project_duplicate"); project_ids.add(pid)
+        owner = PLANNER.integer(project["owner_user_id"], "escrow_owner_invalid", minimum=1)
+        payer = PLANNER.integer(project["payer_account_id"], "escrow_owner_invalid", minimum=1)
+        require(accounts.get(payer) == owner and project["status"] in ("published", "paused"), "escrow_owner_or_status_invalid")
+        for field in ("source_row_sha256", "source_parent_plan_sha256"):
+            checked_hash(project[field], "escrow_source_hash_invalid")
+        require(project["source_parent_plan_sha256"] == evidence["parent_plan_sha256"], "escrow_parent_plan_mismatch")
+        amount = PLANNER.integer(project["escrow_units"], "escrow_amount_invalid", minimum=1, maximum=PREFLIGHT.JS_SAFE_MAX)
+        clearing = PLANNER.integer(clearing - amount, "escrow_clearing_prefix_overflow")
+        totals[payer] = PLANNER.integer(totals.get(payer, 0) + amount, "escrow_reserved_total_overflow", minimum=0)
+        require(type(project["claims"]) is list and len(project["claims"]) <= 2048
+                and type(project["disputes"]) is list and len(project["disputes"]) <= 2048,
+                "escrow_rights_shape_invalid")
+        claims = {}
+        for claim in project["claims"]:
+            require(type(claim) is dict and set(claim) == {"source_challenge_id", "participant_user_id", "recipient_account_id",
+                "source_row_sha256", "rights_status", "source_reward_quota", "payout_units", "status", "rejected_at", "paid_at"},
+                "escrow_claim_shape_invalid")
+            cid = PLANNER.integer(claim["source_challenge_id"], "escrow_claim_id_invalid", minimum=1)
+            require(cid not in claim_ids, "escrow_claim_duplicate"); claim_ids.add(cid); claims[cid] = claim
+            participant = PLANNER.integer(claim["participant_user_id"], "escrow_recipient_invalid", minimum=1)
+            recipient = PLANNER.integer(claim["recipient_account_id"], "escrow_recipient_invalid", minimum=1)
+            require(accounts.get(recipient) == participant and recipient != payer and participant != owner,
+                    "escrow_recipient_identity_mismatch")
+            checked_hash(claim["source_row_sha256"], "escrow_source_hash_invalid")
+            PLANNER.integer(claim["source_reward_quota"], "escrow_claim_amount_invalid", minimum=0, maximum=PREFLIGHT.JS_SAFE_MAX)
+            rejected = PLANNER.integer(claim["rejected_at"], "escrow_claim_time_invalid", minimum=0, maximum=observed)
+            require(type(claim["paid_at"]) is int and claim["paid_at"] == 0
+                    and claim["status"] in ("accepted", "submitted", "rejected"), "escrow_claim_state_invalid")
+            if claim["rights_status"] == "active_future_reward":
+                PLANNER.integer(claim["payout_units"], "escrow_claim_amount_invalid", minimum=1, maximum=PREFLIGHT.JS_SAFE_MAX)
+            else:
+                require(claim["rights_status"] == "historical_rejection_guard_only" and claim["payout_units"] is None
+                        and claim["status"] == "rejected", "escrow_claim_rights_invalid")
+            require(claim["status"] != "rejected" or rejected > 0, "escrow_claim_state_invalid")
+        disputes = {}
+        for dispute in project["disputes"]:
+            require(type(dispute) is dict and set(dispute) == {"source_dispute_id", "source_challenge_id", "source_row_sha256",
+                "status", "reward_quota_snapshot", "project_escrow_quota_snapshot", "tip_quota_snapshot"}, "escrow_dispute_shape_invalid")
+            did = PLANNER.integer(dispute["source_dispute_id"], "escrow_dispute_id_invalid", minimum=1)
+            cid = PLANNER.integer(dispute["source_challenge_id"], "escrow_claim_id_invalid", minimum=1)
+            require(did not in dispute_ids and cid in claims and dispute["status"] in ("open", "resolved_denied"),
+                    "escrow_dispute_binding_invalid")
+            dispute_ids.add(did); disputes.setdefault(cid, []).append(dispute["status"])
+            checked_hash(dispute["source_row_sha256"], "escrow_source_hash_invalid")
+            for field in ("reward_quota_snapshot", "project_escrow_quota_snapshot", "tip_quota_snapshot"):
+                PLANNER.integer(dispute[field], "escrow_dispute_snapshot_invalid", minimum=0, maximum=PREFLIGHT.JS_SAFE_MAX)
+        owed = 0
+        for cid, claim in claims.items():
+            states = disputes.get(cid, [])
+            active_rejection = "open" in states or (claim["rejected_at"] > observed - 604800 and "resolved_denied" not in states)
+            if claim["rights_status"] == "historical_rejection_guard_only":
+                require(not active_rejection, "escrow_active_rejection_basis_missing")
+            elif claim["status"] in ("accepted", "submitted") or active_rejection:
+                owed += claim["payout_units"]
+        require(owed <= amount, "escrow_insufficient_for_frozen_rights")
+    return totals
 
 
 def prepare_material(plan: dict, *, migration_id: str, identities: dict,
                      observation: dict, reservations: dict, review: dict,
-                     snapshot: dict, target_contract: dict, runtime_roles: list[str], source_files: dict) -> dict:
+                     snapshot: dict, target_contract: dict, runtime_roles: list[str], source_files: dict,
+                     escrow_candidate=None, escrow_unit_evidence=None, inflight_evidence=None) -> dict:
     """Bind existing planner adapters to a reviewed source and observed target.
 
     An opening-only source review never establishes missing Key, subscription,
@@ -180,18 +384,8 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
     PLANNER.verify_plan_mapping(plan)
     require(type(migration_id) is str and IDENTITY.MIGRATION_ID.fullmatch(migration_id) is not None,
             "migration_id_invalid")
-    require(type(review) is dict and set(review) == {
-        "format_version", "scope", "decision", "source_archive_sha256", "mapping_sha256",
-        "identity_map_sha256", "credits_per_usd", "evidence_sha256", "other_rights_policy",
-    }, "source_review_shape_invalid")
-    require(type(review["format_version"]) is int and review["format_version"] == 1
-            and review["scope"] == SCOPE and review["decision"] == "approved-offline-opening"
-            and type(review["credits_per_usd"]) is int and review["credits_per_usd"] == 500000
-            and review["other_rights_policy"] == "remain-disabled-pending-separate-import",
-            "source_unit_or_review_unproven")
-    checked_hash(review["evidence_sha256"], "source_review_evidence_missing")
-    for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256"):
-        require(review[key] == plan.get(key), "source_review_binding_mismatch")
+    composed = escrow_candidate is not None or escrow_unit_evidence is not None
+    validate_source_review(review, plan, candidate=escrow_candidate, unit_evidence=escrow_unit_evidence, inflight=inflight_evidence)
     require(digest(identities) == plan.get("identity_map_sha256"), "identity_map_mismatch")
     runs = [row for row in snapshot["import_runs"]
             if row.get("manifest", {}).get("scope") == "identity-only"]
@@ -212,7 +406,7 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
         observation=observation, reservation_reconciliation=reservations)
     counters = PLANNER.build_opening_counter_payloads(plan, opening)
     material = {
-        "format_version": 2, "scope": SCOPE, "seed_contract": SEED,
+        "format_version": 3 if composed else 2, "scope": ESCROW_SCOPE if composed else SCOPE, "seed_contract": SEED,
         "migration_id": migration_id, "source_archive_sha256": plan["source_archive_sha256"],
         "mapping_sha256": plan["mapping_sha256"], "identity_map_sha256": plan["identity_map_sha256"],
         "source_review": review, "identity_import": runs[0],
@@ -223,23 +417,30 @@ def prepare_material(plan: dict, *, migration_id: str, identities: dict,
         "target": {**{key: snapshot[key] for key in ("instance", "catalog_fingerprint_sha256", "ownership_sha256", "component_fingerprints", "trust_policy_seed")},
                    "source_contract": {key: contract[key] for key in CONTRACT_FIELDS}},
         "before_state": snapshot["state"], "runtime_roles": runtime_roles,
-        "tool_source_hashes": source_hashes(),
+        "tool_source_hashes": source_hashes(escrow=composed),
     }
+    if composed:
+        material.update(escrow_candidate=escrow_candidate, escrow_unit_evidence=escrow_unit_evidence, inflight_evidence=inflight_evidence,
+                        escrow_batch={**escrow_candidate["batch_candidate"], "review_proof_sha256": review["evidence_sha256"]}
+                        if type(escrow_candidate.get("batch_candidate")) is dict else None)
     validate_material(material)
     return json.loads(canonical(material))
 
 
 def validate_material(material: dict) -> None:
+    composed = type(material) is dict and escrow_profile(material)
     require(type(material) is dict and type(material.get("format_version")) is int
-            and material["format_version"] == 2 and material.get("scope") == SCOPE
+            and material["format_version"] == (3 if composed else 2) and material.get("scope") == (ESCROW_SCOPE if composed else SCOPE)
             and material.get("seed_contract") == SEED, "material_contract_invalid")
+    require(composed or not {"escrow_candidate", "escrow_unit_evidence", "escrow_batch", "inflight_evidence"}.intersection(material),
+            "escrow_requires_composed_profile")
     require(type(material.get("migration_id")) is str
             and IDENTITY.MIGRATION_ID.fullmatch(material["migration_id"]) is not None, "migration_id_invalid")
     for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256", "reservation_evidence_sha256"):
         checked_hash(material.get(key))
-    require(material.get("tool_source_hashes") == source_hashes(), "financial_tool_source_changed")
+    require(material.get("tool_source_hashes") == source_hashes(escrow=composed), "financial_tool_source_changed")
     files = material.get("source_files")
-    require(type(files) is dict and set(files) == SOURCE_FILES, "source_files_incomplete")
+    require(type(files) is dict and set(files) == SOURCE_FILES | (ESCROW_SOURCE_FILES if composed else frozenset()), "source_files_incomplete")
     for item in files.values():
         require(type(item) is dict and set(item) == {"path", "sha256"}
                 and type(item["path"]) is str and Path(item["path"]).is_absolute(), "source_file_shape_invalid")
@@ -284,6 +485,11 @@ def validate_material(material: dict) -> None:
         checked_hash(value.get("sha256"))
     require(all(state["tables"][name] == {"rows": 0, "sha256": sha(b"")} for name in FRESH_EMPTY_TABLES),
             "fresh26_business_or_upgrade_records_not_empty")
+    if composed:
+        require(set(ESCROW_TABLES) | {"core_billing.legacy_escrow_operations"} <= set(state["tables"]),
+                "escrow_target_inventory_incomplete")
+        require(all(state["tables"][name] == {"rows": 0, "sha256": sha(b"")} for name in
+                    (*ESCROW_TABLES, "core_billing.legacy_escrow_operations")), "escrow_target_not_empty")
     PREFLIGHT.preflight_opening_batch(material["opening"])
     PREFLIGHT.validate_opening_counters(material["opening"], material["counters"])
     require(material["opening"], "empty_opening_not_supported")
@@ -305,19 +511,21 @@ def validate_material(material: dict) -> None:
     require(rebuilt["payloads"] == material["opening"] and
             PLANNER.build_opening_counter_payloads(material["source_plan"], rebuilt)["payloads"] == material["counters"],
             "opening_plan_adapter_mismatch")
-    review = material["source_review"]
-    require(type(review.get("format_version")) is int and review["format_version"] == 1
-            and review.get("decision") == "approved-offline-opening" and review.get("scope") == SCOPE
-            and type(review.get("credits_per_usd")) is int and review["credits_per_usd"] == 500000
-            and review.get("other_rights_policy") == "remain-disabled-pending-separate-import"
-            and all(review.get(key) == material[key] for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256")),
-            "source_unit_or_review_unproven")
-    checked_hash(review.get("evidence_sha256"), "source_review_evidence_missing")
+    validate_source_review(material["source_review"], material,
+        candidate=material.get("escrow_candidate"), unit_evidence=material.get("escrow_unit_evidence"), inflight=material.get("inflight_evidence"))
     for row in material["opening"]:
         require(all(row[key] == material[key] for key in ("migration_id", "source_archive_sha256", "mapping_sha256")),
                 "opening_source_mismatch")
+    if composed:
+        validate_escrow(material)
+        validate_inflight(material)
+        require(files["source_review_evidence"]["sha256"] == material["source_review"]["evidence_sha256"]
+                and files["escrow_policy_evidence"]["sha256"] == material["escrow_unit_evidence"].get("source_policy_evidence_sha256"),
+                "escrow_evidence_file_hash_mismatch")
     needed = (4 * len(material["opening"]), sum(bool(row["available_units"] or row["affiliate_units"] or row["reserved_units"])
                                                for row in material["opening"]))
+    if composed:
+        needed = (needed[0], needed[1] + len(material["escrow_batch"]["projects"]))
     for name, count in zip(CHANGED_SEQUENCES, needed):
         sequence = state["sequences"][name]
         require(type(sequence.get("increment")) is int and sequence["increment"] == 1
@@ -399,14 +607,67 @@ SET LOCAL search_path=pg_catalog,public;
 """
 
 
+def escrow_readback_sql() -> str:
+    return """
+  IF (SELECT count(*) FROM core_billing.legacy_escrow_batch_runs)<>1
+   OR NOT EXISTS(SELECT FROM core_billing.legacy_escrow_batch_runs b WHERE b.request=m->'escrow_batch')
+   OR (SELECT count(*) FROM core_billing.legacy_escrow_projects)<>jsonb_array_length(m->'escrow_batch'->'projects')
+   OR (SELECT count(*) FROM core_billing.legacy_escrow_claims)<>(SELECT count(*) FROM
+     jsonb_array_elements(m->'escrow_batch'->'projects') p CROSS JOIN LATERAL jsonb_array_elements(p->'claims') c)
+   OR (SELECT count(*) FROM core_billing.legacy_escrow_disputes)<>(SELECT count(*) FROM
+     jsonb_array_elements(m->'escrow_batch'->'projects') p CROSS JOIN LATERAL jsonb_array_elements(p->'disputes') d)
+   OR (SELECT count(*) FROM core_billing.legacy_escrow_state)<>jsonb_array_length(m->'escrow_batch'->'projects')
+   OR EXISTS(SELECT FROM core_billing.legacy_escrow_operations)
+   OR EXISTS(SELECT FROM jsonb_array_elements(m->'escrow_batch'->'projects') expected
+     LEFT JOIN core_billing.legacy_escrow_projects p ON p.migration_id=m->>'migration_id'
+       AND p.source_project_id=(expected->>'source_project_id')::bigint
+     LEFT JOIN core_billing.legacy_escrow_state s USING(migration_id,source_project_id)
+     LEFT JOIN core_billing.ledger_journals j ON j.id=p.opening_journal_id
+     WHERE p.source IS DISTINCT FROM expected OR
+       to_jsonb(p)-ARRAY['migration_id','source_archive_sha256','opening_journal_id','source']
+         IS DISTINCT FROM expected-ARRAY['claims','disputes']
+       OR s.remaining_units IS DISTINCT FROM (expected->>'escrow_units')::bigint
+       OR s.revision IS DISTINCT FROM 1::bigint OR s.closed IS DISTINCT FROM false
+       OR j.kind IS DISTINCT FROM 'legacy_escrow_opening' OR j.scope IS DISTINCT FROM 'legacy-escrow-opening'
+       OR j.amount_units IS DISTINCT FROM (expected->>'escrow_units')::bigint
+       OR j.payer_id IS DISTINCT FROM (SELECT id FROM core_billing.ledger_accounts WHERE bucket='clearing')
+       OR j.payee_id IS DISTINCT FROM (SELECT id FROM core_billing.ledger_accounts
+         WHERE owner_account_id=p.payer_account_id AND bucket='reserved'))
+   OR EXISTS(SELECT FROM jsonb_array_elements(m->'escrow_batch'->'projects') p
+     CROSS JOIN LATERAL jsonb_array_elements(p->'claims') expected
+     LEFT JOIN core_billing.legacy_escrow_claims c ON c.migration_id=m->>'migration_id'
+       AND c.source_project_id=(p->>'source_project_id')::bigint AND c.source_challenge_id=(expected->>'source_challenge_id')::bigint
+     WHERE c.source IS DISTINCT FROM expected OR to_jsonb(c)-ARRAY['migration_id','source_project_id','source'] IS DISTINCT FROM expected)
+   OR EXISTS(SELECT FROM jsonb_array_elements(m->'escrow_batch'->'projects') p
+     CROSS JOIN LATERAL jsonb_array_elements(p->'disputes') expected
+     LEFT JOIN core_billing.legacy_escrow_disputes d ON d.migration_id=m->>'migration_id'
+       AND d.source_project_id=(p->>'source_project_id')::bigint AND d.source_dispute_id=(expected->>'source_dispute_id')::bigint
+     WHERE d.source IS DISTINCT FROM expected OR d.source_challenge_id IS DISTINCT FROM (expected->>'source_challenge_id')::bigint
+       OR d.source_row_sha256 IS DISTINCT FROM expected->>'source_row_sha256' OR d.status IS DISTINCT FROM expected->>'status')
+   OR EXISTS(SELECT FROM core_billing.ledger_accounts a JOIN core_billing.balance_state b ON b.ledger_account_id=a.id
+     WHERE a.bucket IN ('clearing','revenue') AND b.balance_units::numeric IS DISTINCT FROM
+       CASE WHEN a.bucket='revenue' THEN 0::numeric ELSE
+         -(SELECT coalesce(sum((p->>'available_units')::bigint+(p->>'affiliate_units')::bigint+(p->>'reserved_units')::bigint),0)
+            FROM jsonb_array_elements(m->'opening') p)
+         -(SELECT coalesce(sum((p->>'escrow_units')::bigint),0) FROM jsonb_array_elements(m->'escrow_batch'->'projects') p) END)
+  THEN RAISE EXCEPTION 'financial_escrow_exact_readback_failed'; END IF;
+"""
+
+
 def build_apply_sql(material: dict) -> str:
     validate_material(material)
     inventory = material["before_state"]["inventory"]
     state = state_sql(inventory, material["migration_id"])
     guard = _guard(material)
     locks = ",".join(relation(name) for name in inventory["tables"])
-    changed_tables = "ARRAY[" + ",".join(literal(n) for n in CHANGED_TABLES) + "]::text[]"
+    composed = escrow_profile(material)
+    scope = material["scope"]
+    changed_tables = "ARRAY[" + ",".join(literal(n) for n in (*CHANGED_TABLES, *(ESCROW_TABLES if composed else ()))) + "]::text[]"
     changed_sequences = "ARRAY[" + ",".join(literal(n) for n in CHANGED_SEQUENCES) + "]::text[]"
+    escrow_restore = "PERFORM core_billing.import_legacy_escrow_batch(m->'escrow_batch');" if composed else ""
+    expected_reserved = """(p->>'reserved_units')::bigint + coalesce((SELECT sum((ep->>'escrow_units')::bigint)
+      FROM jsonb_array_elements(m->'escrow_batch'->'projects') ep
+      WHERE (ep->>'payer_account_id')::bigint=(p->>'account_id')::bigint),0)""" if composed else "(p->>'reserved_units')::bigint"
     restarts = []
     for name in CHANGED_SEQUENCES:
         seq = material["before_state"]["sequences"][name]
@@ -428,12 +689,12 @@ BEGIN
  IF FOUND THEN
   IF previous.source_archive_sha256<>m->>'source_archive_sha256' OR previous.mapping_sha256<>m->>'mapping_sha256'
    OR previous.manifest->'material' IS DISTINCT FROM m
-   OR previous.manifest->>'scope' IS DISTINCT FROM {literal(SCOPE)}
+   OR previous.manifest->>'scope' IS DISTINCT FROM {literal(scope)}
    OR previous.manifest->'post_state' IS DISTINCT FROM before_state
   THEN RAISE EXCEPTION 'financial_replay_conflict'; END IF;
  ELSE
   IF EXISTS(SELECT 1 FROM core_billing.opening_import_runs)
-   OR EXISTS(SELECT 1 FROM core_migration.import_runs WHERE manifest->>'scope'={literal(SCOPE)})
+   OR EXISTS(SELECT 1 FROM core_migration.import_runs WHERE manifest->>'scope' IN ({literal(SCOPE)},{literal(ESCROW_SCOPE)}))
   THEN RAISE EXCEPTION 'financial_other_import_conflict'; END IF;
   IF before_state IS DISTINCT FROM m->'before_state' THEN RAISE EXCEPTION 'financial_target_state_changed'; END IF;
   IF (SELECT count(*) FROM core_billing.ledger_accounts)<>2 OR (SELECT count(*) FROM core_billing.balance_state)<>2
@@ -455,7 +716,9 @@ BEGIN
   FOR v_payload IN SELECT value FROM jsonb_array_elements(m->'counters') ORDER BY (value->>'account_id')::bigint LOOP
    PERFORM core_billing.import_account_opening_counters(v_payload);
   END LOOP;
+  {escrow_restore}
   SET CONSTRAINTS ALL IMMEDIATE;
+  {escrow_readback_sql() if composed else ''}
   IF (SELECT count(*) FROM core_billing.opening_imports)<>jsonb_array_length(m->'opening')
    OR (SELECT count(*) FROM core_billing.account_opening_counters)<>jsonb_array_length(m->'counters')
    OR EXISTS(SELECT 1 FROM jsonb_array_elements(m->'opening') p LEFT JOIN core_billing.opening_imports o
@@ -470,7 +733,7 @@ BEGIN
     WHERE b.balance_units IS DISTINCT FROM CASE expected.bucket
      WHEN 'wallet' THEN greatest((p->>'available_units')::bigint,0)
      WHEN 'debt' THEN least((p->>'available_units')::bigint,0)
-     WHEN 'reserved' THEN (p->>'reserved_units')::bigint ELSE (p->>'affiliate_units')::bigint END)
+     WHEN 'reserved' THEN {expected_reserved} ELSE (p->>'affiliate_units')::bigint END)
    OR EXISTS(SELECT 1 FROM core_billing.ledger_journals j LEFT JOIN core_billing.ledger_entries e ON e.journal_id=j.id
     GROUP BY j.id HAVING count(e.journal_id)<2 OR sum(e.delta_units)<>0)
    OR EXISTS(SELECT 1 FROM core_billing.balance_state b LEFT JOIN
@@ -484,7 +747,7 @@ BEGIN
   THEN RAISE EXCEPTION 'financial_unrelated_state_changed'; END IF;
   INSERT INTO core_migration.import_runs(migration_id,source_archive_sha256,mapping_sha256,manifest)
    VALUES(m->>'migration_id',m->>'source_archive_sha256',m->>'mapping_sha256',
-    jsonb_build_object('scope',{literal(SCOPE)},'material',m,'post_state',after_state));
+    jsonb_build_object('scope',{literal(scope)},'material',m,'post_state',after_state));
  END IF;
  {guard}
  IF {IDENTITY.trust_policy_seed_guard_sql(material['target'])} THEN RAISE EXCEPTION 'financial_trust_policy_seed_mismatch'; END IF;
@@ -513,7 +776,7 @@ BEGIN
  SELECT * INTO previous FROM core_migration.import_runs WHERE migration_id=m->>'migration_id';
  IF FOUND THEN
   IF previous.source_archive_sha256<>m->>'source_archive_sha256' OR previous.mapping_sha256<>m->>'mapping_sha256'
-   OR previous.manifest->'material' IS DISTINCT FROM m OR previous.manifest->>'scope' IS DISTINCT FROM {literal(SCOPE)}
+   OR previous.manifest->'material' IS DISTINCT FROM m OR previous.manifest->>'scope' IS DISTINCT FROM {literal(material['scope'])}
    OR previous.manifest->'post_state' IS DISTINCT FROM actual
   THEN RAISE EXCEPTION 'financial_resolution_conflict'; END IF;
  ELSIF actual IS DISTINCT FROM m->'before_state' THEN RAISE EXCEPTION 'financial_absence_not_proven'; END IF;
@@ -528,8 +791,10 @@ COMMIT;
 
 
 def verify_approval(material: dict, sql: str, approval: dict) -> None:
+    composed = escrow_profile(material)
     require(type(approval) is dict and type(approval.get("format_version")) is int and approval == {
-        "format_version": 1, "decision": "approve-offline-opening", "scope": SCOPE,
+        "format_version": 2 if composed else 1,
+        "decision": "approve-offline-opening-with-legacy-escrow" if composed else "approve-offline-opening", "scope": material["scope"],
         "material_sha256": digest(material), "sql_sha256": sha(sql.encode()),
         "source_review_sha256": digest(material["source_review"]),
     }, "offline_approval_mismatch")
@@ -574,9 +839,27 @@ def verify_source_files(material: dict) -> None:
     # approved export proof's hashes. Recheck them before submission and after
     # a successful transport return, just like the directly listed source files.
     # This reads local files only; it cannot reconnect to the source database.
-    _, _, metadata_hashes, _, _ = PLANNER.metadata(source)
+    columns, baseline, metadata_hashes, _, _ = PLANNER.metadata(source)
     require(digest(metadata_hashes) == digest(proof.get("metadata_hashes")),
             "source_export_metadata_hash_mismatch")
+    if escrow_profile(material):
+        for name in ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence"):
+            require(digest(load(name)) == digest(material[name]), "escrow_source_file_content_mismatch")
+        for name in ("source_review_evidence", "escrow_policy_evidence", "inflight_process_evidence"):
+            require(bool(read_private(Path(files[name]["path"])).strip()), "escrow_evidence_file_empty")
+        # The candidate is not accepted merely because its own hashes agree.
+        # Parse the original frozen rows and recompute the maintained mapper.
+        selected = sorted(table for table in columns if PLANNER.table_families(table) or PLANNER.FINANCIAL_NAME.search(table))
+        require(digest(proof.get("selected_table_counts")) == digest({table: baseline[table] for table in selected}),
+                "source_export_table_selection_mismatch")
+        tables = PLANNER.read_frozen_export(Path(files["source_export"]["path"]), source,
+                                           columns, baseline, selected, proof["source_instance"])
+        records = [PLANNER.parse_json(line) for line in read_private(Path(files["identity_map"]["path"])).splitlines() if line]
+        import legacy_escrow_mapping as mapper
+        candidate = mapper.build(PLANNER, tables=tables, identity_records=records, plan=material["source_plan"],
+            migration_id=material["migration_id"], observed_at=material["observation"]["observed_at"],
+            source_proof=proof, unit_evidence=material["escrow_unit_evidence"])
+        require(digest(candidate) == digest(material["escrow_candidate"]), "escrow_source_mapper_rebuild_mismatch")
 
 
 def run_sql(connection: dict, sql: str, output: Path, application_name: str, *, readonly=False,
@@ -623,7 +906,7 @@ def execute(material: dict, *, approval: dict, original_sql: str, connection: di
         code, stdout = run_sql(connection, sql, output, application_name)
         if code == 0:
             verify_source_files(material)
-            require(source_hashes() == material["tool_source_hashes"], "financial_tool_source_changed")
+            require(source_hashes(escrow=escrow_profile(material)) == material["tool_source_hashes"], "financial_tool_source_changed")
             result = PLANNER.parse_json(stdout)
             allowed = ("COMMITTED", "NOT_APPLIED") if original_attempt else ("COMMITTED",)
             if type(result) is dict and set(result) == set(outcome) and result.get("status") in allowed \
@@ -646,6 +929,9 @@ def prepare(args, output: Path) -> dict:
     required = ("plan", "source_receipt", "export_proof", "identity_map", "identity_manifest",
                 "source_review", "reservations", "target_receipt", "migration_id", "runtime_role")
     require(all(getattr(args, name, None) for name in required), "prepare_arguments_missing")
+    composed = getattr(args, "include_legacy_escrow", False)
+    require(all(getattr(args, name, None) for name in ESCROW_SOURCE_FILES) if composed else
+            all(getattr(args, name, None) is None for name in ESCROW_SOURCE_FILES), "escrow_profile_arguments_mismatch")
     load = lambda path: PLANNER.parse_json(read_private(path))
     source = load(args.source_receipt)
     plan = load(args.plan)
@@ -684,18 +970,21 @@ def prepare(args, output: Path) -> dict:
         "financial_plan": args.plan, "source_export": Path(proof["reused_source_export_path"]),
         "source_export_proof": args.export_proof, "identity_map": args.identity_map,
         "identity_manifest": args.identity_manifest, "source_review": args.source_review, "reservations": args.reservations}
+    if composed:
+        paths.update({name: getattr(args, name) for name in ESCROW_SOURCE_FILES})
     files = {name: {"path": str(IDENTITY.private_backup_path(path)), "sha256": IDENTITY.sha256_file(path)}
              for name, path in paths.items()}
     material = prepare_material(plan, migration_id=args.migration_id, identities=identities,
         observation=PLANNER.source_observation(source), reservations=load(args.reservations), review=load(args.source_review),
-        snapshot=snapshot, target_contract=target["contract"], runtime_roles=args.runtime_role, source_files=files)
+        snapshot=snapshot, target_contract=target["contract"], runtime_roles=args.runtime_role, source_files=files,
+        **({name: load(getattr(args, name)) for name in ("escrow_candidate", "escrow_unit_evidence", "inflight_evidence")} if composed else {}))
     verify_source_files(material)
     sql = build_apply_sql(material)
     write_private(output, "material.private.json", canonical(material) + "\n")
     write_private(output, "opening.private.sql", sql)
     # An approval template is NOT authorization. An independent offline review
     # must bind all three hashes and replace the decision with the documented value.
-    approval = {"format_version": 1, "scope": SCOPE, "decision": "REVIEW_REQUIRED",
+    approval = {"format_version": 2 if composed else 1, "scope": material["scope"], "decision": "REVIEW_REQUIRED",
         "material_sha256": digest(material), "sql_sha256": sha(sql.encode()),
         "source_review_sha256": digest(material["source_review"])}
     write_private(output, "approval-required.private.json", canonical(approval) + "\n")
@@ -706,8 +995,11 @@ def prepare(args, output: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("material", "sql", "approval", "target-receipt", "plan", "source-receipt",
-                 "export-proof", "identity-map", "identity-manifest", "source-review", "reservations"):
+                 "export-proof", "identity-map", "identity-manifest", "source-review", "reservations",
+                 *(name.replace("_", "-") for name in sorted(ESCROW_SOURCE_FILES))):
         parser.add_argument("--" + name, type=Path)
+    parser.add_argument("--include-legacy-escrow", action="store_true",
+                        help="Prepare the separate reviewed wallet/counter/legacy-escrow profile; requires source, policy and process-drain evidence files")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--migration-id")
     parser.add_argument("--runtime-role", action="append")
@@ -717,6 +1009,8 @@ def main() -> int:
     mode.add_argument("--resolve-attempt", type=Path)
     args = parser.parse_args()
     try:
+        require(args.prepare or (not args.include_legacy_escrow and all(getattr(args, name) is None for name in ESCROW_SOURCE_FILES)),
+                "escrow_prepare_arguments_on_execution")
         IDENTITY.private_backup_path(args.output.parent, directory=True)
         args.output.mkdir(mode=0o700)
         output = IDENTITY.private_backup_path(args.output, directory=True)

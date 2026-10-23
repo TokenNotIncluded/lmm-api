@@ -95,9 +95,184 @@ def material_fixture(source=None, snapshot=None, runtime_roles=None):
 
 
 def approval_fixture(material, sql):
-    return {"format_version": 1, "scope": F.SCOPE, "decision": "approve-offline-opening",
+    composed = F.escrow_profile(material)
+    return {"format_version": 2 if composed else 1, "scope": material["scope"],
+        "decision": "approve-offline-opening-with-legacy-escrow" if composed else "approve-offline-opening",
         "material_sha256": F.digest(material), "sql_sha256": F.sha(sql.encode()),
         "source_review_sha256": F.digest(material["source_review"])}
+
+
+def escrow_material_fixture(source=None, snapshot=None, runtime_roles=None):
+    """Synthetic SQL contract fixture, not original-source or drain evidence.
+
+    The private-file suite exercises actual mapper/export rederivation. These
+    hand-written source declarations deliberately make the money oracle easy:
+    11+7 moves from clearing to the same payer's reserved, never from wallet.
+    """
+    source = copy.deepcopy(source or source_fixture())
+    snapshot = copy.deepcopy(snapshot or snapshot_fixture(source))
+    for name in (*F.ESCROW_TABLES, "core_billing.legacy_escrow_operations"):
+        snapshot["state"]["tables"][name] = {"rows": 0, "sha256": F.sha(b"")}
+    snapshot["state"]["inventory"]["tables"] = sorted(snapshot["state"]["tables"])
+    for row in source["reservations"]["positions"]:
+        row["reserved_units"] = 0
+    plan = source["plan"]
+    observed = source["observation"]["observed_at"]
+    id_records = [{"source_user_id": uid, "target_user_id": uid, "target_personal_account_id": aid}
+                  for uid, aid in source["identities"].items()]
+    evidence = {"format_version": 1, "scope": "legacy-escrow-source-unit-evidence",
+        "source_archive_sha256": plan["source_archive_sha256"], "mapping_sha256": plan["mapping_sha256"],
+        "source_export_sha256": source["files"]["source_export"]["sha256"],
+        "identity_records_sha256": F.digest(id_records), "parent_plan_sha256": "1" * 64,
+        "parent_audit_row_sha256": "2" * 64, "unit": "credit_500k_usd", "credits_per_usd": 500000,
+        "conversion_policy": "preserve-exact-parent-after-integers", "source_application_revision": "c" * 40,
+        "source_policy_evidence_sha256": F.sha(b"SYNTHETIC escrow unit review\r\n")}
+    claim = lambda cid, uid, aid, amount: {"source_challenge_id": cid, "participant_user_id": uid,
+        "recipient_account_id": aid, "source_row_sha256": "d" * 64, "rights_status": "active_future_reward",
+        "source_reward_quota": amount * 10, "payout_units": amount, "status": "accepted", "rejected_at": 0, "paid_at": 0}
+    projects = [{"source_project_id": pid, "owner_user_id": 71, "payer_account_id": 1,
+        "source_row_sha256": "e" * 64, "source_parent_plan_sha256": "1" * 64, "escrow_units": amount,
+        "status": "published", "claims": [claim(cid, uid, aid, payout)], "disputes": []}
+        for pid, amount, cid, uid, aid, payout in ((101, 11, 1001, 72, 2, 5), (102, 7, 1002, 73, 3, 4))]
+    projects[0]["claims"].append({**claim(1003, 73, 3, 1), "status": "rejected",
+        "rights_status": "historical_rejection_guard_only", "payout_units": None, "rejected_at": observed - 604801})
+    projects[0]["disputes"].append({"source_dispute_id": 2001, "source_challenge_id": 1001,
+        "source_row_sha256": "f" * 64, "status": "open", "reward_quota_snapshot": 500,
+        "project_escrow_quota_snapshot": 1100, "tip_quota_snapshot": 0})
+    batch = {"migration_id": "synthetic-financial", "source_archive_sha256": plan["source_archive_sha256"],
+        "mapping_sha256": plan["mapping_sha256"], "unit": "credit_500k_usd", "observed_at": observed, "projects": projects}
+    candidate = {"format_version": 1, "scope": "legacy-escrow-candidate-only",
+        "economic_approval_verified": False, "approval_created": False, "target_writes": 0, "blockers": [],
+        "source_unit_evidence_bound": True, "source_unit_authority_verified": False,
+        "unit_evidence_sha256": F.digest(evidence), "identity_records_sha256": F.digest(id_records),
+        "identity_map_sha256": plan["identity_map_sha256"], "source_export_sha256": evidence["source_export_sha256"],
+        **{key: batch[key] for key in ("migration_id", "source_archive_sha256", "mapping_sha256", "observed_at")},
+        "batch_candidate": batch}
+    candidate["candidate_sha256"] = F.digest(candidate)
+    process_hash = F.sha(b"SYNTHETIC drain process log\r\n")
+    inflight = {"format_version": 1, "scope": "legacy-nonescrow-inflight-zero-evidence",
+        "basis": "source-application-drain-and-durable-state-reconciliation", "snapshot_relation": "after-drain",
+        **{key: plan[key] for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256")},
+        "source_export_sha256": evidence["source_export_sha256"], "source_application_revision": "c" * 40,
+        "observed_at": observed, "drain_completed_at": observed - 1,
+        "source_process_identity": {"pid": 99, "started_at": observed - 100, "binary_sha256": "b" * 64},
+        "process_evidence_sha256": process_hash,
+        "positions": copy.deepcopy(source["reservations"]["positions"]),
+        "source_table_counts": {name: row["row_count"] for name, row in plan["source_evidence"].items()},
+        "unresolved_operations": []}
+    review = {**source["review"], "format_version": 2, "scope": F.ESCROW_SCOPE,
+        "decision": "approved-offline-opening-with-legacy-escrow",
+        "other_rights_policy": "all-other-rights-remain-disabled-pending-separate-import",
+        "escrow_candidate_sha256": F.digest(candidate), "escrow_unit_evidence_sha256": F.digest(evidence),
+        "inflight_evidence_sha256": F.digest(inflight), "escrow_policy": F.ESCROW_POLICY, "inflight_policy": F.INFLIGHT_POLICY,
+        "evidence_sha256": F.sha(b"SYNTHETIC independent economic review\r\n")}
+    files = copy.deepcopy(source["files"])
+    for name in F.ESCROW_SOURCE_FILES:
+        files[name] = {"path": "/home/test/Backups/" + name, "sha256": "f" * 64}
+    files["source_review_evidence"]["sha256"] = review["evidence_sha256"]
+    files["escrow_policy_evidence"]["sha256"] = evidence["source_policy_evidence_sha256"]
+    files["inflight_process_evidence"]["sha256"] = process_hash
+    return F.prepare_material(plan, migration_id="synthetic-financial", identities=source["identities"],
+        observation=source["observation"], reservations=source["reservations"], review=review,
+        snapshot=snapshot, runtime_roles=runtime_roles or ["a03_runtime"], source_files=files,
+        target_contract={**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": snapshot["catalog_fingerprint_sha256"],
+                         "trust_policy_seed": snapshot["trust_policy_seed"]},
+        escrow_candidate=candidate, escrow_unit_evidence=evidence, inflight_evidence=inflight)
+
+
+def reseal_escrow(material):
+    candidate = material["escrow_candidate"]
+    candidate["candidate_sha256"] = F.digest({k: v for k, v in candidate.items() if k not in ("candidate_sha256", "public_summary")})
+    material["source_review"]["escrow_candidate_sha256"] = F.digest(candidate)
+    material["source_review"]["inflight_evidence_sha256"] = F.digest(material["inflight_evidence"])
+    material["escrow_batch"] = {**copy.deepcopy(candidate["batch_candidate"]),
+        "review_proof_sha256": material["source_review"]["evidence_sha256"]}
+
+
+class ComposedEscrowTests(unittest.TestCase):
+    def test_separate_profile_and_approval_cannot_reuse_opening_authority(self):
+        material = escrow_material_fixture()
+        self.assertEqual((material["format_version"], material["scope"]), (3, F.ESCROW_SCOPE))
+        sql = F.build_apply_sql(material)
+        F.verify_approval(material, sql, approval_fixture(material, sql))
+        old = approval_fixture(material, sql)
+        old.update(format_version=1, scope=F.SCOPE, decision="approve-offline-opening")
+        with self.assertRaisesRegex(F.Error, "approval_mismatch"):
+            F.verify_approval(material, sql, old)
+        opening = material_fixture()
+        opening["escrow_batch"] = material["escrow_batch"]
+        with self.assertRaisesRegex(F.Error, "composed_profile"):
+            F.validate_material(opening)
+
+    def test_candidate_is_not_itself_an_approval_and_escrow_never_debits_wallet(self):
+        material = escrow_material_fixture()
+        self.assertEqual(F.validate_escrow(material), {1: 18})
+        self.assertEqual(material["opening"][0]["available_units"], -120)
+        self.assertTrue(all(row["reserved_units"] == 0 for row in material["opening"]))
+        sql = F.build_apply_sql(material)
+        self.assertIn("PERFORM core_billing.import_legacy_escrow_batch(m->'escrow_batch');", sql)
+        self.assertIn("financial_escrow_exact_readback_failed", sql)
+        self.assertIn("ALTER SEQUENCE", sql)
+        self.assertLess(sql.index("import_account_opening_counters(v_payload)"), sql.index("import_legacy_escrow_batch(m->'escrow_batch')"))
+
+    def test_unknown_or_wrong_process_evidence_and_partial_coverage_fail(self):
+        changes = [("snapshot_relation", "online-not-drained"), ("unresolved_operations", ["pending-refund"]),
+                   ("drain_completed_at", 253402300799), ("positions", []), ("source_table_counts", {}),
+                   ("source_process_identity", None), ("mapping_sha256", "0" * 64)]
+        for key, value in changes:
+            m = escrow_material_fixture()
+            m["inflight_evidence"][key] = value
+            reseal_escrow(m)
+            with self.subTest(key=key), self.assertRaises(F.Error):
+                F.build_apply_sql(m)
+        for value in (None, True, 1):
+            m = escrow_material_fixture()
+            m["inflight_evidence"]["positions"][0]["reserved_units"] = value
+            reseal_escrow(m)
+            with self.subTest(reserved=value), self.assertRaises(F.Error):
+                F.build_apply_sql(m)
+
+    def test_review_and_actual_evidence_file_hashes_cannot_be_dangling(self):
+        for name in ("source_review_evidence", "escrow_policy_evidence", "inflight_process_evidence"):
+            m = escrow_material_fixture()
+            m["source_files"][name]["sha256"] = "0" * 64
+            with self.subTest(file=name), self.assertRaises(F.Error):
+                F.build_apply_sql(m)
+        for key in ("escrow_candidate_sha256", "escrow_unit_evidence_sha256", "inflight_evidence_sha256"):
+            m = escrow_material_fixture()
+            m["source_review"][key] = "0" * 64
+            with self.subTest(review_key=key), self.assertRaises(F.Error):
+                F.build_apply_sql(m)
+
+    def test_business_shape_or_replayed_claim_errors_refuse_the_whole_batch(self):
+        for field, value in (("recipient_account_id", 1), ("payout_units", True), ("paid_at", True),
+                             ("source_reward_quota", 1.0), ("status", "approved")):
+            m = escrow_material_fixture()
+            m["escrow_candidate"]["batch_candidate"]["projects"][-1]["claims"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(F.Error):
+                reseal_escrow(m)
+                F.build_apply_sql(m)
+        m = escrow_material_fixture()
+        m["escrow_candidate"]["batch_candidate"]["projects"][-1]["claims"][0]["source_challenge_id"] = 1001
+        reseal_escrow(m)
+        with self.assertRaisesRegex(F.Error, "claim_duplicate"):
+            F.build_apply_sql(m)
+
+    def test_sequence_budget_includes_each_escrow_project(self):
+        m = escrow_material_fixture()
+        m["before_state"]["sequences"]["core_billing.ledger_journals_id_seq"]["max"] = 4
+        with self.assertRaisesRegex(F.Error, "sequence_overflow"):
+            F.build_apply_sql(m)
+
+    def test_combined_clearing_prefix_is_checked_before_any_sql(self):
+        m = escrow_material_fixture()
+        opening = m["opening"][0]
+        m["opening"] = [{**opening, "account_id": i + 1, "source_entity_key": f"legacy.users/{i + 71}",
+                         "available_units": F.PREFLIGHT.JS_SAFE_MAX, "affiliate_units": 0} for i in range(1024)]
+        m["escrow_candidate"]["batch_candidate"]["projects"][0]["escrow_units"] = 2048
+        reseal_escrow(m)
+        with self.assertRaisesRegex(F.Error, "clearing_prefix_overflow"):
+            F.validate_escrow(m)
 
 
 class MaterialTests(unittest.TestCase):
