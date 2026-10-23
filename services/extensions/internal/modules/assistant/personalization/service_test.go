@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 )
 
 func TestGreetingPreviewRejectsMalformedArgumentsBeforeDomainAccess(t *testing.T) {

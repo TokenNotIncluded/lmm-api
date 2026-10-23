@@ -2,7 +2,7 @@ package composition
 
 import (
 	"errors"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/toolmarket"
 	"net"
 	"net/netip"
 	"net/url"

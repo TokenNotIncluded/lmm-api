@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 )
 
 func TestStoreTransportActualConfigAdvertisesTermsWithoutAccess(t *testing.T) {

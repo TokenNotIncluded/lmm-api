@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 )
 
 // RateLimitWeb uses the support database's clock and transaction lock. A user's

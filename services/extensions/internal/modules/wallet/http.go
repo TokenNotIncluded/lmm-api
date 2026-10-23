@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 )
 
 // TrustedSessionExtractor must be supplied by host authentication middleware.

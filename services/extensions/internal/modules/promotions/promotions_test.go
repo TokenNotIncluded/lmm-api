@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/storage"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/testkit"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/storage"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/testkit"
 )
 
 var testNow = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

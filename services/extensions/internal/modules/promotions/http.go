@@ -3,7 +3,7 @@ package promotions
 import (
 	"net/http"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
 )
 
 func (*Service) Name() string { return "promotions" }

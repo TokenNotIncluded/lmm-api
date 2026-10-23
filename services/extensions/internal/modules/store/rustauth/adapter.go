@@ -4,8 +4,8 @@ package rustauth
 
 import (
 	"context"
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	pb "github.com/TokenNotIncluded/lmm-api/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"time"

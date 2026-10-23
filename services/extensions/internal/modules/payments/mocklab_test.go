@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	lab "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/testkit/mocklab"
+	lab "github.com/TokenNotIncluded/lmm-api/extensions/internal/testkit/mocklab"
 )
 
 func openMocklab(t *testing.T) *lab.Client {

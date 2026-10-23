@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/redaction"
 )
 
 func (m *Module) bindExecutionStream(ctx context.Context, p Principal, credential, id string, expected Execution, i Installation, r Release, c *mcpSession) {

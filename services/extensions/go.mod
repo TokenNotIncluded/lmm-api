@@ -1,4 +1,4 @@
-module github.com/TokenNotIncluded/api.lmm.best/extensions
+module github.com/TokenNotIncluded/lmm-api/extensions
 
 go 1.25.0
 

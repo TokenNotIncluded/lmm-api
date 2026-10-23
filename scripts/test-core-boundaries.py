@@ -18,9 +18,9 @@ OFFLINE_CLI = "services/extensions/internal/freshinstall/cli.go"
 OFFLINE_MAIN = "services/extensions/cmd/extensions/main.go"
 OFFLINE_SNAPSHOT = "services/extensions/internal/modules/toolmarket/install_snapshot.go"
 OFFLINE_TOKEN_SHA256 = {
-    'services/extensions/internal/freshinstall/install.go': '4eda9917b2f874c35e2ce5931111119474f58adce6a4ebcf61ca20a32ca519fb',
+    'services/extensions/internal/freshinstall/install.go': '4745a0130f634d2fdd27931ad628d7f257e4d32db993eb79f5862eb826b502d9',
     'services/extensions/internal/freshinstall/cli.go': 'c397c48d8511a735924a7c8ceaadbd02a7c0335c5d0eca635c59b0a3b3ce137e',
-    'services/extensions/cmd/extensions/main.go': 'b3f4d41bad0abb5c3b22211e5d968f99c6717ac773a93aba3404d028716345bd',
+    'services/extensions/cmd/extensions/main.go': 'e378a2f28d75426b10496b91fd41d1c8cb79a619d1b949098538eb2accfc5666',
     'services/extensions/internal/modules/toolmarket/install_snapshot.go': '8f6f852068a5891a490876eb8918a58008d3f80844144f84307ba78c36b56013',
 }
 COMPOSITION_BUNDLE = "services/extensions/internal/composition/storage_bundle.go"
@@ -345,7 +345,7 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assertNotRegex(code, r"\b" + re.escape(name) + r" \. Close\b", path)
 
     def assert_offline_installation_boundary(self, path, text):
-        imported = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"
+        imported = "github.com/TokenNotIncluded/lmm-api/extensions/internal/freshinstall"
         if path not in (OFFLINE_MAIN, OFFLINE_INSTALLER, OFFLINE_CLI):
             self.assertNotIn(imported, text, path)
             self.assertNotRegex(" ".join(go_tokens(text)), r"\bfreshinstall \.", path)
@@ -1184,7 +1184,7 @@ class CoreBoundaryTests(unittest.TestCase):
                      "services/extensions/internal/modules/unapproved.go",
                      "services/extensions/internal/freshinstall/unapproved.go"):
             source = (ROOT / path).read_text() if (ROOT / path).exists() else "package unapproved\n"
-            for extra in ('import installer "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"',
+            for extra in ('import installer "github.com/TokenNotIncluded/lmm-api/extensions/internal/freshinstall"',
                           'func extra() { freshinstall.Install(ctx, cfg) }',
                           'func extra() { exec.Command("extensions", "install-db").Run() }',
                           'var ownerFlag = "owner-url-file"',

@@ -2,7 +2,7 @@ pkgbase = lmm-api-core-bin
 	pkgdesc = LMM API Rust core (prebuilt binary)
 	pkgver = 0.1.0rc2
 	pkgrel = 1
-	url = https://github.com/TokenNotIncluded/api.lmm.best
+	url = https://github.com/TokenNotIncluded/lmm-api
 	arch = x86_64
 	license = AGPL-3.0-or-later
 	provides = lmm-api-core=0.1.0rc2
@@ -23,7 +23,7 @@ pkgbase = lmm-api-core-bin
 	sha256sums = 2d9551ba23cf16a583aa695e3139515d316085bbdfc396abb6c05a5ccf27abc3
 	sha256sums = 1ead7a8a27e1ff40b11153084cd3f3b00267247e832b760f78b148328815aaa4
 	sha256sums = 5c3f10c4b1a7e0bcc264b80f87e1a1af11eaabd0712550cad1f6d85f13c7d486
-	source_x86_64 = https://github.com/TokenNotIncluded/api.lmm.best/releases/download/core-v0.1.0-rc.2/lmm-core-0.1.0-rc.2-linux-amd64.tar.gz
+	source_x86_64 = https://github.com/TokenNotIncluded/lmm-api/releases/download/core-v0.1.0-rc.2/lmm-core-0.1.0-rc.2-linux-amd64.tar.gz
 	depends_x86_64 = ca-certificates
 	depends_x86_64 = gcc-libs
 	depends_x86_64 = glibc>=2.34

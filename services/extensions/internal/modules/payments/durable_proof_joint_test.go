@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
-	p "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments/rustbridge"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/coreclient"
+	p "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/payments/rustbridge"
 	_ "github.com/lib/pq"
 )
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/access"
+	market "github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/toolmarket"
 )
 
 func (a *Adapter) hostReady(ctx context.Context, path string, protocol int) ([]byte, error) {

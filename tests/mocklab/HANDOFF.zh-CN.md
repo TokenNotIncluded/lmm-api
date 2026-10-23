@@ -4,7 +4,7 @@
 
 这是第一阶段补丁，不是整站端到端验收完成版。
 
-阅读基线：`TokenNotIncluded/api.lmm.best`，PR #675，分支
+阅读基线：`TokenNotIncluded/lmm-api`，PR #675，分支
 `wip/rust-core-go-extensions`，提交
 `bbde7468dcbd08091bc6a666c27946c2a385f2bf`。
 

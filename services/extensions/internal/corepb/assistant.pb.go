@@ -2526,7 +2526,7 @@ const file_lmm_core_v1_assistant_proto_rawDesc = "" +
 	"\x11CompleteAgentTool\x12#.lmm.core.v1.AssistantAgentComplete\x1a!.lmm.core.v1.AssistantAgentResult\x12\x80\x01\n" +
 	" PrepareAssistantToolConfirmation\x124.lmm.core.v1.PrepareAssistantToolConfirmationRequest\x1a&.lmm.core.v1.AssistantToolConfirmation\x12\x86\x01\n" +
 	"#GetAssistantToolConfirmationReceipt\x127.lmm.core.v1.GetAssistantToolConfirmationReceiptRequest\x1a&.lmm.core.v1.AssistantToolConfirmation\x12z\n" +
-	"\x19GetAssistantBusinessFacts\x12-.lmm.core.v1.GetAssistantBusinessFactsRequest\x1a..lmm.core.v1.GetAssistantBusinessFactsResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\x19GetAssistantBusinessFacts\x12-.lmm.core.v1.GetAssistantBusinessFactsRequest\x1a..lmm.core.v1.GetAssistantBusinessFactsResponseBGZEgithub.com/TokenNotIncluded/lmm-api/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_assistant_proto_rawDescOnce sync.Once

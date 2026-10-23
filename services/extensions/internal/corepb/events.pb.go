@@ -844,7 +844,7 @@ const file_lmm_core_v1_events_proto_rawDesc = "" +
 	"\tNegotiate\x12#.lmm.core.v1.NegotiateEventsRequest\x1a$.lmm.core.v1.NegotiateEventsResponse\x12G\n" +
 	"\x04Pull\x12\x1e.lmm.core.v1.PullEventsRequest\x1a\x1f.lmm.core.v1.PullEventsResponse\x12Z\n" +
 	"\vAcknowledge\x12$.lmm.core.v1.AcknowledgeEventRequest\x1a%.lmm.core.v1.AcknowledgeEventResponse\x12H\n" +
-	"\x05Retry\x12\x1e.lmm.core.v1.RetryEventRequest\x1a\x1f.lmm.core.v1.RetryEventResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\x05Retry\x12\x1e.lmm.core.v1.RetryEventRequest\x1a\x1f.lmm.core.v1.RetryEventResponseBGZEgithub.com/TokenNotIncluded/lmm-api/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_events_proto_rawDescOnce sync.Once
