@@ -18,9 +18,9 @@ OFFLINE_CLI = "services/extensions/internal/freshinstall/cli.go"
 OFFLINE_MAIN = "services/extensions/cmd/extensions/main.go"
 OFFLINE_SNAPSHOT = "services/extensions/internal/modules/toolmarket/install_snapshot.go"
 OFFLINE_TOKEN_SHA256 = {
-    'services/extensions/internal/freshinstall/install.go': '3cc4e225cd6ee203cfc71f15c04bdc612d9bbec338d88180a55662cca5356b5b',
+    'services/extensions/internal/freshinstall/install.go': 'cbdb6740138f3389c024e9152e62853fbc23bc5abe19404fea72151a8cd62177',
     'services/extensions/internal/freshinstall/cli.go': 'c397c48d8511a735924a7c8ceaadbd02a7c0335c5d0eca635c59b0a3b3ce137e',
-    'services/extensions/cmd/extensions/main.go': 'b3f4d41bad0abb5c3b22211e5d968f99c6717ac773a93aba3404d028716345bd',
+    'services/extensions/cmd/extensions/main.go': 'ffc51c8c6dec03f0c0bebde621afd35c3fceca75211f10f3237429e68551d363',
     'services/extensions/internal/modules/toolmarket/install_snapshot.go': '8f6f852068a5891a490876eb8918a58008d3f80844144f84307ba78c36b56013',
 }
 COMPOSITION_BUNDLE = "services/extensions/internal/composition/storage_bundle.go"
@@ -56,6 +56,8 @@ CORE_SCHEMAS = (
     "core_payments.",
     "core_runtime.",
     "core_schema.",
+    "core_telegram_auth.",
+    "core_trust_pricing.",
 )
 # Source guards are an offline contract only. The PostgreSQL role/schema/grant
 # mutations in composition/guards_integration_test.go require a real test DB.
@@ -343,7 +345,7 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assertNotRegex(code, r"\b" + re.escape(name) + r" \. Close\b", path)
 
     def assert_offline_installation_boundary(self, path, text):
-        imported = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"
+        imported = "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/freshinstall"
         if path not in (OFFLINE_MAIN, OFFLINE_INSTALLER, OFFLINE_CLI):
             self.assertNotIn(imported, text, path)
             self.assertNotRegex(" ".join(go_tokens(text)), r"\bfreshinstall \.", path)
@@ -1182,7 +1184,7 @@ class CoreBoundaryTests(unittest.TestCase):
                      "services/extensions/internal/modules/unapproved.go",
                      "services/extensions/internal/freshinstall/unapproved.go"):
             source = (ROOT / path).read_text() if (ROOT / path).exists() else "package unapproved\n"
-            for extra in ('import installer "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"',
+            for extra in ('import installer "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/freshinstall"',
                           'func extra() { freshinstall.Install(ctx, cfg) }',
                           'func extra() { exec.Command("extensions", "install-db").Run() }',
                           'var ownerFlag = "owner-url-file"',

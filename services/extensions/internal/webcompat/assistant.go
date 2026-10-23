@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
 )
 
 type AssistantHistory interface {

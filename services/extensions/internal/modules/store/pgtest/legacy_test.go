@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
 )
 
 type legacyAuthority struct{}

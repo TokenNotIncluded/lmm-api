@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	lab "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/testkit/mocklab"
+	lab "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/testkit/mocklab"
 )
 
 // Exercises the real MCP wire client. Does not invent Rust Authority or Funds,

@@ -939,7 +939,7 @@ const file_lmm_core_v1_control_proto_rawDesc = "" +
 	"\fCapabilities\x12 .lmm.core.v1.CapabilitiesRequest\x1a!.lmm.core.v1.CapabilitiesResponse\x12J\n" +
 	"\tAuthorize\x12\x1d.lmm.core.v1.AuthorizeRequest\x1a\x1e.lmm.core.v1.AuthorizeResponse\x12J\n" +
 	"\tListTeams\x12\x1d.lmm.core.v1.ListTeamsRequest\x1a\x1e.lmm.core.v1.ListTeamsResponse\x12\\\n" +
-	"\x0fAuthorizeRemote\x12#.lmm.core.v1.AuthorizeRemoteRequest\x1a$.lmm.core.v1.AuthorizeRemoteResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\x0fAuthorizeRemote\x12#.lmm.core.v1.AuthorizeRemoteRequest\x1a$.lmm.core.v1.AuthorizeRemoteResponseBPZNgithub.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_control_proto_rawDescOnce sync.Once

@@ -1,7 +1,7 @@
 package assistant_services
 
 import (
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 	"net/http"
 	"strconv"
 	"strings"

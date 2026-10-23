@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 )
 
 // Within owns a separate Go business transaction. It verifies and locks the

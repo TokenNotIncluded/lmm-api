@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/coreclient"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

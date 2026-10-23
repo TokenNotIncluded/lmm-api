@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/storage"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/storage"
 )
 
 var greetingLanguages = [...]string{"en", "zh", "zh-TW", "fr", "ja", "ru", "vi"}

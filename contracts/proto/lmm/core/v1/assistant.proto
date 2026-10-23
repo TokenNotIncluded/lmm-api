@@ -1,6 +1,6 @@
 syntax = "proto3";
 package lmm.core.v1;
-option go_package = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepb";
+option go_package = "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepb";
 
 // Core-owned assistant delegation. Each workflow requires its independently
 // negotiated capability and a fully installed durable execution path.

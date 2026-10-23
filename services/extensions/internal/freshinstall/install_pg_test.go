@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/bounties"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/payments"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/wallet"
 	"github.com/lib/pq"
 )
 

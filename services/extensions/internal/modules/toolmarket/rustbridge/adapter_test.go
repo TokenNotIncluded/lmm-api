@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
+	market "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/toolmarket"
 )
 
 // Synthetic Core transport contracts only. Real CorePG/ledger acceptance is a

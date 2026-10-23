@@ -5,14 +5,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/legal"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/legal"
 	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
 )
 
 // PolicyChangePreparer is a Core-owned browser confirmation boundary. An

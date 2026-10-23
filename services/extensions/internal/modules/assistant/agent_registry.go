@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/redaction"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/assistant/redaction"
 )
 
 const AgentTurnFeature = "assistant.agent_turn.execute.v1"

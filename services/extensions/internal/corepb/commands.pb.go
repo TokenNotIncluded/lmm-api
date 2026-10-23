@@ -857,7 +857,7 @@ const file_lmm_core_v1_commands_proto_rawDesc = "" +
 	"\x06Settle\x12\x1f.lmm.core.v1.SettleUsageRequest\x1a\x1c.lmm.core.v1.MutationReceipt\x12I\n" +
 	"\aRelease\x12 .lmm.core.v1.ReleaseUsageRequest\x1a\x1c.lmm.core.v1.MutationReceipt2w\n" +
 	"\x13CoreRoutingCommands\x12`\n" +
-	"\x15ActivateConfiguration\x12).lmm.core.v1.ActivateConfigurationRequest\x1a\x1c.lmm.core.v1.MutationReceiptBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\x15ActivateConfiguration\x12).lmm.core.v1.ActivateConfigurationRequest\x1a\x1c.lmm.core.v1.MutationReceiptBPZNgithub.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_commands_proto_rawDescOnce sync.Once

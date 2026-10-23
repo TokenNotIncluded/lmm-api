@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/support"
+	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/store"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/support"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

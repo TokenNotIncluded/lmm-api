@@ -17,9 +17,9 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
-	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
+	pb "github.com/TokenNotIncluded/lmm-api/services/extensions/internal/corepb"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules"
+	"github.com/TokenNotIncluded/lmm-api/services/extensions/internal/modules/operations"
 )
 
 func operationsRequest(mux http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
