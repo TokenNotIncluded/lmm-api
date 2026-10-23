@@ -101,6 +101,9 @@
     "package": "vsce package --no-dependencies",
     "test:host": "bash scripts/test-host.sh"
   },
+  "overrides": {
+    "@azure/msal-node": "7.1.1"
+  },
   "devDependencies": {
     "@types/node": "^22.19.0",
     "@types/vscode": "1.104.0",

@@ -25,6 +25,24 @@ const dom = new Window({
     },
   },
 })
+// happy-dom 21 exposes the Web Animations API. The About test does not test
+// motion, and letting Motion use that API makes canceled test animations reject
+// between assertions. Keep this DOM fixture in reduced-motion mode so the
+// assertions exercise the page states rather than animation timing.
+const domMatchMedia = dom.matchMedia.bind(dom)
+Object.defineProperty(dom, 'matchMedia', {
+  configurable: true,
+  value: (query: string) => {
+    const result = domMatchMedia(query)
+    if (!query.includes('prefers-reduced-motion')) return result
+    return {
+      ...result,
+      matches: true,
+      addEventListener: result.addEventListener.bind(result),
+      removeEventListener: result.removeEventListener.bind(result),
+    }
+  },
+})
 dom.document.write('<!doctype html><html><head></head><body></body></html>')
 Object.defineProperty(dom.document, 'compatMode', {
   configurable: true,
