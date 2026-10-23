@@ -24,8 +24,9 @@ Commands:\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
   check-db        Read-only schema/runtime authority JSON; requires explicit --config.\n\
   init-db         Initialize a new, empty core database.\n\
-  upgrade-db      Explicit offline compiled additive 25->26 upgrade; requires owner --config and exact-target stdin JSON.\n\
+  upgrade-db      Explicit offline exact Core26 ledger revision; requires owner --config and exact-target stdin JSON.\n\
                   Legacy 24->25 trust-pricing requires the preserved 25-component installer.\n\
+                  Additive 25->26 requires the preserved 26-component installer before this ledger revision.\n\
   create-first-owner  Create the first production owner offline from private stdin JSON; requires explicit --config and a fresh store.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\

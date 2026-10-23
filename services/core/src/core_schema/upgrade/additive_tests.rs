@@ -150,13 +150,23 @@ fn compiled_25_predecessor_and_only_26_delta_match_frozen_bytes() {
     let components = frozen["manifest"]["components"].as_array().unwrap();
     assert_eq!(components.len(), 25);
     for (entry, (name, ddl)) in components.iter().zip(COMPONENTS.iter().take(25)) {
-        let digest = hex(&Sha256::digest(ddl));
+        let original = if *name == "ledger" {
+            include_str!("../../../tests/core_schema/ledger_before_escrow_submit.sql")
+        } else {
+            ddl
+        };
+        let digest = hex(&Sha256::digest(original));
         assert_eq!(entry["name"], *name);
         assert_eq!(entry["raw_schema_sha256"], digest);
         assert_eq!(expected[*name], digest);
     }
     let mut producer = schema_manifest();
     producer.components.truncate(25);
+    for component in &mut producer.components {
+        if component.name == "ledger" {
+            component.raw_schema_sha256 = super::super::ledger::PRE_LEDGER.into();
+        }
+    }
     let mut installer = Sha256::new();
     installer.update(crate::core_schema::CONTRACT);
     installer.update(crate::core_schema::UPGRADE_METADATA);
@@ -185,15 +195,19 @@ fn compiled_25_predecessor_and_only_26_delta_match_frozen_bytes() {
 #[test]
 fn additive_request_is_strict_and_binds_every_target_field() {
     let good = request();
-    validate(&good).unwrap();
+    assert!(matches!(
+        validate(&good),
+        Err(UpgradeError::Rejected(
+            "UPGRADE_DB_USE_PRESERVED_26_INSTALLER"
+        ))
+    ));
     let encoded = serde_json::to_vec(&good).unwrap();
-    assert_eq!(
-        UpgradeRequest::read(&encoded[..])
-            .unwrap()
-            .digest()
-            .unwrap(),
-        good.digest().unwrap()
-    );
+    assert!(matches!(
+        UpgradeRequest::read(&encoded[..]),
+        Err(UpgradeError::Rejected(
+            "UPGRADE_DB_USE_PRESERVED_26_INSTALLER"
+        ))
+    ));
     for field in [
         "sql",
         "grant_everything",

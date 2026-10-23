@@ -1,0 +1,129 @@
+{
+  "source_revision": "a398fa77baa2ecf57c0fda7f8d195a65c830ab4f",
+  "schema_manifest_stdout_sha256": "310937ea692be55a4b5070e3d6bc2ddf86071945b717e47359d68d3571fad351",
+  "catalog_sha256": "05dcb5fadfc11269de196e3730f9f65ff791bd44d499a6d062fc2b3f9c6c0061",
+  "table_count": 157,
+  "sequence_count": 21,
+  "manifest": {
+    "format_version": 1,
+    "scope": "compiled-core-schema-contract",
+    "components": [
+      {
+        "name": "humangrant",
+        "raw_schema_sha256": "7d9437a2ee485bc7491c76e755ca481a7a722c4ea9ae7322fe32ac5f8f0090bc"
+      },
+      {
+        "name": "identity",
+        "raw_schema_sha256": "c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9"
+      },
+      {
+        "name": "ledger",
+        "raw_schema_sha256": "50a7290ce860b676c38a2cf291f90e73a6d4422e3c7830ca904c6fbc6713e8ce"
+      },
+      {
+        "name": "payments",
+        "raw_schema_sha256": "9579afddbe5aeb4deb67984e731bcdc6ca405dc619ceede8d92505ecc43f7d39"
+      },
+      {
+        "name": "charging",
+        "raw_schema_sha256": "08f0a99e3cc7729627f782ec0341c31353008926b8ec8584c555a6c10dcb53de"
+      },
+      {
+        "name": "routing",
+        "raw_schema_sha256": "d8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e"
+      },
+      {
+        "name": "events",
+        "raw_schema_sha256": "99b3f6e9daa36c97fd18d515c8654310945612c0d992297b816a0405c17d5f22"
+      },
+      {
+        "name": "charging-ledger",
+        "raw_schema_sha256": "a06370899332ece92cf54fe0fa24df70ea532480b09a19abf99a52a30a7d24de"
+      },
+      {
+        "name": "migration",
+        "raw_schema_sha256": "4f6264d3edff1bd7a1f80289595a9e4dea596e325be7c6f4db568d03e738c78c"
+      },
+      {
+        "name": "console",
+        "raw_schema_sha256": "cacb96580221513624075ed28a6afa45268197b6f8e2b83740cffb9f1cff7f56"
+      },
+      {
+        "name": "model-gateway",
+        "raw_schema_sha256": "3550655d1318c7b33e1877d6eb5b98eb47f045a9c4cfb801d23331fcccb00be4"
+      },
+      {
+        "name": "commerce",
+        "raw_schema_sha256": "b7f9d07c4112623b34679b3043a1d315a4155ebe32688c2f878071a16f59b4c9"
+      },
+      {
+        "name": "tool-market",
+        "raw_schema_sha256": "404a5a6f6a459bca2eeeaf19be312324933e81999ef160b4befa796668c4d11c"
+      },
+      {
+        "name": "abuse",
+        "raw_schema_sha256": "b1c838d88f748c6bb3d885c4b39f112587bc8b7d38400c26ec43b3597110cec6"
+      },
+      {
+        "name": "oauth-grants",
+        "raw_schema_sha256": "e515ba3deca6d5b0b170fc5a7fa32cf40a42301b683b62e8bb80bc23683b16f3"
+      },
+      {
+        "name": "history",
+        "raw_schema_sha256": "9359e86f0f262e3f24bb9f8db70e32caab85cde515af6f2e5fdd1a66b4f83656"
+      },
+      {
+        "name": "assistant-model",
+        "raw_schema_sha256": "c3960ce7ac307b6d4aecc0abccd0c97614220eeb7c20f960177bb53a3c2c3f6b"
+      },
+      {
+        "name": "gift",
+        "raw_schema_sha256": "845cb755dd1ba92d9e5608f638d46367af3565bc3c5f383bb1aabc64929410d2"
+      },
+      {
+        "name": "image",
+        "raw_schema_sha256": "5ec9f1e4ea14093285de9bd34fecef5660b10e73ac2828de41f3c2c26f013d11"
+      },
+      {
+        "name": "market-oauth",
+        "raw_schema_sha256": "29819097b5470b4ecc8b1a7d7581d5abdc6b120df239edd6f4d373330086797e"
+      },
+      {
+        "name": "tool-market-credit",
+        "raw_schema_sha256": "59b861b2a316b79bf0842ab13c07d0570b07bf3b84945f4edf8957ace4cc733f"
+      },
+      {
+        "name": "wallet",
+        "raw_schema_sha256": "0b75972ef1aaa6b8b09b2d5e84636ba90aa8affcb4c1c30fbb7de18a9a9b95ad"
+      },
+      {
+        "name": "bounties",
+        "raw_schema_sha256": "965aa476d684fcfb0c72b6d58b7bb801d37135414f3c73f2a08c688e88143e06"
+      },
+      {
+        "name": "assistant-tools",
+        "raw_schema_sha256": "9839e06cc0854c9efa60f30fef9c84a922dc18003b6317898df38a16c366aab4"
+      },
+      {
+        "name": "trust-pricing",
+        "raw_schema_sha256": "93e0e16b04c312d9e1f27a0ae8dc25f16da4e7c044571cc14310b81de8cf1915"
+      },
+      {
+        "name": "telegram-auth",
+        "raw_schema_sha256": "d4734912cf68cdc8083356dc4301670cec27ec522e2c5ecaf2653a6a7d292510"
+      }
+    ],
+    "identity": {
+      "version": 5,
+      "fingerprint_sha256": "c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9"
+    },
+    "installer_contract_sql_sha256": "6aea904bb49fae92928ffbbac9550dd969ecc8d904874f0c72a649d240511481",
+    "catalog": {
+      "query_utf8": "\nWITH catalog_path AS MATERIALIZED (\n SELECT pg_catalog.set_config('search_path','pg_catalog',true)\n), ns AS MATERIALIZED (\n SELECT n.oid,n.nspname FROM pg_namespace n CROSS JOIN catalog_path\n WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_'\n), definitions AS (\n SELECT json_build_array('relation',n.nspname,c.relname,c.relkind)::text AS definition\n FROM pg_class c JOIN ns n ON n.oid=c.relnamespace\n UNION ALL\n SELECT json_build_array('column',n.nspname,c.relname,a.attnum,a.attname,\n   format_type(a.atttypid,a.atttypmod),a.attnotnull,a.attidentity,a.attgenerated,\n   pg_get_expr(d.adbin,d.adrelid))::text\n FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN ns n ON n.oid=c.relnamespace\n LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum\n WHERE a.attnum>0 AND NOT a.attisdropped\n UNION ALL\n SELECT json_build_array('constraint',n.nspname,c.conname,pg_get_constraintdef(c.oid,true))::text\n FROM pg_constraint c JOIN ns n ON n.oid=c.connamespace\n UNION ALL\n SELECT json_build_array('index',n.nspname,c.relname,pg_get_indexdef(i.indexrelid))::text\n FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN ns n ON n.oid=c.relnamespace\n UNION ALL\n SELECT json_build_array('function',n.nspname,p.proname,pg_get_functiondef(p.oid))::text\n FROM pg_proc p JOIN ns n ON n.oid=p.pronamespace WHERE p.prokind IN ('f','p')\n UNION ALL\n SELECT json_build_array('trigger',n.nspname,c.relname,t.tgname,t.tgenabled,\n   pg_get_triggerdef(t.oid,true))::text\n FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN ns n ON n.oid=c.relnamespace\n WHERE NOT t.tgisinternal\n UNION ALL\n -- RI trigger names embed installation OIDs, which change on pg_dump/restore.\n -- Hash their stable constraint/function/trigger properties instead.\n SELECT json_build_array('internal-trigger',n.nspname,c.relname,k.conname,\n   pn.nspname,p.proname,t.tgtype,t.tgenabled,t.tgdeferrable,t.tginitdeferred,\n   t.tgattr::text,encode(t.tgargs,'hex'),pg_get_expr(t.tgqual,t.tgrelid))::text\n FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN ns n ON n.oid=c.relnamespace\n JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace pn ON pn.oid=p.pronamespace\n LEFT JOIN pg_constraint k ON k.oid=t.tgconstraint WHERE t.tgisinternal\n) SELECT definition FROM definitions ORDER BY definition COLLATE \"C\"\n",
+      "query_sha256": "7537b9a1dfd8e813d2aa5103467b8a7e3a444e134dd02617ef622117f0d647a3",
+      "query_hash_domain": "sha256-raw-utf8-v1",
+      "fingerprint_hash_domain": "sha256-u64be-byte-length-prefixed-utf8-v1",
+      "definition_order": "postgresql-c-collation"
+    }
+  }
+}

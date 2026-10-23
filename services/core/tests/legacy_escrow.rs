@@ -8,7 +8,10 @@ use lmm_core::{
     billing::{
         Credits,
         ledger::{Action, Ledger, Outcome, Request},
-        legacy_escrow::{CloseCommand, Error, LegacyEscrowStore, PayoutCommand, Receipt},
+        legacy_escrow::{
+            CloseCommand, Command, Error, LegacyEscrowStore, PayoutCommand, QueryCommand, Receipt,
+            SubmitCommand,
+        },
     },
     funding::FundingPolicy,
     identity::IdentityStore,
@@ -201,6 +204,7 @@ fn payout(project: i64, challenge: i64, key: &str) -> PayoutCommand {
         source_project_id: project,
         source_challenge_id: challenge,
         operation_key: key.into(),
+        submission_operation_key: None,
     }
 }
 
@@ -1001,6 +1005,283 @@ async fn legacy_escrow_runtime_authority_probe() {
         "actual_runtime_startup_check":true,"unsafe_permission_cases":passed,
         "unsafe_permission_count":7,"pure_parser_execute_not_misclassified":true,
         "all_deliberate_grants_restored":true,"financial_data_unchanged":true}),
+    );
+    runtime.close().await;
+    owner.close().await;
+}
+
+// @mark migration.bounty-custody role=test
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a fresh, installation-owned PostgreSQL fixture with canonical runtime grants"]
+async fn native_submission_is_append_only_and_binds_owner_payout() {
+    let owner = owner_pool().await;
+    let runtime = PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&private_fixture_url("LMM_ESCROW_RUNTIME_URL"))
+        .await
+        .unwrap();
+    let identity = IdentityStore::from_pool(owner.clone());
+    let publisher = identity.bootstrap_user(7101, 1).await.unwrap();
+    let participant = identity.bootstrap_user(7202, 1).await.unwrap();
+    let outsider = identity.bootstrap_user(7303, 1).await.unwrap();
+    let publisher_account = identity
+        .authorize(&publisher.secret)
+        .await
+        .unwrap()
+        .owner_account_id;
+    let participant_account = identity
+        .authorize(&participant.secret)
+        .await
+        .unwrap()
+        .owner_account_id;
+    let outsider_account = identity
+        .authorize(&outsider.secret)
+        .await
+        .unwrap()
+        .owner_account_id;
+    let now: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+            .fetch_one(&owner)
+            .await
+            .unwrap();
+    const BATCH: &str = "native-submit-contract-v1";
+    for (account, user, units) in [
+        (publisher_account, 7101, 100),
+        (participant_account, 7202, -10),
+        (outsider_account, 7303, 0),
+    ] {
+        let mut request = opening(account, user, units, now);
+        request["migration_id"] = BATCH.into();
+        owner_import(&owner, "import_opening_balance", &request)
+            .await
+            .unwrap();
+    }
+    let batch = serde_json::json!({"migration_id":BATCH,"source_archive_sha256":ARCHIVE,"mapping_sha256":MAPPING,
+        "review_proof_sha256":"77".repeat(32),"unit":"credit_500k_usd","observed_at":now,"projects":[
+        frozen_project(18101,7101,publisher_account,50,vec![frozen_claim(18201,7202,participant_account,30,"accepted",0),frozen_claim(18202,7202,participant_account,10,"accepted",0)],vec![]),
+        frozen_project(18102,7101,publisher_account,20,vec![frozen_claim(18203,7303,outsider_account,20,"accepted",0)],vec![]),
+        frozen_project(18103,7101,publisher_account,10,vec![frozen_claim(18204,7202,participant_account,10,"submitted",0)],vec![])]});
+    owner_import(&owner, "import_legacy_escrow_batch", &batch)
+        .await
+        .unwrap();
+    let store = LegacyEscrowStore::from_pool(runtime.clone());
+    let submit = SubmitCommand {
+        migration_id: BATCH.into(),
+        source_project_id: 18101,
+        source_challenge_id: 18201,
+        operation_key: "native-submit-one".into(),
+        issue_url: String::new(),
+        pull_request_url: "https://github.com/owner/repo/pull/42".into(),
+        submission_note: "Synthetic evidence; publisher reviews repository and author.".into(),
+    };
+    let mut pay = PayoutCommand {
+        migration_id: BATCH.into(),
+        source_project_id: 18101,
+        source_challenge_id: 18201,
+        operation_key: "native-payout-before-submit".into(),
+        submission_operation_key: None,
+    };
+    let rejected = store.payout(&publisher.secret, &pay).await.unwrap();
+    assert_business_rejection(&rejected, "claim_not_submitted");
+    let before = financial_snapshot(&owner).await;
+    for url in [
+        "http://github.com/owner/repo/pull/42",
+        "https://github.com:443/owner/repo/pull/42",
+        "https://github.com/owner/repo/pull/42#proof",
+        "https://github.com/owner/repo/pull/42?token=synthetic",
+        "https://user@github.com/owner/repo/pull/42",
+        "https://evil.example/owner/repo/pull/42",
+        "HTTPS://GITHUB.COM/owner/repo/pull/42",
+        "https://github.com/owner/../pull/42",
+        "",
+    ] {
+        let mut bad = submit.clone();
+        bad.pull_request_url = url.into();
+        assert!(matches!(
+            store.submit(&participant.secret, &bad).await,
+            Err(Error::Invalid)
+        ));
+    }
+    let api = identity
+        .issue_key(
+            &participant.secret,
+            Account {
+                kind: AccountKind::Personal,
+                id: 7202,
+            },
+            FundingPolicy::new_personal_key(),
+            3600,
+        )
+        .await
+        .unwrap();
+    for secret in [&publisher.secret, &outsider.secret, &api.secret] {
+        assert!(matches!(
+            store.submit(secret, &submit).await,
+            Err(Error::Forbidden)
+        ));
+    }
+    assert_eq!(financial_snapshot(&owner).await, before);
+    let submitted = store.submit(&participant.secret, &submit).await.unwrap();
+    assert_eq!(submitted.status, "submitted");
+    assert!(submitted.journal_id.is_none());
+    assert_eq!(submitted.remaining_units, 50);
+    let after = financial_snapshot(&owner).await;
+    for table in [
+        "ledger_journals",
+        "ledger_entries",
+        "balance_state",
+        "legacy_escrow_claims",
+        "legacy_escrow_projects",
+    ] {
+        assert_eq!(
+            after[table], before[table],
+            "submission must preserve {table}"
+        );
+    }
+    assert_eq!(
+        store.submit(&participant.secret, &submit).await.unwrap(),
+        submitted
+    );
+    let mut changed = submit.clone();
+    changed.submission_note.push('!');
+    assert!(matches!(
+        store.submit(&participant.secret, &changed).await,
+        Err(Error::Conflict)
+    ));
+    let query = QueryCommand {
+        migration_id: BATCH.into(),
+        source_project_id: 18101,
+        operation_key: submit.operation_key.clone(),
+        expected_command: Some(Command::Submit(submit.clone())),
+    };
+    for secret in [&participant.secret, &publisher.secret] {
+        let found = store.query(secret, &query).await.unwrap();
+        assert_eq!(found.receipt, submitted);
+        assert_eq!(found.command, Command::Submit(submit.clone()));
+    }
+    assert!(matches!(
+        store.query(&outsider.secret, &query).await,
+        Err(Error::Forbidden)
+    ));
+    let mut wrong = query.clone();
+    wrong.expected_command = Some(Command::Submit(changed));
+    assert!(matches!(
+        store.query(&participant.secret, &wrong).await,
+        Err(Error::Conflict)
+    ));
+    let mut absent = query.clone();
+    absent.operation_key = "never-created".into();
+    assert!(matches!(
+        store.query(&participant.secret, &absent).await,
+        Err(Error::Missing)
+    ));
+    assert_eq!(financial_snapshot(&owner).await, after);
+    let mut duplicate = submit.clone();
+    duplicate.operation_key = "native-submit-second-key".into();
+    assert_business_rejection(
+        &store.submit(&participant.secret, &duplicate).await.unwrap(),
+        "claim_already_submitted",
+    );
+    duplicate.source_challenge_id = 18202;
+    duplicate.operation_key = "native-submit-duplicate-pr".into();
+    duplicate.pull_request_url = "https://github.com/OWNER/REPO/pull/42".into();
+    assert_business_rejection(
+        &store.submit(&participant.secret, &duplicate).await.unwrap(),
+        "duplicate_pull_request",
+    );
+    assert_eq!(
+        store.payout(&publisher.secret, &pay).await.unwrap(),
+        rejected,
+        "a prior rejection is immutable after submission"
+    );
+    pay.operation_key = "native-payout-without-reference".into();
+    assert_business_rejection(
+        &store.payout(&publisher.secret, &pay).await.unwrap(),
+        "claim_not_submitted",
+    );
+    pay.operation_key = "native-payout-wrong-reference".into();
+    pay.submission_operation_key = Some("native-submit-duplicate-pr".into());
+    assert_business_rejection(
+        &store.payout(&publisher.secret, &pay).await.unwrap(),
+        "claim_not_submitted",
+    );
+    pay.operation_key = "native-payout-reviewed-reference".into();
+    pay.submission_operation_key = Some(submit.operation_key.clone());
+    assert!(matches!(
+        store.payout(&participant.secret, &pay).await,
+        Err(Error::Forbidden)
+    ));
+    let (first, second) = tokio::join!(
+        store.payout(&publisher.secret, &pay),
+        store.payout(&publisher.secret, &pay)
+    );
+    let paid = first.unwrap();
+    assert_eq!(paid, second.unwrap());
+    assert_posted(&paid, 20);
+    let ledger = Ledger::from_pool(owner.clone());
+    assert_eq!(
+        ledger
+            .balance(publisher_account)
+            .await
+            .unwrap()
+            .spendable_units,
+        100,
+        "historical payout must not debit original wallet twice"
+    );
+    let balance = ledger.balance(participant_account).await.unwrap();
+    assert_eq!((balance.spendable_units, balance.debt_units), (20, 0));
+    let mut extra = PayoutCommand {
+        migration_id: BATCH.into(),
+        source_project_id: 18103,
+        source_challenge_id: 18204,
+        operation_key: "legacy-submitted-extra-reference".into(),
+        submission_operation_key: Some(submit.operation_key.clone()),
+    };
+    assert_business_rejection(
+        &store.payout(&publisher.secret, &extra).await.unwrap(),
+        "unexpected_submission_key",
+    );
+    extra.operation_key = "legacy-submitted-compatible".into();
+    extra.submission_operation_key = None;
+    assert_posted(&store.payout(&publisher.secret, &extra).await.unwrap(), 0);
+    let mut other = submit.clone();
+    other.source_project_id = 18102;
+    other.source_challenge_id = 18203;
+    other.operation_key = "other-participant-submission".into();
+    let close = CloseCommand {
+        migration_id: BATCH.into(),
+        source_project_id: 18102,
+        operation_key: "close-during-submit".into(),
+    };
+    let (accepted, closed) = tokio::join!(
+        store.submit(&outsider.secret, &other),
+        store.close(&publisher.secret, &close)
+    );
+    assert_eq!(accepted.unwrap().status, "submitted");
+    assert_business_rejection(&closed.unwrap(), "active_claim");
+    let frozen = financial_snapshot(&owner).await;
+    assert_eq!(
+        frozen["legacy_escrow_claims"],
+        before["legacy_escrow_claims"]
+    );
+    sqlx::query("UPDATE core_identity.credentials SET revoked_at=clock_timestamp() WHERE id=$1")
+        .bind(participant.id)
+        .execute(&owner)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.query(&participant.secret, &query).await,
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        store.submit(&participant.secret, &submit).await,
+        Err(Error::Unauthorized)
+    ));
+    assert_eq!(financial_snapshot(&owner).await, frozen);
+    ledger_readback(&owner).await;
+    receipt(
+        "native-submit-payout.json",
+        &serde_json::json!({"status":"PASS","immutable_source":true,"submission_has_no_money_effect":true,"payout_binds_submission":true,"query_authority_and_exact_command":true,"same_key_concurrent_payout_once":true,"submit_close_serialized":true}),
     );
     runtime.close().await;
     owner.close().await;

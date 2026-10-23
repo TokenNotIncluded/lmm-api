@@ -65,12 +65,14 @@ pub fn component_count() -> usize {
 const CONTRACT: &str = "CREATE TABLE core_meta.component_contract (name TEXT PRIMARY KEY, fingerprint BYTEA NOT NULL CHECK (octet_length(fingerprint)=32)); CREATE TABLE core_meta.runtime_contract (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton), catalog_fingerprint BYTEA NOT NULL CHECK (octet_length(catalog_fingerprint)=32));";
 const UPGRADE_METADATA: &str = include_str!("../schema/core_upgrade.sql");
 const ADDITIVE_UPGRADE_METADATA: &str = include_str!("../schema/component_upgrade.sql");
+const LEDGER_REVISION_METADATA: &str = include_str!("../schema/ledger_revision.sql");
 
 fn installer_contract_sha256() -> String {
     let mut hash = Sha256::new();
     hash.update(CONTRACT.as_bytes());
     hash.update(UPGRADE_METADATA.as_bytes());
     hash.update(ADDITIVE_UPGRADE_METADATA.as_bytes());
+    hash.update(LEDGER_REVISION_METADATA.as_bytes());
     format!("{:x}", hash.finalize())
 }
 
@@ -172,6 +174,9 @@ pub async fn init(pool: &PgPool) -> Result<(), IdentityError> {
     sqlx::raw_sql(CONTRACT).execute(&mut *tx).await?;
     sqlx::raw_sql(UPGRADE_METADATA).execute(&mut *tx).await?;
     sqlx::raw_sql(ADDITIVE_UPGRADE_METADATA)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::raw_sql(LEDGER_REVISION_METADATA)
         .execute(&mut *tx)
         .await?;
     // Preserve the native identity contract used by the read-only RPC service.

@@ -1,11 +1,9 @@
 use super::*;
 
 fn request() -> UpgradeRequest {
-    let frozen: serde_json::Value =
-        serde_json::from_str(include_str!("../predecessor25.json")).unwrap();
     UpgradeRequest {
         version: 1,
-        procedure: additive::PROCEDURE.into(),
+        procedure: ledger::PROCEDURE.into(),
         upgrade_id: "schema-upgrade-fixture-0001".into(),
         database: UpgradeDatabase {
             name: "isolated_core".into(),
@@ -19,11 +17,10 @@ fn request() -> UpgradeRequest {
             runtime: "isolated_runtime".into(),
             extensions: "isolated_extensions".into(),
         },
-        predecessor_manifest_sha256: frozen["schema_manifest_stdout_sha256"]
-            .as_str()
-            .unwrap()
-            .into(),
-        predecessor_catalog_sha256: frozen["catalog_sha256"].as_str().unwrap().into(),
+        predecessor_manifest_sha256:
+            "310937ea692be55a4b5070e3d6bc2ddf86071945b717e47359d68d3571fad351".into(),
+        predecessor_catalog_sha256:
+            "05dcb5fadfc11269de196e3730f9f65ff791bd44d499a6d062fc2b3f9c6c0061".into(),
         successor_manifest_sha256: manifest_sha256().unwrap(),
     }
 }
@@ -38,7 +35,12 @@ fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
     assert_eq!(frozen["catalog_sha256"], PRE_CATALOG);
     for (old, (name, ddl)) in old_components.iter().zip(COMPONENTS.iter().take(24)) {
         assert_eq!(old["name"], *name);
-        assert_eq!(old["raw_schema_sha256"], hex(&Sha256::digest(ddl)));
+        let original = if *name == "ledger" {
+            include_str!("../../../tests/core_schema/ledger_before_escrow_submit.sql")
+        } else {
+            ddl
+        };
+        assert_eq!(old["raw_schema_sha256"], hex(&Sha256::digest(original)));
     }
     assert_eq!(
         old_components[1]["raw_schema_sha256"],
@@ -46,6 +48,11 @@ fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
     );
     let mut producer = schema_manifest();
     producer.components.truncate(24);
+    for component in &mut producer.components {
+        if component.name == "ledger" {
+            component.raw_schema_sha256 = ledger::PRE_LEDGER.into();
+        }
+    }
     producer.installer_contract_sql_sha256 = hex(&Sha256::digest(super::super::CONTRACT));
     assert_eq!(serde_json::to_value(&producer).unwrap(), frozen["manifest"]);
     let mut stdout = serde_json::to_vec(&producer).unwrap();

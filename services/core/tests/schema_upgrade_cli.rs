@@ -53,7 +53,8 @@ fn upgrade_help_is_explicit_and_has_no_startup_side_effect() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let help = String::from_utf8_lossy(&output.stdout);
-    assert!(help.contains("Explicit offline compiled additive 25->26 upgrade"));
+    assert!(help.contains("Explicit offline exact Core26 ledger revision"));
+    assert!(help.contains("Additive 25->26 requires the preserved 26-component installer"));
     assert!(
         help.contains("Legacy 24->25 trust-pricing requires the preserved 25-component installer.")
     );

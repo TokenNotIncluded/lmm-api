@@ -145,6 +145,11 @@ pub(super) fn validate(r: &UpgradeRequest) -> Result<(), UpgradeError> {
         return Err(reject("UPGRADE_DB_ROLES_INVALID"));
     }
     compiled_predecessor()?;
+    if COMPONENTS.iter().any(|(name, ddl)| {
+        *name == "ledger" && hex(&Sha256::digest(ddl)) != super::ledger::PRE_LEDGER
+    }) {
+        return Err(reject("UPGRADE_DB_USE_PRESERVED_26_INSTALLER"));
+    }
     Ok(())
 }
 
@@ -163,6 +168,11 @@ fn compiled_predecessor() -> Result<BTreeMap<String, String>, UpgradeError> {
     }
     let mut producer = schema_manifest();
     producer.components.truncate(PRE_COMPONENTS);
+    for component in &mut producer.components {
+        if component.name == "ledger" {
+            component.raw_schema_sha256 = super::ledger::PRE_LEDGER.into();
+        }
+    }
     let mut installer = Sha256::new();
     installer.update(crate::core_schema::CONTRACT);
     installer.update(crate::core_schema::UPGRADE_METADATA);

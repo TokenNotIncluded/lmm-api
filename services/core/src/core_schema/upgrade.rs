@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Connection, PgConnection, Row};
 use std::{collections::BTreeMap, fmt, io::Read};
 mod additive;
+mod ledger;
 
 const PROCEDURE: &str = "core-24-to-25-trust-pricing-v1";
 const PREDECESSOR: &str = include_str!("predecessor24.json");
@@ -198,6 +199,9 @@ impl UpgradeRequest {
         Ok(request)
     }
     fn validate(&self) -> Result<(), UpgradeError> {
+        if self.procedure == ledger::PROCEDURE {
+            return ledger::validate(self);
+        }
         if self.procedure == additive::PROCEDURE {
             return additive::validate(self);
         }
@@ -306,7 +310,9 @@ pub async fn upgrade_database(
 ) -> Result<UpgradeReport, UpgradeError> {
     request.validate()?;
     let mut connection = PgConnection::connect(url).await?;
-    let result = if request.procedure == additive::PROCEDURE {
+    let result = if request.procedure == ledger::PROCEDURE {
+        ledger::connected(&mut connection, &request).await
+    } else if request.procedure == additive::PROCEDURE {
         additive::connected(&mut connection, &request).await
     } else {
         upgrade_connected(&mut connection, &request).await

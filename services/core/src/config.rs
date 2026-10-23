@@ -1449,6 +1449,13 @@ pub async fn tool_market_server(
             crate::bounties::http::internal_router(store, token)
                 .map_err(|_| invalid_config("invalid private bounty service"))?,
         );
+        app = app.merge(
+            crate::billing::legacy_escrow::http::internal_router(
+                crate::billing::legacy_escrow::LegacyEscrowStore::from_pool(pool.clone()),
+                token,
+            )
+            .map_err(|_| invalid_config("invalid private legacy escrow service"))?,
+        );
     }
     if let Some(token) = &images {
         let service = gateway
