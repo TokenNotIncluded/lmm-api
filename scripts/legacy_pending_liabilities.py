@@ -215,6 +215,12 @@ def _sql_literal(F, value):
     return F.IDENTITY.sql_literal(F.canonical(value))
 
 
+def _sql_text_literal(F, value):
+    """Quote plain SQL text without JSON string encoding."""
+    F.require(type(value) is str, "pending_liability_sql_text_invalid")
+    return F.IDENTITY.sql_literal(value)
+
+
 def _owner_request(F, preview, row):
     F.require(row["target_user_id"] is not None and row["target_account_id"] is not None,
               "pending_liability_owner_mapping_incomplete")
@@ -268,7 +274,10 @@ def build_owner_apply_sql(F, preview):
 def build_readback_sql(F, preview):
     """Generate a read-only aggregate readback for the dedicated table."""
     verify(F, preview)
-    migration = _sql_literal(F, preview["migration_id"])
+    # The request payloads are JSONB and therefore use _sql_literal.  The
+    # migration predicate is a PostgreSQL TEXT comparison and must not contain
+    # JSON's surrounding double quotes.
+    migration = _sql_text_literal(F, preview["migration_id"])
     return f"""BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL timezone='UTC';
 SELECT jsonb_build_object(

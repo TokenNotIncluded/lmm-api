@@ -149,6 +149,8 @@ class PendingLiabilityTest(unittest.TestCase):
         self.assertIn("source_rows_sha256", sql)
         self.assertIn("spendable_true_count", sql)
         self.assertIn("spendable_units_sum", sql)
+        self.assertIn("WHERE migration_id='pending-liabilities-test'", sql)
+        self.assertNotIn("WHERE migration_id='\"pending-liabilities-test\"'", sql)
         self.assertNotIn("INSERT ", sql.upper())
         self.assertNotIn("UPDATE ", sql.upper())
         self.assertNotIn("DELETE ", sql.upper())
