@@ -1,6 +1,7 @@
 //! Durable native-browser issuer, isolated from the unissued Pi fixture adapter.
 use super::protocol::{self, AuthorizationRequest, LmmProfile, TokenRequest, TokenWire};
 use super::*;
+use serde::Serialize;
 use std::collections::BTreeSet;
 
 #[derive(Clone)]
@@ -23,6 +24,22 @@ pub struct ConsentPage {
 }
 pub struct AuthorizationRedirect {
     pub uri: String,
+}
+
+/// Redacted browser-grant inventory for the signed-in account. Token values
+/// and token digests never leave Core; the family id is only a revocation
+/// handle bound again to the caller's current browser session.
+#[derive(Serialize)]
+pub struct BrowserGrantSummary {
+    pub id: String,
+    pub client_id: String,
+    pub purpose: String,
+    pub scopes: Vec<String>,
+    pub budget_credits: Option<i64>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+    pub active: bool,
 }
 
 impl LmmIssuer {
@@ -77,6 +94,94 @@ impl LmmIssuer {
     }
     pub fn profile(&self) -> &LmmProfile {
         &self.profile
+    }
+
+    /// List only browser-issued grant families owned by the current web
+    /// session's personal account. Native bearer secrets are never returned.
+    pub async fn browser_grants(&self, cookie: &str) -> Result<Vec<BrowserGrantSummary>> {
+        let mut tx = transaction(&self.identity.pool).await?;
+        let identity = BrowserAuth::oauth_identity_in_transaction(&mut tx, cookie).await?;
+        let rows = sqlx::query(
+            "SELECT id,client_id,purpose,scopes,budget_credits,
+                    extract(epoch FROM created_at)::bigint AS created_at,
+                    extract(epoch FROM expires_at)::bigint AS expires_at,
+                    extract(epoch FROM revoked_at)::bigint AS revoked_at,
+                    revoked_at IS NULL AND expires_at>clock_timestamp() AS active
+             FROM core_oauth.families
+             WHERE user_id=$1 AND owner_account_id=$2 AND user_version=$3
+               AND issuance_kind='browser'
+             ORDER BY active DESC, created_at DESC
+             LIMIT 100",
+        )
+        .bind(identity.user)
+        .bind(identity.account)
+        .bind(identity.version)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut grants = Vec::with_capacity(rows.len());
+        for row in rows {
+            grants.push(BrowserGrantSummary {
+                id: row.try_get("id")?,
+                client_id: row.try_get("client_id")?,
+                purpose: row.try_get("purpose")?,
+                scopes: row.try_get("scopes")?,
+                budget_credits: row.try_get("budget_credits")?,
+                created_at: row.try_get("created_at")?,
+                expires_at: row.try_get("expires_at")?,
+                revoked_at: row.try_get("revoked_at")?,
+                active: row.try_get("active")?,
+            });
+        }
+        tx.commit().await?;
+        Ok(grants)
+    }
+
+    /// Revoke one browser grant family after re-binding the handle to the
+    /// caller's current personal session and account version.
+    pub async fn revoke_browser_grant(&self, cookie: &str, family_id: &str) -> Result<()> {
+        protocol::canonical(family_id, "lmm_gr_")?;
+        let mut tx = transaction(&self.identity.pool).await?;
+        let identity = BrowserAuth::oauth_identity_in_transaction(&mut tx, cookie).await?;
+        let family = sqlx::query(
+            "SELECT id FROM core_oauth.families
+             WHERE id=$1 AND user_id=$2 AND owner_account_id=$3 AND user_version=$4
+               AND issuance_kind='browser' FOR UPDATE",
+        )
+        .bind(family_id)
+        .bind(identity.user)
+        .bind(identity.account)
+        .bind(identity.version)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(IdentityError::Unauthorized)?;
+        sqlx::query(
+            "UPDATE core_oauth.families SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE id=$1",
+        )
+        .bind(family.try_get::<String, _>("id")?)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Revoke every browser-issued grant owned by the current personal
+    /// session. This is the emergency control for a suspected credential leak.
+    pub async fn revoke_all_browser_grants(&self, cookie: &str) -> Result<u64> {
+        let mut tx = transaction(&self.identity.pool).await?;
+        let identity = BrowserAuth::oauth_identity_in_transaction(&mut tx, cookie).await?;
+        let result = sqlx::query(
+            "UPDATE core_oauth.families
+             SET revoked_at=COALESCE(revoked_at,clock_timestamp())
+             WHERE user_id=$1 AND owner_account_id=$2 AND user_version=$3
+               AND issuance_kind='browser' AND revoked_at IS NULL",
+        )
+        .bind(identity.user)
+        .bind(identity.account)
+        .bind(identity.version)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
     }
     pub async fn begin(&self, request: AuthorizationRequest) -> Result<ConsentPage> {
         let request = self.profile.validate_authorization(request)?;

@@ -1,7 +1,9 @@
 //! Explicit native-client browser ceremony inside the existing refresh path.
 use super::*;
 use crate::identity::grants::{AuthorizationRequest, ConsentForm, ConsentPage, ContinueForm};
+use axum::extract::Path;
 use axum::extract::{Form, rejection::FormRejection};
+use axum::routing::delete;
 use sha2::{Digest, Sha256};
 pub(super) fn routes() -> Router<AuthState> {
     Router::new()
@@ -11,6 +13,12 @@ pub(super) fn routes() -> Router<AuthState> {
             post(continue_authorization),
         )
         .route("/api/user/auth/oauth2/consent", post(consent))
+        .route("/api/user/auth/oauth2/grants", get(list_grants))
+        .route("/api/user/auth/oauth2/grants/{id}", delete(revoke_grant))
+        .route(
+            "/api/user/auth/oauth2/grants/revoke-all",
+            post(revoke_all_grants),
+        )
 }
 // Every immutable browser stage has a different CSRF-selected cookie name.
 // Delayed responses may clear only their own stage, never another tab's flow.
@@ -194,6 +202,55 @@ async fn consent(
         Err(e) => auth_failure(e.into()),
     };
     flow_cookie(response, None, &form.csrf, &state.config)
+}
+
+async fn list_grants(State(state): State<AuthState>, headers: HeaderMap) -> Response {
+    let Some(issuer) = &state.config.oauth2 else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let result = async {
+        let cookie = refresh_cookie(&headers)?.ok_or(IdentityError::Unauthorized)?;
+        issuer.browser_grants(cookie).await
+    }
+    .await;
+    match result {
+        Ok(grants) => success(Some(serde_json::json!(grants))),
+        Err(error) => auth_failure(error.into()),
+    }
+}
+
+async fn revoke_grant(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(issuer) = &state.config.oauth2 else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let result = async {
+        let cookie = refresh_cookie(&headers)?.ok_or(IdentityError::Unauthorized)?;
+        issuer.revoke_browser_grant(cookie, &id).await
+    }
+    .await;
+    match result {
+        Ok(()) => success(None),
+        Err(error) => auth_failure(error.into()),
+    }
+}
+
+async fn revoke_all_grants(State(state): State<AuthState>, headers: HeaderMap) -> Response {
+    let Some(issuer) = &state.config.oauth2 else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let result = async {
+        let cookie = refresh_cookie(&headers)?.ok_or(IdentityError::Unauthorized)?;
+        issuer.revoke_all_browser_grants(cookie).await
+    }
+    .await;
+    match result {
+        Ok(count) => success(Some(serde_json::json!({"revoked": count}))),
+        Err(error) => auth_failure(error.into()),
+    }
 }
 
 #[cfg(test)]

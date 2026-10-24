@@ -27,6 +27,7 @@ import { CheckinCalendarCard } from './components/checkin-calendar-card'
 import { GiftCard } from './components/gift-card'
 import { LanguagePreferencesCard } from './components/language-preferences-card'
 import { LoginSessionsCard } from './components/login-sessions-card'
+import { OAuthGrantsCard } from './components/oauth-grants-card'
 import { PasskeyCard } from './components/passkey-card'
 import { ProfileHeader } from './components/profile-header'
 import { ProfileSecurityCard } from './components/profile-security-card'
@@ -102,6 +103,7 @@ export function Profile() {
               </div>
             </div>
             <LoginSessionsCard />
+            <OAuthGrantsCard />
           </TabsContent>
           <TabsContent value='preferences' keepMounted className='space-y-5'>
             <div className='grid items-start gap-5 lg:grid-cols-2'>
