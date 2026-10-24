@@ -48,6 +48,7 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
                     value.reported_total,
                     value.five_minute,
                     value.one_hour,
+                    value.twelve_hour,
                 )
             }),
             usage
@@ -86,6 +87,7 @@ mod tests {
         Usage {
             input,
             cache_creation: Some(CacheCreationUsage {
+                twelve_hour: None,
                 total,
                 five_minute,
                 one_hour,
@@ -293,6 +295,49 @@ mod tests {
         });
         assert_eq!(
             restore(base(invalid), Some(json!([event("final", invalid)]))),
+            Err(Error::Storage)
+        );
+    }
+
+    #[test]
+    fn cache_12h_replay_restores_one_actual_snapshot_and_rejects_reclassification() {
+        let mut first = usage(20, 6, None, None);
+        first.cache_creation.as_mut().unwrap().twelve_hour = Some(1);
+        let mut latest = usage(40, 10, None, None);
+        latest.cache_creation.as_mut().unwrap().twelve_hour = Some(4);
+        assert_eq!(
+            restore(
+                base(latest),
+                Some(json!([
+                    event("final", latest),
+                    event("usage:first", first),
+                    event("usage:duplicate", first)
+                ]))
+            ),
+            Ok(latest)
+        );
+        let mut reclassified = latest;
+        reclassified.cache_creation.as_mut().unwrap().twelve_hour = Some(8);
+        assert_eq!(
+            restore(
+                base(reclassified),
+                Some(json!([
+                    event("usage:first", first),
+                    event("final", reclassified)
+                ]))
+            ),
+            Err(Error::Storage)
+        );
+        let mut missing = latest;
+        missing.cache_creation.as_mut().unwrap().twelve_hour = None;
+        assert_eq!(
+            restore(
+                base(missing),
+                Some(json!([
+                    event("usage:first", first),
+                    event("final", missing)
+                ]))
+            ),
             Err(Error::Storage)
         );
     }

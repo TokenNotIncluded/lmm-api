@@ -30,6 +30,71 @@ fn frame(decoder: &mut Decoder, v: Value) -> Result<Vec<Event>, RelayError> {
 }
 
 #[test]
+fn responses_cache_lifetime_is_bounded_and_not_silently_lost_in_conversion() {
+    for ttl in ["30m", "12h"] {
+        let options = json!({"mode":"implicit", "ttl":ttl});
+        let request = Request::parse(
+            ClientProtocol::Responses,
+            &serde_json::to_vec(&json!({
+                "model":"alias", "input":"hello", "prompt_cache_options": options
+            }))
+            .unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            request
+                .upstream_to(UpstreamProtocol::Responses, "real")
+                .unwrap()["prompt_cache_options"],
+            options
+        );
+        for protocol in [
+            UpstreamProtocol::Chat,
+            UpstreamProtocol::Anthropic,
+            UpstreamProtocol::Gemini,
+        ] {
+            assert!(matches!(
+                request.upstream_to(protocol, "real"),
+                Err(RelayError::Unsupported(_))
+            ));
+        }
+    }
+    for options in [
+        json!({}),
+        json!([]),
+        json!({"ttl":"1h"}),
+        json!({"ttl":12}),
+        json!({"ttl":"12h","mode":"explicit"}),
+        json!({"ttl":"12h","price":0}),
+        json!({"ttl":"12h","prewarm":true}),
+    ] {
+        assert!(
+            Request::parse(
+                ClientProtocol::Responses,
+                &serde_json::to_vec(&json!({
+                    "model":"alias", "input":"hello", "prompt_cache_options":options
+                }))
+                .unwrap(),
+                &Limits::default()
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&json!({
+                "model":"alias", "messages":[{"role":"user","content":"hello"}],
+                "prompt_cache_options":{"ttl":"12h"}
+            }))
+            .unwrap(),
+            &Limits::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn chat_reasoning_summary_survives_responses_json_and_stream_lifecycle() {
     let summary = json!([{"type":"summary_text","text":"think carefully"}]);
     for finish in ["stop", "length"] {

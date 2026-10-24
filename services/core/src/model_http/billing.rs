@@ -412,6 +412,9 @@ impl Billing for Bridge {
                                     created_1h: usage
                                         .cache_creation
                                         .and_then(|v| v.one_hour.map(|v| v as u64)),
+                                    created_12h: usage
+                                        .cache_creation
+                                        .and_then(|v| v.twelve_hour.map(|v| v as u64)),
                                 },
                                 tariff.input_semantics,
                             )
@@ -611,6 +614,10 @@ pub(super) fn complete_usage(
             || observed.cache_creation_details.is_some_and(|details| {
                 details.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
                     || details.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
+            })
+            || observed.openai_cache_write_details.is_some_and(|details| {
+                details.ttl_30m_tokens.is_some_and(|v| v != 0)
+                    || details.ttl_12h_tokens.is_some_and(|v| v != 0)
             }))
     {
         return Err(RelayError::SettlementPending);
@@ -649,6 +656,17 @@ pub(super) fn complete_tiered_usage(
     tariff
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
+    if tariff.tariff.revision == 4 {
+        return complete_openai_cache_usage(observed, tariff);
+    }
+    // Historical frozen tariffs never priced twelve-hour writes. Keep the
+    // original hold instead of discarding a new, unsupported charge dimension.
+    if observed
+        .openai_cache_write_details
+        .is_some_and(|details| details.ttl_12h_tokens.is_some_and(|value| value != 0))
+    {
+        return Err(RelayError::SettlementPending);
+    }
     let compiled = tariff
         .tariff
         .compile()
@@ -663,6 +681,254 @@ pub(super) fn complete_tiered_usage(
             tariff.missing_cache_creation_is_zero,
         ),
         None => complete_usage(observed, false),
+    }
+}
+
+/// The OpenAI write total includes both lifetimes. A positive aggregate without
+/// a measured twelve-hour subset is insufficient for this frozen price.
+fn complete_openai_cache_usage(
+    observed: crate::relay::Usage,
+    tariff: &crate::routing::PersistedTieredTariff,
+) -> Result<Usage, RelayError> {
+    observed
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    if observed.cache_creation_mode.is_some()
+        || observed.uncached_input_tokens.is_some()
+        || tariff.input_semantics != crate::routing::InputSemantics::Inclusive
+        || observed.cache_creation_details.is_some_and(|details| {
+            details
+                .ephemeral_5m_input_tokens
+                .is_some_and(|value| value != 0)
+                || details
+                    .ephemeral_1h_input_tokens
+                    .is_some_and(|value| value != 0)
+        })
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    let integer = |value: u64| i64::try_from(value).map_err(|_| RelayError::SettlementPending);
+    let total = match observed.cache_creation_input_tokens {
+        Some(value) => value,
+        None if tariff.missing_cache_creation_is_zero
+            && observed.openai_cache_write_details.is_none()
+            && observed.cache_creation_details.is_none() =>
+        {
+            0
+        }
+        None => return Err(RelayError::SettlementPending),
+    };
+    let twelve_hour = if total == 0 {
+        0
+    } else {
+        observed
+            .openai_cache_write_details
+            .and_then(|details| details.ttl_12h_tokens)
+            .ok_or(RelayError::SettlementPending)?
+    };
+    let usage = Usage {
+        cache_creation: Some(charging::CacheCreationUsage {
+            total: integer(total)?,
+            five_minute: None,
+            one_hour: None,
+            twelve_hour: Some(integer(twelve_hour)?),
+            cache_creation_mode: None,
+            reported_total: None,
+        }),
+        input: integer(observed.input_tokens.ok_or(RelayError::SettlementPending)?)?,
+        cached: integer(observed.cached_input_tokens.unwrap_or(0))?,
+        output: integer(
+            observed
+                .output_tokens
+                .ok_or(RelayError::SettlementPending)?,
+        )?,
+        ..Usage::default()
+    };
+    if !usage.valid() {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(usage)
+}
+
+#[cfg(test)]
+mod openai_cache_billing_tests {
+    use super::*;
+    use crate::relay::{OpenAiCacheWriteDetails, UpstreamProtocol};
+    use crate::routing::{InputSemantics, PersistedTieredTariff};
+    use serde_json::json;
+
+    fn price() -> PersistedTieredTariff {
+        serde_json::from_value(json!({
+            "tariff": {
+                "revision": 4, "source_digest": "ab".repeat(32),
+                "uses_cache_read": true, "uses_cache_write": true,
+                "uses_cache_write_12h": true,
+                "tiers": [{"up_to_input_tokens": null, "rates": {
+                    "input": {"numerator":1,"denominator":1},
+                    "output": {"numerator":3,"denominator":1},
+                    "cache_read": {"numerator":1,"denominator":10},
+                    "cache_write": {"numerator":5,"denominator":4},
+                    "cache_write_12h": {"numerator":5,"denominator":2}
+                }}]
+            },
+            "input_semantics": "inclusive", "group_multiplier_ppm": 1000000,
+            "speed_multiplier_ppm": 1000000, "credits_per_usd": 500000
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn openai_observation_survives_normalization_and_frozen_ledger_price() {
+        for (protocol, input, output, details) in [
+            (
+                UpstreamProtocol::Chat,
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+            ),
+            (
+                UpstreamProtocol::Responses,
+                "input_tokens",
+                "output_tokens",
+                "input_tokens_details",
+            ),
+        ] {
+            let observation = crate::relay::provider_usage(
+                protocol,
+                &json!({
+                    input: 12000, output: 0,
+                    details: {"cached_tokens":4000,"cache_write_tokens":7000,
+                        "cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}
+                }),
+            )
+            .unwrap();
+            let tariff = price();
+            let usage = complete_tiered_usage(observation, &tariff).unwrap();
+            assert_eq!(usage.cache_creation.unwrap().twelve_hour, Some(4000));
+            let bytes = serde_json::to_vec(&usage).unwrap();
+            let restored: Usage = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(restored, usage);
+            let ledger = charging::Price {
+                version: "synthetic-cache-12h".into(),
+                model: "synthetic".into(),
+                group: "allowed".into(),
+                input_per_million: 0,
+                cached_per_million: 0,
+                output_per_million: 0,
+                tiered: Some(tariff),
+                upstream_cost_group_ppm: None,
+                image: None,
+                user_trust: None,
+            };
+            // Official input example is exactly USD 0.01515 = 7,575 credits.
+            assert_eq!(ledger.cost(restored), Ok(7575));
+            assert!(
+                ledger
+                    .reservation_ceiling(charging::ReservationBasis::Tokens {
+                        input: 12000,
+                        output: 0,
+                    })
+                    .unwrap()
+                    >= 7575
+            );
+        }
+    }
+
+    #[test]
+    fn cache_12h_missing_evidence_stays_pending_but_explicit_zero_settles() {
+        let mut observed = crate::relay::Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(1),
+            cached_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(30),
+            ..Default::default()
+        };
+        assert_eq!(
+            complete_tiered_usage(observed, &price()),
+            Err(RelayError::SettlementPending)
+        );
+        observed.openai_cache_write_details = Some(OpenAiCacheWriteDetails {
+            ttl_30m_tokens: Some(30),
+            ttl_12h_tokens: None,
+        });
+        assert_eq!(
+            complete_tiered_usage(observed, &price()),
+            Err(RelayError::SettlementPending)
+        );
+        observed
+            .openai_cache_write_details
+            .as_mut()
+            .unwrap()
+            .ttl_12h_tokens = Some(0);
+        assert_eq!(
+            complete_tiered_usage(observed, &price())
+                .unwrap()
+                .cache_creation
+                .unwrap()
+                .twelve_hour,
+            Some(0)
+        );
+        observed.cache_creation_input_tokens = None;
+        let mut tariff = price();
+        tariff.missing_cache_creation_is_zero = true;
+        assert_eq!(
+            complete_tiered_usage(observed, &tariff),
+            Err(RelayError::SettlementPending)
+        );
+    }
+
+    #[test]
+    fn historical_absence_zero_cannot_erase_new_openai_write_evidence() {
+        for revision in [2, 3] {
+            let mut tariff = price();
+            tariff.tariff.revision = revision;
+            tariff.tariff.uses_cache_write_12h = false;
+            tariff.tariff.tiers[0].rates.cache_write_12h = None;
+            tariff.missing_cache_creation_is_zero = true;
+            if revision == 3 {
+                tariff.tariff.uses_cache_write_1h = true;
+                tariff.tariff.tiers[0].rates.cache_write_1h = Some(crate::routing::DecimalRate {
+                    numerator: 2,
+                    denominator: 1,
+                });
+                tariff.cache_creation_mode =
+                    Some(crate::routing::CacheCreationMode::GenericRemainderV1);
+            }
+            let observed = crate::relay::Usage {
+                input_tokens: Some(10),
+                output_tokens: Some(1),
+                cached_input_tokens: Some(0),
+                cache_creation_mode: tariff.cache_creation_mode,
+                openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: Some(3),
+                    ttl_12h_tokens: Some(0),
+                }),
+                ..Default::default()
+            };
+            assert!(tariff.validate().is_ok());
+            assert!(observed.validate().is_ok());
+            assert_eq!(
+                complete_tiered_usage(observed, &tariff),
+                Err(RelayError::SettlementPending)
+            );
+        }
+        let unpriced = crate::relay::Usage {
+            input_tokens: Some(10),
+            output_tokens: Some(1),
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: None,
+                ttl_12h_tokens: Some(3),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            complete_usage(unpriced, false),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            complete_strict_cache_usage(unpriced, InputSemantics::Inclusive, true),
+            Err(RelayError::SettlementPending)
+        );
     }
 }
 
@@ -687,7 +953,12 @@ fn complete_generic_cache_usage(
         Some(reported) => CacheCreationPartition::from_reported(reported, five, hour)
             .map_err(|_| RelayError::SettlementPending)?
             .total(),
-        None if tariff.missing_cache_creation_is_zero && details.is_none() => 0,
+        None if tariff.missing_cache_creation_is_zero
+            && details.is_none()
+            && observed.openai_cache_write_details.is_none() =>
+        {
+            0
+        }
         // Even two known TTL buckets cannot prove the third, generic amount is
         // zero. Only an actual aggregate or the frozen absence contract can.
         None => return Err(RelayError::SettlementPending),
@@ -721,6 +992,7 @@ fn complete_generic_cache_usage(
         image: None,
         upstream_cost_atto_usd: None,
         cache_creation: Some(charging::CacheCreationUsage {
+            twelve_hour: None,
             total: integer(total)?,
             five_minute: five.map(integer).transpose()?,
             one_hour: hour.map(integer).transpose()?,
@@ -760,7 +1032,12 @@ fn complete_strict_cache_usage(
     let integer = |v: u64| i64::try_from(v).map_err(|_| RelayError::SettlementPending);
     let total = match observed.cache_creation_input_tokens {
         Some(value) => integer(value)?,
-        None if missing_creation_is_zero && observed.cache_creation_details.is_none() => 0,
+        None if missing_creation_is_zero
+            && observed.cache_creation_details.is_none()
+            && observed.openai_cache_write_details.is_none() =>
+        {
+            0
+        }
         None => return Err(RelayError::SettlementPending),
     };
     let details = observed.cache_creation_details;
@@ -802,6 +1079,7 @@ fn complete_strict_cache_usage(
         image: None,
         upstream_cost_atto_usd: None,
         cache_creation: Some(charging::CacheCreationUsage {
+            twelve_hour: None,
             total,
             five_minute,
             one_hour,
@@ -1284,6 +1562,7 @@ mod a07_billing_tests {
             complete_usage(
                 Observed {
                     cache_creation_details: None,
+                    openai_cache_write_details: None,
                     upstream_cost_atto_usd: None,
                     input_tokens: Some(10),
                     output_tokens: Some(20),
@@ -1310,6 +1589,7 @@ mod a07_billing_tests {
     fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
         let observed = Observed {
             cache_creation_details: None,
+            openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1329,6 +1609,7 @@ mod a07_billing_tests {
     fn complete_usage_strips_reported_cost_for_token_pricing() {
         let observed = Observed {
             cache_creation_details: None,
+            openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1357,6 +1638,7 @@ mod a07_billing_tests {
             complete_usage(
                 Observed {
                     cache_creation_details: None,
+                    openai_cache_write_details: None,
                     upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                     input_tokens: Some(10),
                     output_tokens: Some(20),
@@ -1428,6 +1710,7 @@ mod a07_billing_tests {
         };
         PersistedTieredTariff {
             tariff: TieredTariff {
+                uses_cache_write_12h: false,
                 revision: 3,
                 source_digest: "ab".repeat(32),
                 uses_cache_read: true,
@@ -1436,6 +1719,7 @@ mod a07_billing_tests {
                 tiers: vec![TokenTier {
                     up_to_input_tokens: None,
                     rates: TieredRates {
+                        cache_write_12h: None,
                         input: rate(5, 1),
                         output: rate(25, 1),
                         cache_read: rate(1, 2),
@@ -1475,6 +1759,7 @@ mod a07_billing_tests {
         assert_eq!(
             usage.cache_creation.unwrap(),
             charging::CacheCreationUsage {
+                twelve_hour: None,
                 total: 7,
                 five_minute: Some(3),
                 one_hour: Some(4),
@@ -1511,6 +1796,7 @@ mod a07_billing_tests {
         assert_eq!(
             usage.cache_creation.unwrap(),
             charging::CacheCreationUsage {
+                twelve_hour: None,
                 total: 0,
                 five_minute: None,
                 one_hour: None,
@@ -1578,6 +1864,7 @@ mod a07_billing_tests {
         assert_eq!(
             usage.cache_creation,
             Some(charging::CacheCreationUsage {
+                twelve_hour: None,
                 total: 70,
                 five_minute: Some(30),
                 one_hour: Some(40),

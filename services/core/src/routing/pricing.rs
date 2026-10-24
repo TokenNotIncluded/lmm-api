@@ -247,7 +247,7 @@ impl CreditQuote {
     }
 
     /// Evaluate a revisioned tariff with its authoritative cache TTL evidence.
-    /// The scalar token adapter cannot supply a missing one-hour measurement.
+    /// The scalar token adapter cannot supply a missing TTL measurement.
     pub fn charge_tiered_usage(
         &self,
         usage: super::TieredUsage,
@@ -305,6 +305,7 @@ impl PriceQuote {
                     && !tariff.uses_cache_read
                     && !tariff.uses_cache_write
                     && !tariff.uses_cache_write_1h
+                    && !tariff.uses_cache_write_12h
                     && tariff.tiers.len() == 1
                     && tariff.tiers[0].up_to_input_tokens.is_none()
                     && tariff.tiers[0].rates.output.numerator == 0

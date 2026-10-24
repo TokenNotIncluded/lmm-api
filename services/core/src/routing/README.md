@@ -156,8 +156,8 @@ contract and rejects cache creation. Revision 2 adds the source `cc` price throu
 `uses_cache_write_1h` flag. A referenced zero-price category still changes prompt
 normalization; removing `cc * 0` from an imported expression changes its meaning.
 
-The inclusive input total chooses the context tier. For inclusive APIs, `cc` is
-the aggregate creation count and `cc1h` is zero. For Anthropic, prompt input
+The inclusive input total chooses the context tier. In revision 2, for inclusive
+APIs, `cc` is the aggregate creation count and `cc1h` is zero. For Anthropic, prompt input
 excludes cache reads and all creation; `cc` and `cc1h` are distinct five-minute and
 one-hour counts. A known aggregate plus either TTL determines the other by exact
 subtraction. A positive aggregate without either TTL remains unknown. Inconsistent
@@ -170,12 +170,136 @@ cache-read absence policy, and cannot come from an HTTP request or a model name.
 Recovery uses that original policy, rates and input semantics. It does not read
 today's provider policy or use supplier-reported cost as the user's tariff.
 
-Both revisions sum exact decimal terms and round the final credit amount half
-upwards with the positive one-credit minimum. Reservation rounds upwards and
-considers every tier and every cache split, including one-hour writes. These
-rules do not claim bit equivalence with legacy intermediate floating-point
+Revision 3 retains the existing flat `generic_remainder_v1` contract: the effective
+creation total is the larger of the reported aggregate and the sum of known
+five-minute/one-hour counts. Unclassified creation remains a distinct remainder;
+missing TTLs are not changed into measured zeroes. It does not enable OpenAI's
+twelve-hour price or reinterpret frozen revision 1/2 quotes.
+
+All supported decimal revisions sum exact terms and round the final credit amount
+half upwards with the positive one-credit minimum. Reservation rounds upwards and
+considers every tier and every cache split, including the supported TTL prices.
+These rules do not claim bit equivalence with legacy intermediate floating-point
 arithmetic. Media, calendar/request expressions and tool surcharges need their
 own supported contracts; adding cache creation does not enable them.
+
+#### OpenAI twelve-hour cache writes (revision 4)
+
+Revision 4 is an explicitly configured tariff for inclusive OpenAI Chat/Responses
+usage. It requires `uses_cache_read`, `uses_cache_write` and
+`uses_cache_write_12h`, forbids `uses_cache_write_1h`, and requires an explicit
+`cache_write_12h` rate in every tier. A reviewed zero rate is valid; an absent rate
+is not a default. Revisions 1–3 retain their original accounting rules and reject
+nonzero twelve-hour usage rather than apply a new price to an old quote.
+
+Counts come from the supplier's usage receipt: Chat uses `prompt_tokens_details`
+and Responses uses `input_tokens_details`. Each contains `cache_write_tokens`
+and, when reported, `cache_write_tokens_details.ttl_30m_tokens` and
+`cache_write_tokens_details.ttl_12h_tokens`. The aggregate write count includes
+both lifetimes. For total input `I`, cached reads `R`, aggregate writes `C` and
+measured twelve-hour writes `H`, the disjoint pricing quantities are:
+
+| Rate | Token quantity |
+| --- | --- |
+| `input` | `I - R - C` |
+| `cache_read` | `R` |
+| `cache_write` (thirty-minute writes) | `C - H` |
+| `cache_write_12h` | `H` |
+| `output` | The reported output count |
+
+The inclusive `I` selects the context tier. A reported thirty-minute count must
+agree with the partition above; known buckets cannot exceed the aggregate, and
+two reported buckets must sum to it. Negative, fractional, overflowing,
+contradictory or decreasing cumulative evidence is rejected. Positive writes
+without a measured twelve-hour count leave settlement pending and retain the
+hold; absence is not zero. An explicit zero twelve-hour count is sufficient to
+price a known positive aggregate at the ordinary write rate. Request TTL options
+never supply missing usage evidence.
+
+The following is a complete illustrative `PriceRule`, suitable as an entry in
+`PriceConfig.rules`. Its rates are **examples, not official prices or automatic
+defaults**. `DecimalRate` is exact USD per million tokens. Replace the synthetic
+`source_digest` with the SHA-256 of the administrator's approved source expression
+and use the site's authorized model/group and price version. The outer integer
+`rates` are zero placeholders for `tiered_decimal`.
+
+```json
+{
+  "id": 1,
+  "model": "example-cache-model",
+  "group": "default",
+  "speed": "standard",
+  "billing_mode": "tiered_decimal",
+  "rates": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "request": 0 },
+  "group_multiplier_ppm": 1000000,
+  "speed_multiplier_ppm": 1000000,
+  "tiered": {
+    "revision": 4,
+    "source_digest": "4545454545454545454545454545454545454545454545454545454545454545",
+    "uses_cache_read": true,
+    "uses_cache_write": true,
+    "uses_cache_write_1h": false,
+    "uses_cache_write_12h": true,
+    "tiers": [
+      {
+        "up_to_input_tokens": null,
+        "rates": {
+          "input": { "numerator": 2, "denominator": 1 },
+          "output": { "numerator": 10, "denominator": 1 },
+          "cache_read": { "numerator": 1, "denominator": 5 },
+          "cache_write": { "numerator": 5, "denominator": 2 },
+          "cache_write_12h": { "numerator": 5, "denominator": 1 }
+        }
+      }
+    ]
+  }
+}
+```
+
+For `I = 100`, `R = 20`, `C = 60`, `H = 40` and five output tokens, this example
+prices 20 ordinary input, 20 reads, 20 thirty-minute writes and 40 twelve-hour
+writes. The total is USD 0.000344, or 172 credits at 500,000 credits/USD before
+any funding discount. Settlement applies the frozen group/speed multipliers and
+applicable exact funding discount to the combined rational amount, then rounds
+half up once, with the positive one-credit minimum. It does not round each token
+category separately. Reservation takes the ceiling of a conservative bound over
+every reachable tier and cache split, including twelve-hour writes.
+
+Only the Responses request surface accepts bounded `prompt_cache_options`:
+`ttl` is required and must be `"30m"` or `"12h"`; `mode` may be omitted or equal
+`"implicit"`. For example:
+
+```json
+{
+  "model": "example-cache-model",
+  "input": "hello",
+  "prompt_cache_options": { "mode": "implicit", "ttl": "12h" }
+}
+```
+
+Explicit cache breakpoints, prewarming and unknown option keys are unsupported.
+Core rejects these options before an upstream send unless the selected route is
+OpenAI Responses with a revision 4 tariff. Chat can report measured twelve-hour
+usage, but these request options are not forwarded through Chat or a protocol
+conversion.
+
+The new optional counters and frozen rates use existing JSON evidence/price
+storage; this change requires no DDL and no startup schema upgrade. New readers
+accept historical JSON with absent fields and preserve the original quote's
+revision, rates, usage semantics and absence policy during recovery. Deploy
+compatible readers before enabling revision 4. An older binary with
+`deny_unknown_fields` cannot safely read the new price/evidence fields; publishing
+an older active tariff does not remove frozen requests or historical evidence.
+A rollback must retain a compatible reader for recovery and settlement. Never
+erase twelve-hour evidence or rewrite a frozen quote to make an older binary load.
+
+Protocol references are the
+[QuantumNous/new-api upstream change e9d4d635](https://github.com/QuantumNous/new-api/commit/e9d4d6353ce2c11df753d751ba1ad778e2433a88)
+and the [official OpenAI prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
+This is a Rust implementation of the receipt and tariff contract; the project's
+[AGPL attribution and upstream provenance](../../../../docs/fork.md) remain in
+force. Supplier search metering and search-tool charges are outside this change
+and remain unimplemented here.
 
 ## Publication, persistence and recovery
 
@@ -241,8 +365,33 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
   cargo test --locked --test routing -- --nocapture
 ```
 
-The dedicated `Rust routing contract` workflow performs these checks on draft PRs
-targeting the reconstruction branch. It has no production or deployment access.
+The dedicated [`Rust routing contract` workflow](../../../../.github/workflows/core-routing.yml)
+runs these component checks only when manually dispatched. It has no production
+or deployment access and does not run the model HTTP/ledger integration suite.
+
+Revision 4 additionally needs the receipt, pricing, recovery and request-option
+unit tests and the actual PostgreSQL settlement tests. From `services/core`, the
+focused commands are:
+
+```sh
+cargo test --locked --lib openai_
+cargo test --locked --lib cache_write_12h_projection_tests
+cargo test --locked --lib responses_cache_lifetime
+cargo test --locked --lib cache_12h_replay
+# DATABASE_URL must already point to a disposable PostgreSQL server.
+cargo test --locked --test tiered_token_billing
+```
+
+The root `bun run test:core` script runs `cargo test --locked --all-targets`;
+the broader [`core-protocol` workflow](../../../../.github/workflows/core-protocol.yml)
+also compiles/lints all targets and runs that aggregate with PostgreSQL and its
+process fixtures. Reuse an aggregate result instead of repeating its component
+checks. In the implementation workspace, changed Rust files passed the pinned
+Rust 1.99.0 formatter check, but Rust compilation/tests and PostgreSQL settlement
+tests were **not run**; the complete compiler/Cargo toolchain was unavailable.
+Source tests and format checks are not financial acceptance or proof of
+live-provider compatibility.
+
 The ignored test below is an opt-in pressure benchmark, not a skipped correctness
 test. It uses configured model cardinality, two weighted mock destinations per
 model, concurrent workers, pre-measurement warmup and a start barrier.

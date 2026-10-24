@@ -101,6 +101,7 @@ import type {
   TokenUnit,
   PriceDisplayCurrency,
 } from '../types'
+import { CacheWritePrices } from './cache-write-prices'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ImagePrices } from './image-prices'
 import { ModelAvailability } from './model-availability'
@@ -1065,6 +1066,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               displayCurrency={displayCurrency}
             />
+            <CacheWritePrices model={props.model} />
             <ImagePrices model={props.model} />
             {isDynamic && (
               <DynamicPricingBreakdown
