@@ -21,8 +21,9 @@ This is still an evidence contract: a correctly shaped hash is not proof that a
 provider, database or public edge actually produced it. Independent host and
 runtime checks must calculate these values and bind them to the same record.
 
-When all five build-time values are present, Core's real `/api/status`
-response exposes the corresponding `X-Release-Commit`,
+Core's real `/api/status` response always exposes `X-LMM-API-Version`, which is
+the Core package version. When all five build-time values are present, it also
+exposes the corresponding `X-Release-Commit`,
 `X-Core-Artifact-SHA256`, `X-Extensions-Artifact-SHA256`,
 `X-Schema-Fingerprint` and `X-Route-Identity` headers. Core emits the set
 only when it has a complete identity; a partial set is omitted. These headers
