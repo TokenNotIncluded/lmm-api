@@ -375,6 +375,7 @@ def evaluate(record):
         "safe_to_cutover": status == "READY",
         "host": record["host"],
         "source_revision": record["source_revision"],
+        "migration": record["migration"],
         "identity": identity,
         "gates": gates,
         "unsafe_enablement": sorted(set(unsafe)),
