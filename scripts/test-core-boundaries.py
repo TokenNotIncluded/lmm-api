@@ -18,7 +18,10 @@ OFFLINE_CLI = "services/extensions/internal/freshinstall/cli.go"
 OFFLINE_MAIN = "services/extensions/cmd/extensions/main.go"
 OFFLINE_SNAPSHOT = "services/extensions/internal/modules/toolmarket/install_snapshot.go"
 OFFLINE_TOKEN_SHA256 = {
-    'services/extensions/internal/freshinstall/install.go': '4745a0130f634d2fdd27931ad628d7f257e4d32db993eb79f5862eb826b502d9',
+    # 9b84c4a2c adds the explicit TCP URL validation before the owner
+    # connection; keep the frozen token digest aligned with that reviewed
+    # security change.
+    'services/extensions/internal/freshinstall/install.go': 'ca954f3830a1f360c7b5717f23189156dd9e6ac198dd611fbc52fd7e7fc73843',
     'services/extensions/internal/freshinstall/cli.go': 'c397c48d8511a735924a7c8ceaadbd02a7c0335c5d0eca635c59b0a3b3ce137e',
     'services/extensions/cmd/extensions/main.go': 'e378a2f28d75426b10496b91fd41d1c8cb79a619d1b949098538eb2accfc5666',
     'services/extensions/internal/modules/toolmarket/install_snapshot.go': '8f6f852068a5891a490876eb8918a58008d3f80844144f84307ba78c36b56013',
@@ -1273,7 +1276,18 @@ class CoreBoundaryTests(unittest.TestCase):
         for name in cargo["dependencies"]:
             self.assertNotIn("extension", name)
         for name in ("main.rs", "http.rs"):
-            self.assertNotIn("LMM_EXTENSION", (ROOT / "services/core/src" / name).read_text())
+            text = (ROOT / "services/core/src" / name).read_text()
+            # The release identity header legitimately reads the artifact
+            # provenance variable. Any other LMM_EXTENSION token would be a
+            # forbidden Core -> Extensions startup dependency.
+            extension_tokens = set(re.findall(
+                r"(?<![A-Za-z0-9_])LMM_EXTENSION[A-Za-z0-9_]*", text
+            ))
+            self.assertEqual(
+                extension_tokens - {"LMM_EXTENSIONS_ARTIFACT_SHA256"},
+                set(),
+                name + ": Core must not depend on an Extensions runtime",
+            )
 
     def test_compose_projects_are_separate_and_resource_bounded(self):
         core = (ROOT / "deployment/docker/compose.core.yml").read_text()
