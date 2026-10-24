@@ -138,6 +138,40 @@ def version(value):
     return (int(major), int(minor), int(patch), {"alpha": 0, "beta": 1, "preview": 2, "rc": 3, None: 4}[label], int(number or 0))
 
 
+def verify_cutover_preflight(current, evidence):
+    preflight_ref = evidence.get("cutover_preflight", {})
+    require(isinstance(preflight_ref, dict), "cutover preflight reference required")
+    path = preflight_ref.get("path")
+    expected_sha = preflight_ref.get("sha256", "")
+    require(isinstance(path, str) and path, "cutover preflight path required")
+    preflight = pinned_json(Path(path), expected_sha)
+    require(preflight.get("protocol") == "core-cutover-preflight.v1", "cutover preflight protocol invalid")
+    require(preflight.get("status") == "READY" and preflight.get("safe_to_cutover") is True,
+            "cutover preflight must be READY")
+    release = preflight.get("release", {})
+    require(isinstance(release, dict), "cutover release provenance missing")
+    require(preflight.get("source_commit") == release.get("source_commit") == release.get("runtime_source_commit"),
+            "cutover source commit provenance mismatch")
+    require(release.get("writer_epoch") is not None
+            and release.get("previous_writer_epoch") is not None
+            and release["writer_epoch"] > release["previous_writer_epoch"],
+            "cutover writer epoch is not monotonic")
+    for component, artifact_field in (
+        ("core", "core_artifact_sha256"),
+        ("extensions", "extensions_artifact_sha256"),
+    ):
+        if component not in current["components"]:
+            continue
+        item = current["components"][component]
+        require(item.get("source_revision") == preflight.get("source_commit"),
+                component + " source commit does not match preflight")
+        require(release.get(artifact_field) == item.get("archive_sha256"),
+                component + " artifact does not match preflight")
+        require(release.get("runtime_" + artifact_field) == item.get("archive_sha256"),
+                component + " runtime artifact does not match preflight")
+    return expected_sha
+
+
 def gate(args):
     current = release(args.release_dir, args.release_sha256)
     evidence = pinned_json(args.review, args.review_sha256)
@@ -157,6 +191,7 @@ def gate(args):
         regular(Path(path))
         require(SHA.fullmatch(expected_sha) and digest(Path(path)) == expected_sha, "runtime configuration changed")
     if args.mode == "cutover":
+        preflight_sha256 = verify_cutover_preflight(current, evidence)
         backup = evidence.get("backup", {})
         require(SHA.fullmatch(backup.get("sha256", "")) and backup.get("restore_verified") is True,
                 "backup restoration unverified")
@@ -187,6 +222,7 @@ def gate(args):
                 and schema.get("ordinary_startup_only") is True, "software update cannot migrate schema")
     return {"status": "activation-record-and-files-verified", "formal_release": False,
             "release_sha256": args.release_sha256, "evidence_sha256": args.review_sha256,
+            "cutover_preflight_sha256": preflight_sha256 if args.mode == "cutover" else None,
             "warning": "Hashes bind actual operator evidence, not publisher signatures or proof of migration truth."}
 
 

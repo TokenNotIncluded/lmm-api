@@ -25,12 +25,30 @@ class Checks(unittest.TestCase):
         self.release = {"kind": "lmm-native-stage-v1", "formal_release": False,
                         "components": {"web": {"version": "1.2.3", "files": P.inventory(self.candidate / "web")}}}
         (self.candidate / "release.json").write_text(json.dumps(self.release))
+        self.preflight = self.root / "preflight.json"
+        self.preflight.write_text(json.dumps({
+            "protocol": "core-cutover-preflight.v1",
+            "status": "READY",
+            "safe_to_cutover": True,
+            "source_commit": "e" * 40,
+            "release": {
+                "source_commit": "e" * 40,
+                "runtime_source_commit": "e" * 40,
+                "core_artifact_sha256": "1" * 64,
+                "extensions_artifact_sha256": "2" * 64,
+                "runtime_core_artifact_sha256": "1" * 64,
+                "runtime_extensions_artifact_sha256": "2" * 64,
+                "previous_writer_epoch": 7,
+                "writer_epoch": 8,
+            },
+        }))
         self.args = argparse.Namespace(release_dir=self.candidate, release_sha256=P.digest(self.candidate / "release.json"),
                                        review=self.root / "activation.json", review_sha256="", host="synthetic-host",
                                        database_identity_sha256="a" * 64, mode="cutover", previous_dir=None, previous_sha256=None)
         self.record = {"kind": "lmm-native-activation-v1", "status": "ready", "mode": "cutover",
                        "host": self.args.host, "target_database_identity_sha256": "a" * 64,
                        "release_sha256": self.args.release_sha256, "configuration_sha256": {},
+                       "cutover_preflight": {"path": str(self.preflight), "sha256": P.digest(self.preflight)},
                        "target_runtime_check_passed": True, "all_valid_writes_preserved": True,
                        "backup": {"sha256": "b" * 64, "restore_verified": True},
                        "migration": {"status": "completed", "unresolved_count": 0,
@@ -60,6 +78,34 @@ class Checks(unittest.TestCase):
                 with self.assertRaises((ValueError, KeyError)):
                     self.run_gate()
                 self.record[key] = previous
+
+    def test_cutover_preflight_is_required_and_pinned(self):
+        previous = self.record.pop("cutover_preflight")
+        with self.assertRaises(ValueError):
+            self.run_gate()
+        self.record["cutover_preflight"] = previous
+        self.preflight.write_text(json.dumps({**json.loads(self.preflight.read_text()), "status": "BLOCKED"}))
+        with self.assertRaises(ValueError):
+            self.run_gate()
+        self.preflight.write_text(json.dumps({
+            "protocol": "core-cutover-preflight.v1",
+            "status": "READY",
+            "safe_to_cutover": True,
+            "source_commit": "e" * 40,
+            "release": {
+                "source_commit": "e" * 40,
+                "runtime_source_commit": "e" * 40,
+                "core_artifact_sha256": "1" * 64,
+                "extensions_artifact_sha256": "2" * 64,
+                "runtime_core_artifact_sha256": "1" * 64,
+                "runtime_extensions_artifact_sha256": "2" * 64,
+                "previous_writer_epoch": 7,
+                "writer_epoch": 8,
+            },
+        }))
+        self.record["cutover_preflight"]["sha256"] = "f" * 64
+        with self.assertRaises(ValueError):
+            self.run_gate()
 
     def test_fence_and_boundary_rejected(self):
         for key, value in [("active_writers", 1), ("legacy_workers_stopped", False),

@@ -143,6 +143,15 @@ not supply that missing migration. Preserve every valid write and unknown outcom
      --host "$EXACT_HOST" --database-identity-sha256 "$TARGET_DATABASE_IDENTITY_SHA256"
    ```
 
+   A `cutover` activation record must also contain
+   `cutover_preflight: {path, sha256}`. The native gate reads that pinned
+   `core-cutover-preflight.v1` result and requires
+   `status=READY`/`safe_to_cutover=true`, a matching source commit and
+   core/extensions archive digests, matching runtime artifact digests, and a
+   strictly advancing writer epoch. This prevents the native activation path
+   from bypassing the release provenance gate. Update-only records do not use
+   this cutover-only preflight reference.
+
 5. `activate-component.sh` takes11 explicit positional parameters:
    `component candidate-directory release-sha activation-record record-sha host database-sha mode previous-directory previous-sha tool-directory`.
    In cutover mode previous values may be `- -`. It re-runs the gate under an
@@ -200,6 +209,10 @@ they can be extra fields. Never include credentials.
 
 Cutover additionally records:
 
+- `cutover_preflight`: a private path and SHA-256 for the READY
+  `core-cutover-preflight.v1` result. The referenced result must bind the
+  staged Core/Extensions artifacts and runtime identity to the same source
+  commit and a monotonic writer epoch.
 - `backup`: actual `sha256` and `restore_verified=true`.
 - `migration`: `status=completed`, `unresolved_count=0`,
   `financial_reconciliation_passed=true`, `source_final_boundary_sha256`.
