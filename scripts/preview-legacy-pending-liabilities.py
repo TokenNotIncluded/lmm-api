@@ -220,6 +220,7 @@ def preview(*, source_export: Path, archive: Path, identity_map: Path,
         raise PreviewError(str(error)) from error
     unmapped_owner_count = document["public_summary"]["unmapped_owner_count"]
     fence_reasons = [
+        "owner_only_receipt_writer_contract_missing",
         "provider_status_not_observed",
         "provider_callbacks_and_external_payment_not_proven_terminal",
         "no_target_import_or_liability_close_authorized",

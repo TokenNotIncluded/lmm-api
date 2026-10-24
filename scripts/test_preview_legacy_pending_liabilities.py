@@ -81,6 +81,7 @@ class PendingPreviewTest(unittest.TestCase):
         self.assertEqual(summary["pending_counts_by_table"], {"subscription_orders": 1, "top_ups": 1})
         self.assertEqual(summary["pending_counts_by_provider"], {"fastpay": 1, "waffo_pancake": 1})
         self.assertEqual(summary["gate"], "BLOCKED_PENDING_PROVIDER_RECONCILIATION")
+        self.assertIn("owner_only_receipt_writer_contract_missing", summary["fence_reasons"])
         self.assertFalse(summary["provider_io_performed"])
         self.assertEqual(summary["target_writes"], 0)
         self.assertEqual(summary["ledger_writes"], 0)
