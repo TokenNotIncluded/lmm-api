@@ -132,14 +132,32 @@ its hash. Review the candidate against that frozen input:
    and process/artifact identity checks are complete. Selecting `active.conf`
    or reloading Nginx is a final operator action, not part of this preflight.
 
+### Local executable harness
+
+The repository now includes a localhost-only fixture harness:
+
+```sh
+python3 -B scripts/test_edge_cutover_harness.py
+```
+
+It starts disposable Core and Extensions HTTP stubs plus a temporary Nginx
+instance, then checks ten candidate-edge properties: Core/Extensions route
+precedence, OAuth query preservation, callback body preservation and host-token
+stripping, private-route denial, API-vs-SPA fallback, immutable static assets,
+SSE content type and first-chunk timing, and `nginx -t`. It binds every listener
+to `127.0.0.1` and removes the temporary fixture after the run. This proves the
+candidate contract and catches Nginx precedence regressions; it does not prove
+the production host's TLS server block or module configuration.
+
 ## Current blockers
 
 - No tracked production Nginx/TLS server block or candidate upstream map exists
   in this repository; the host inventory is required to check route precedence,
   headers, buffering, certificate renewal, and legacy paths.
-- There is no public-edge acceptance harness for Nginx routing, SSE/callback
-  behavior, or static/API fallback separation. Existing Core/Extensions tests
-  exercise in-process or loopback handlers only.
+- The local fixture harness covers Nginx routing, SSE/callback behavior, and
+  static/API fallback separation. A real host acceptance run is still required:
+  the repository does not contain the production TLS server block, upstream
+  inventory, certificate state, or host-specific module selection.
 - `/extensions/v1/*` and callback exposure still depend on the host-specific
   web-compat/module selection. A source route list cannot establish that the
   running Go process has the same modules, callback channel, database, or
