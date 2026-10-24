@@ -231,6 +231,7 @@ def preview(*, source_export: Path, archive: Path, identity_map: Path,
     summary = {
         "status": "PENDING_LIABILITIES_PRESERVED_SOURCE_ONLY",
         "gate": gate,
+        "validator_sha256": _sha256_file(Path(__file__).resolve()),
         "source_archive_sha256": archive_sha256,
         "source_export_sha256": export_sha256,
         "identity_mapping_sha256": mapping_sha256,
