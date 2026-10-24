@@ -420,6 +420,8 @@ def main():
         )
         c = I.current_contract()
         c["catalog_fingerprint_sha256"] = sql(I.catalog_hash_sql(c), db, True)
+        c["trust_policy_seed"] = jsql(I.trust_policy_seed_query(), db)
+        c["initialized_core_seed_sha256"] = sql(I.fresh_seed_hash_query(), db, True)
         ident = jsql(I.IDENTITY_SQL, db)
         ident["database_oid"] = int(ident["database_oid"])
         ident["listen_addresses"] = ""
