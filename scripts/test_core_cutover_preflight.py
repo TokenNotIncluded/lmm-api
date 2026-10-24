@@ -58,6 +58,32 @@ class Checks(unittest.TestCase):
                 "modules": ["assistant", "toolmarket"],
                 "host_credential": "reviewed",
             },
+            "identity": {
+                "migration_status": "identity_only",
+                "mapping_status": "passed",
+                "target_comparison_status": "passed",
+                "legacy_inventory": {
+                    "sessions": 723,
+                    "api_keys": 815,
+                    "passkeys": 8,
+                    "oauth_bindings": 235,
+                    "oauth_server_tokens": 1214,
+                    "mfa_factors": 2,
+                    "mfa_backup_codes": 8,
+                },
+                "reauth_required": 2172,
+                "rekey_required": 815,
+                "reenroll_required": 18,
+                "actions": {
+                    "sessions": "reauth_required",
+                    "api_keys": "rekey_required",
+                    "passkeys": "reenroll_required",
+                    "oauth_bindings": "reauth_required",
+                    "oauth_server_tokens": "reauth_required",
+                    "mfa_factors": "reenroll_required",
+                    "mfa_backup_codes": "reenroll_required",
+                },
+            },
             "migration": {
                 "status": "completed",
                 "unknown_liabilities": 0,
@@ -97,6 +123,39 @@ class Checks(unittest.TestCase):
         self.assertIn("core.public_edge.candidate_selected", boundary["missing"])
         model = next(g for g in result["gates"] if g["name"] == "model_forwarding")
         self.assertIn("model_forwarding.credentials", model["missing"])
+
+    def test_identity_gate_requires_mapping_and_target_comparison(self):
+        record = self.base()
+        record["identity"]["mapping_status"] = "not_run"
+        record["identity"]["target_comparison_status"] = "not_run"
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "identity")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("identity.mapping_status", gate["missing"])
+        self.assertIn("identity.target_comparison_status", gate["missing"])
+        self.assertFalse(result["safe_to_cutover"])
+
+    def test_identity_gate_requires_explicit_reauth_rekey_reenroll_coverage(self):
+        record = self.base()
+        record["identity"]["rekey_required"] = 0
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "identity")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("identity.rekey_required", gate["missing"])
+
+    def test_identity_inventory_and_action_schema_is_strict(self):
+        record = self.base()
+        record["identity"]["legacy_inventory"]["api_keys"] = True
+        with self.assertRaises(ValueError):
+            P.parse(record)
+        record = self.base()
+        record["identity"]["legacy_inventory"]["unexpected"] = 1
+        with self.assertRaises(ValueError):
+            P.parse(record)
+        record = self.base()
+        record["identity"]["actions"]["passkeys"] = "none"
+        with self.assertRaises(ValueError):
+            P.parse(record)
 
     def test_enabled_capability_without_contract_is_unsafe(self):
         record = self.base()
