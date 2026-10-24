@@ -731,7 +731,25 @@ def main():
         raise
     finally:
         if (DATA / "postmaster.pid").exists():
-            cmd(["pg_ctl", "-D", str(DATA), "-m", "fast", "-w", "stop"])
+            stop = subprocess.run(
+                ["pg_ctl", "-D", str(DATA), "-m", "fast", "-w", "stop"],
+                env=ENV,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            write(
+                "cleanup-stop.json",
+                {
+                    "argv": ["pg_ctl", "-D", str(DATA), "-m", "fast", "-w", "stop"],
+                    "returncode": stop.returncode,
+                    "stdout": stop.stdout,
+                    "stderr": stop.stderr,
+                    "postmaster_pid_remaining": (DATA / "postmaster.pid").exists(),
+                },
+            )
+            if stop.returncode and (DATA / "postmaster.pid").exists():
+                raise RuntimeError("isolated PostgreSQL cluster did not stop")
         write(
             "hashes.json",
             {
