@@ -49,6 +49,17 @@ IDENTITY_INVENTORY_FIELDS = (
     "mfa_backup_codes",
 )
 IDENTITY_ACTION_FIELDS = ("reauth_required", "rekey_required", "reenroll_required")
+IDENTITY_HASH_FIELDS = (
+    "source_archive_sha256",
+    "source_export_sha256",
+    "source_baseline_proof_sha256",
+    "mapping_sha256",
+    "mapping_file_sha256",
+    "source_target_id_map_sha256",
+    "identity_contract_sha256",
+    "target_import_sql_sha256",
+    "target_receipt_sha256",
+)
 IDENTITY_ACTION_BY_CLASS = {
     "sessions": "reauth_required",
     "api_keys": "rekey_required",
@@ -150,6 +161,7 @@ def parse_identity(value):
             "mapping_status",
             "target_comparison_status",
             "legacy_inventory",
+            *IDENTITY_HASH_FIELDS,
             *IDENTITY_ACTION_FIELDS,
             "actions",
         ),
@@ -157,6 +169,8 @@ def parse_identity(value):
     enum("identity_migration_status", value["migration_status"])
     for field in ("mapping_status", "target_comparison_status"):
         enum("identity_evidence_status", value[field])
+    for field in IDENTITY_HASH_FIELDS:
+        sha(value[field])
     inventory = object(value["legacy_inventory"], IDENTITY_INVENTORY_FIELDS)
     for field in IDENTITY_INVENTORY_FIELDS:
         inventory[field] = nonnegative(inventory[field])
