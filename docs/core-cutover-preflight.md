@@ -12,6 +12,15 @@ status `2`. The observation timestamp must be timezone-aware and no more than
 15 minutes old. Only `READY` with `safe_to_cutover=true` is a pass. A healthy
 Core process by itself cannot produce this result.
 
+The preflight also requires a `release` provenance block. It binds the exact
+40-character source commit to the Core and Extensions artifact digests, SBOM,
+schema fingerprint, provider/identity/financial/edge evidence digests and the
+runtime release identity. Runtime source and artifact digests must match the
+candidate package, and the writer epoch must advance beyond the previous epoch.
+This is still an evidence contract: a correctly shaped hash is not proof that a
+provider, database or public edge actually produced it. Independent host and
+runtime checks must calculate these values and bind them to the same record.
+
 ## Current ArchDmit evidence
 
 The latest read-only rehearsal record (2026-10-24) is still blocked:
@@ -69,8 +78,26 @@ The record must use this top-level shape:
   "scope": "production-cutover",
   "host": "ArchDmit",
   "observed_at": "<ISO-8601 timestamp with timezone>",
+  "source_commit": "<40 lowercase hex commit>",
   "source_revision": "<64 lowercase hex>",
   "check_db_evidence_sha256": "<64 lowercase hex>",
+  "release": {
+    "source_commit": "<same 40 lowercase hex commit>",
+    "core_artifact_sha256": "<64 lowercase hex>",
+    "extensions_artifact_sha256": "<64 lowercase hex>",
+    "sbom_sha256": "<64 lowercase hex>",
+    "schema_fingerprint_sha256": "<64 lowercase hex>",
+    "provider_matrix_sha256": "<64 lowercase hex>",
+    "identity_evidence_sha256": "<64 lowercase hex>",
+    "financial_evidence_sha256": "<64 lowercase hex>",
+    "edge_config_sha256": "<64 lowercase hex>",
+    "runtime_release_identity_sha256": "<64 lowercase hex>",
+    "runtime_source_commit": "<same 40 lowercase hex commit>",
+    "runtime_core_artifact_sha256": "<same core artifact digest>",
+    "runtime_extensions_artifact_sha256": "<same extensions artifact digest>",
+    "previous_writer_epoch": 7,
+    "writer_epoch": 8
+  },
   "core": {
     "ready": {
       "http_status": 200,
