@@ -236,6 +236,12 @@ def target_contract(F, target, contract):
     F.require(typed_equal(F, {k:tc.get(k) for k in fields}, {k:contract[k] for k in fields}),
               "opening_component_contract_mismatch")
     F.require(F.IDENTITY.HEX.fullmatch(tc.get("catalog_fingerprint_sha256", "")) is not None, "opening_catalog_hash_invalid")
+    seed_fields = ("trust_policy_seed", "initialized_core_seed_sha256")
+    if any(field in tc for field in seed_fields):
+        F.require(all(field in tc for field in seed_fields), "opening_initialized_seed_contract_incomplete")
+        F.IDENTITY.validate_trust_policy_seed(tc["trust_policy_seed"])
+        F.require(F.IDENTITY.HEX.fullmatch(tc["initialized_core_seed_sha256"]) is not None,
+                  "opening_initialized_seed_hash_invalid")
     reference = target.get("identity_import", {})
     F.require(F.IDENTITY.MIGRATION_ID.fullmatch(reference.get("migration_id", "")) is not None, "opening_identity_run_missing")
     F.require(F.IDENTITY.IDENTIFIER.fullmatch(target.get("runtime_role", "")) is not None
@@ -518,6 +524,19 @@ def build_import_sql(F, *, approval, target, contract, plan, identities, identit
     other_keys = ",".join(L(k) for k in sorted(changed_tables))
     touched_keys = ",".join(L(k) for k in sorted(TOUCHED))
     runtime, login, owner = target["runtime_role"], target["connection"]["login_role"], target["connection"]["role"]
+    target_contract_record = target["contract"]
+    if "trust_policy_seed" in target_contract_record:
+        seed_exclusion = " AND NOT (n.nspname='core_humangrant' AND c.relname='human_grant_gate')"
+        seed_exclusion += " AND NOT (n.nspname='core_gift' AND c.relname IN ('risk_key','policy'))"
+        seed_exclusion += " AND NOT (n.nspname='core_tool_market' AND c.relname='credit_policy')"
+        seed_exclusion += " AND NOT (n.nspname='core_trust_pricing' AND c.relname='policies')"
+        seed_guard = (
+            f" OR ({I.trust_policy_seed_guard_sql(target_contract_record)})"
+            f" OR ({I.fresh_seed_hash_query()}) IS DISTINCT FROM {L(target_contract_record['initialized_core_seed_sha256'])}"
+        )
+    else:
+        seed_exclusion = ""
+        seed_guard = ""
     scope = L(run)
     counter_insert = ""
     if include_counters:
@@ -623,10 +642,12 @@ BEGIN
   OR (SELECT count(*) FROM core_abuse.settings)<>1
   OR NOT EXISTS(SELECT 1 FROM core_abuse.settings WHERE singleton AND revision=0 AND document='{{"version":1,"policies":[]}}'::jsonb)
   OR ({I.oauth_seed_guard_sql(contract)})
+  {seed_guard}
   THEN RAISE EXCEPTION 'opening noncanonical seed'; END IF;
   FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
    WHERE {TABLE_PREDICATE} AND n.nspname NOT IN ('core_meta','core_migration')
-   AND (n.nspname||'.'||c.relname) NOT IN ('core_identity.accounts','core_identity.users','core_identity.user_profiles','core_identity.password_logins','core_identity.developer_access','core_billing.account_policies','core_billing.ledger_accounts','core_billing.balance_state','core_events.capacity','public.routing_active_release','core_abuse.settings','core_oauth.contract') LOOP
+   AND (n.nspname||'.'||c.relname) NOT IN ('core_identity.accounts','core_identity.users','core_identity.user_profiles','core_identity.password_logins','core_identity.developer_access','core_billing.account_policies','core_billing.ledger_accounts','core_billing.balance_state','core_events.capacity','public.routing_active_release','core_abuse.settings','core_oauth.contract')
+   {seed_exclusion} LOOP
    EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.%I)',table_row.nspname,table_row.relname) INTO occupied;
    IF occupied THEN RAISE EXCEPTION 'opening business target is not fresh'; END IF;
   END LOOP;
