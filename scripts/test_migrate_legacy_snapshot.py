@@ -762,6 +762,16 @@ class ImportSqlTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.MappingError, "^identity_summary_scope_invalid$"):
             MODULE.validate_import_material(mutated, SOURCE_SHA256, manifest)
 
+        for field in MODULE.IDENTITY_ONLY_FORBIDDEN_NONZERO_FIELDS:
+            mutated = deepcopy(plan)
+            mutated["summary"][field] = 1
+            mutated["mapping_sha256"] = hashlib.sha256(
+                MODULE.canonical({"source_sha256": SOURCE_SHA256, "records": mutated["records"]}).encode()
+            ).hexdigest()
+            with self.subTest(field=field), self.assertRaisesRegex(
+                MODULE.MappingError, "^identity_summary_scope_invalid$"):
+                MODULE.validate_import_material(mutated, SOURCE_SHA256, manifest)
+
     def test_quotes_backslashes_controls_and_unicode_roundtrip_as_data(self):
         original = user(username="模型 O'Reilly\\fixture", setting="quote ' \\ newline\n tab\t 雪")
         sql, plan = self.sql([original])
