@@ -19,7 +19,7 @@ var ErrSaturated = errors.New("extension host busy")
 // and listener binding succeed. No runtime module loading is involved.
 type Host struct {
 	limit    int
-	handler  http.Handler
+	router   *Router
 	mu       sync.Mutex
 	phase    string
 	active   int
@@ -37,19 +37,29 @@ func NewHostWithLimit(registered []Module, credential []byte, limit int) (*Host,
 	if limit < 1 || limit > MaximumMaxInFlight {
 		return nil, errors.New("extension max_in_flight must be between 1 and 64")
 	}
-	handler, err := New(registered, credential)
+	router, err := NewRouter(registered, credential)
 	if err != nil {
 		return nil, err
 	}
 	idle := make(chan struct{})
 	close(idle)
-	host := &Host{handler: handler, phase: "preparing", idle: idle, limit: limit}
+	host := &Host{router: router, phase: "preparing", idle: idle, limit: limit}
 	for _, module := range registered {
 		if drainer, ok := module.(interface{ BeginDrain() }); ok {
 			host.drainers = append(host.drainers, drainer)
 		}
 	}
 	return host, nil
+}
+
+// ReloadModules atomically changes which already-composed modules accept new
+// service-token requests. It does not close module storage or cancel accepted
+// work; callers may safely use it for administrative hot reload.
+func (h *Host) ReloadModules(enabled []string) error {
+	if h == nil || h.router == nil {
+		return errors.New("extension host unavailable")
+	}
+	return h.router.Reload(enabled)
 }
 
 type hostCapacityKey struct{}
@@ -148,7 +158,7 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Do not wrap ResponseWriter: streaming, flush and hijack support remain
 	// with the existing HTTP server. Upgraded/background work must use Acquire.
 	if r.URL.Path == "/health/live" {
-		h.handler.ServeHTTP(w, r)
+		h.router.ServeHTTP(w, r)
 		return
 	}
 	if r.URL.Path == "/health/ready" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
@@ -174,5 +184,5 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	ctx := context.WithValue(r.Context(), hostCapacityKey{}, h.limit)
-	h.handler.ServeHTTP(w, r.WithContext(ctx))
+	h.router.ServeHTTP(w, r.WithContext(ctx))
 }

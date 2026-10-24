@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // Module is a compiled Go module. This is not a shared-library loader or a
@@ -41,11 +42,31 @@ func isNil(value any) bool {
 // contact Rust, or run schema installation. Each module has its own admission
 // limit. A full module fails immediately rather than creating an unbounded queue.
 func New(registered []Module, credential []byte) (http.Handler, error) {
+	router, err := NewRouter(registered, credential)
+	if err != nil {
+		return nil, err
+	}
+	return router, nil
+}
+
+// Router is the atomically replaceable, authenticated module route table.
+// Reload changes admission for new requests without closing module resources;
+// the Host admission gate keeps accepted work alive until it is complete.
+type Router struct {
+	secret   []byte
+	modules  map[string]Module
+	handlers map[string]http.Handler
+	names    []string
+	current  atomic.Value // http.Handler
+}
+
+// NewRouter snapshots compiled module registrations. It does not open storage,
+// start workers, contact Rust, or run schema installation.
+func NewRouter(registered []Module, credential []byte) (*Router, error) {
 	if len(credential) < 32 || len(credential) > 4096 {
 		return nil, errors.New("extension service credential must contain 32 to 4096 bytes")
 	}
-	secret := append([]byte(nil), credential...)
-	api := http.NewServeMux()
+	router := &Router{secret: append([]byte(nil), credential...), modules: make(map[string]Module, len(registered)), handlers: make(map[string]http.Handler, len(registered))}
 	names := make([]string, 0, len(registered))
 	seen := make(map[string]bool, len(registered))
 	for _, module := range registered {
@@ -61,11 +82,42 @@ func New(registered []Module, credential []byte) (http.Handler, error) {
 			return nil, errors.New("extension module has no handler")
 		}
 		seen[name] = true
+		router.modules[name] = module
+		router.handlers[name] = handler
 		names = append(names, name)
-		prefix := "/extensions/v1/" + name
-		api.Handle(prefix+"/", http.StripPrefix(prefix, bounded(handler)))
 	}
 	sort.Strings(names)
+	router.names = names
+	if err := router.Reload(names); err != nil {
+		return nil, err
+	}
+	return router, nil
+}
+
+// Reload replaces the route table for new requests. Names must be a subset of
+// the originally registered modules; ordering is canonicalized for stable
+// inventory output and deterministic state files.
+func (r *Router) Reload(enabled []string) error {
+	if r == nil {
+		return errors.New("nil extension router")
+	}
+	selected := make(map[string]bool, len(enabled))
+	for _, name := range enabled {
+		if !validName.MatchString(name) || selected[name] || r.modules[name] == nil {
+			return errors.New("unknown or duplicate extension module")
+		}
+		selected[name] = true
+	}
+	names := make([]string, 0, len(selected))
+	for name := range selected {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	api := http.NewServeMux()
+	for _, name := range names {
+		prefix := "/extensions/v1/" + name
+		api.Handle(prefix+"/", http.StripPrefix(prefix, bounded(r.handlers[name])))
+	}
 	api.HandleFunc("GET /extensions/v1/modules", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, struct {
 			ContractVersion int      `json:"contract_version"`
@@ -78,8 +130,9 @@ func New(registered []Module, credential []byte) (http.Handler, error) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "alive", "service": "lmm-extensions"})
 		})
 	}
-	mux.Handle("/extensions/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		values := r.Header.Values("Authorization")
+	secret := append([]byte(nil), r.secret...)
+	mux.Handle("/extensions/v1/", http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		values := request.Header.Values("Authorization")
 		if len(values) != 1 {
 			unauthorized(w)
 			return
@@ -91,12 +144,28 @@ func New(registered []Module, credential []byte) (http.Handler, error) {
 		}
 		// Clone before removing the host credential. Keep the separate user
 		// credential; the selected module still has to validate it with Rust.
-		r = r.Clone(r.Context())
-		r.Header.Del("Authorization")
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		api.ServeHTTP(w, r)
+		request = request.Clone(request.Context())
+		request.Header.Del("Authorization")
+		request.Body = http.MaxBytesReader(w, request.Body, 1<<20)
+		api.ServeHTTP(w, request)
 	}))
-	return mux, nil
+	r.current.Store(http.Handler(mux))
+	return nil
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	if r == nil {
+		http.Error(w, "extension router unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	r.current.Load().(http.Handler).ServeHTTP(w, request)
+}
+
+func (r *Router) Names() []string {
+	if r == nil {
+		return nil
+	}
+	return append([]string(nil), r.names...)
 }
 
 func bounded(next http.Handler) http.Handler {

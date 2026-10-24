@@ -5,6 +5,10 @@ version = 1
 [host]
 listen = "127.0.0.1:8081"
 token_file = "/etc/lmm.conf.d/secrets/extensions/host-token"
+# Optional 0600 lifecycle state. Enable only after provisioning the writable
+# extensions state directory; the file stores plugin names and enablement, no
+# credentials or executable bytes.
+# plugin_state_file = "/var/lib/lmm/extensions/plugins.json"
 modules = ["none"]
 web_compat = false
 # Shared HTTP, compatibility, callback and recovery-worker admission.

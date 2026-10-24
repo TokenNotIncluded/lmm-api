@@ -10,6 +10,17 @@ Rust owns users, sessions, teams, permissions, funds and model traffic. Go gets 
 
 Each future business module owns its own storage and must receive only its narrow dependencies at assembly time. Do not introduce a shared global ORM, generic SQL RPC, shared wallet, or a second permission authority. Compile-time modules are trusted Go code, not a security sandbox; hard process isolation requires separate extension containers.
 
+The host exposes a compiled plugin registry. A platform administrator can list,
+install, enable, disable, uninstall and hot-reload registered modules through
+the protected `/api/extensions/plugins` API when Web compatibility is enabled.
+Install accepts only the module's reviewed registration manifest; it never
+uploads or loads executable code. Enablement swaps the authenticated route
+snapshot atomically, so requests already admitted by the host finish before a
+module is no longer reachable. Persist lifecycle state with
+`host.plugin_state_file` (a private 0600 file) when it must survive a restart.
+See [plugin development](../../docs/plugin-development.md) for the contract,
+release workflow and security boundary.
+
 ## Build and run
 
 From this directory:

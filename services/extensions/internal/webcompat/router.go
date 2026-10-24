@@ -22,6 +22,7 @@ type AdditionalServices struct {
 	ToolMarket        ToolMarketService
 	Operations        *operations.Service
 	Payments          PaymentStatusReader
+	Plugins           PluginController
 }
 
 // @mark extensions.admission role=consumer
@@ -55,6 +56,9 @@ func Mount(host *modules.Host, auth *Authenticator, catalogue StoreService, supp
 		if !store.Missing(optional[0].ToolMarket) {
 			RegisterToolMarket(mux, auth, optional[0].ToolMarket)
 		}
+		if !store.Missing(optional[0].Plugins) {
+			RegisterPlugins(mux, auth, optional[0].Plugins)
+		}
 	}
 	RegisterOperations(mux, auth, operationsService)
 	RegisterPayments(mux, auth, paymentReader)
@@ -67,7 +71,7 @@ func Mount(host *modules.Host, auth *Authenticator, catalogue StoreService, supp
 		Respond(w, nil, store.ErrUnavailable)
 	})
 	return OperationsGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !builtinHTTPPath(r.URL.Path) && r.URL.Path != "/mcp/market" && r.URL.Path != "/mcp/market/" && !strings.HasPrefix(r.URL.Path, "/api/store/") && !strings.HasPrefix(r.URL.Path, "/api/assistant/") && r.URL.Path != "/api/tool-market" && !strings.HasPrefix(r.URL.Path, "/api/tool-market/") && !strings.HasPrefix(r.URL.Path, "/api/user/auth/store-claim/") && !strings.HasPrefix(r.URL.Path, "/api/user/payments/") &&
+		if !builtinHTTPPath(r.URL.Path) && r.URL.Path != "/mcp/market" && r.URL.Path != "/mcp/market/" && !strings.HasPrefix(r.URL.Path, "/api/store/") && !strings.HasPrefix(r.URL.Path, "/api/assistant/") && r.URL.Path != "/api/tool-market" && !strings.HasPrefix(r.URL.Path, "/api/tool-market/") && !strings.HasPrefix(r.URL.Path, "/api/user/auth/store-claim/") && !strings.HasPrefix(r.URL.Path, "/api/user/payments/") && !pluginHTTPPath(r.URL.Path) &&
 			!strings.HasPrefix(r.URL.Path, "/api/release-notes/") && r.URL.Path != "/api/scripts" &&
 			!strings.HasPrefix(r.URL.Path, "/api/scripts/") && !strings.HasPrefix(r.URL.Path, "/scripts/") {
 			host.ServeHTTP(w, r)
@@ -80,6 +84,12 @@ func Mount(host *modules.Host, auth *Authenticator, catalogue StoreService, supp
 			return
 		}
 		defer release()
+		if len(optional) == 1 {
+			if plugin := webPluginName(r.URL.Path); plugin != "" && !store.Missing(optional[0].Plugins) && !optional[0].Plugins.IsEnabled(plugin) {
+				Respond(w, nil, store.ErrUnavailable)
+				return
+			}
+		}
 		mux.ServeHTTP(w, r)
 	}))
 }
