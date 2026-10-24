@@ -92,6 +92,12 @@ class Checks(unittest.TestCase):
                 "writer_fenced": True,
                 "active_writers": 0,
                 "legacy_workers_stopped": True,
+                **{field: "e" * 64 for field in P.FINANCIAL_EVIDENCE_FIELDS},
+                "provider_io_performed": False,
+                "target_writes": 0,
+                "ledger_writes": 0,
+                "spendable_writes": 0,
+                "receipt_writes": 0,
             },
         }
 
@@ -212,6 +218,31 @@ class Checks(unittest.TestCase):
         gate = next(g for g in result["gates"] if g["name"] == "payments")
         self.assertEqual(gate["status"], "BLOCKED")
         self.assertIn("payments.external_provider_contract", gate["missing"])
+
+    def test_financial_evidence_hashes_are_required(self):
+        record = self.base()
+        del record["migration"]["pending_preview_evidence_sha256"]
+        with self.assertRaises(ValueError):
+            P.parse(record)
+        record = self.base()
+        record["migration"]["provider_contract_evidence_sha256"] = "not-a-sha"
+        with self.assertRaises(ValueError):
+            P.parse(record)
+
+    def test_nonzero_provider_or_write_boundary_blocks_reconciliation(self):
+        for field, value in (
+            ("provider_io_performed", True),
+            ("target_writes", 1),
+            ("ledger_writes", 1),
+            ("spendable_writes", 1),
+            ("receipt_writes", 1),
+        ):
+            record = self.base()
+            record["migration"][field] = value
+            result = P.evaluate(P.parse(record))
+            boundary = next(g for g in result["gates"] if g["name"] == "cutover_boundary")
+            self.assertEqual(boundary["status"], "BLOCKED")
+            self.assertIn("migration." + field, boundary["missing"])
 
 
 if __name__ == "__main__":
