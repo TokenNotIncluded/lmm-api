@@ -148,6 +148,14 @@ class Checks(unittest.TestCase):
         record["identity"]["legacy_inventory"]["api_keys"] = True
         with self.assertRaises(ValueError):
             P.parse(record)
+        record = self.base()
+        record["identity"]["legacy_inventory"]["unexpected"] = 1
+        with self.assertRaises(ValueError):
+            P.parse(record)
+        record = self.base()
+        record["identity"]["actions"]["passkeys"] = "none"
+        with self.assertRaises(ValueError):
+            P.parse(record)
 
     def test_identity_action_booleans_cover_all_rows(self):
         record = self.base()
@@ -157,14 +165,6 @@ class Checks(unittest.TestCase):
         result = P.evaluate(P.parse(record))
         gate = next(g for g in result["gates"] if g["name"] == "identity")
         self.assertEqual(gate["status"], "READY")
-        record = self.base()
-        record["identity"]["legacy_inventory"]["unexpected"] = 1
-        with self.assertRaises(ValueError):
-            P.parse(record)
-        record = self.base()
-        record["identity"]["actions"]["passkeys"] = "none"
-        with self.assertRaises(ValueError):
-            P.parse(record)
 
     def test_enabled_capability_without_contract_is_unsafe(self):
         record = self.base()
