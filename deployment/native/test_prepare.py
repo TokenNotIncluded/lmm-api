@@ -49,6 +49,11 @@ class Checks(unittest.TestCase):
                 "writer_epoch": 8,
             },
         }))
+        self.manifest = self.root / "release-manifest.json"
+        self.manifest.write_text(json.dumps({
+            "protocol": "release-manifest.v1",
+            **json.loads(self.preflight.read_text())["release"],
+        }))
         self.args = argparse.Namespace(release_dir=self.candidate, release_sha256=P.digest(self.candidate / "release.json"),
                                        review=self.root / "activation.json", review_sha256="", host="synthetic-host",
                                        database_identity_sha256="a" * 64, mode="cutover", previous_dir=None, previous_sha256=None)
@@ -56,6 +61,7 @@ class Checks(unittest.TestCase):
                        "host": self.args.host, "target_database_identity_sha256": "a" * 64,
                        "release_sha256": self.args.release_sha256, "configuration_sha256": {},
                        "cutover_preflight": {"path": str(self.preflight), "sha256": P.digest(self.preflight)},
+                       "cutover_manifest": {"path": str(self.manifest), "sha256": P.digest(self.manifest)},
                        "target_runtime_check_passed": True, "all_valid_writes_preserved": True,
                        "backup": {"sha256": "b" * 64, "restore_verified": True},
                        "migration": {"status": "completed", "unresolved_count": 0,
@@ -95,8 +101,13 @@ class Checks(unittest.TestCase):
             "source_revision": "e" * 40,
             "archive_sha256": "1" * 64,
         }}}
-        self.assertEqual(P.verify_cutover_preflight(current, self.record),
-                         self.record["cutover_preflight"]["sha256"])
+        self.assertEqual(
+            P.verify_cutover_preflight(current, self.record),
+            (
+                self.record["cutover_preflight"]["sha256"],
+                self.record["cutover_manifest"]["sha256"],
+            ),
+        )
 
         self.preflight.write_text(json.dumps({**json.loads(self.preflight.read_text()), "status": "BLOCKED"}))
         self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
@@ -137,6 +148,14 @@ class Checks(unittest.TestCase):
                 "source_revision": "e" * 40,
                 "archive_sha256": "f" * 64,
             }}}, self.record)
+
+        self.manifest.write_text(json.dumps({
+            "protocol": "release-manifest.v1",
+            **{**json.loads(self.preflight.read_text())["release"], "writer_epoch": 9},
+        }))
+        self.record["cutover_manifest"]["sha256"] = P.digest(self.manifest)
+        with self.assertRaises(ValueError):
+            P.verify_cutover_preflight(current, self.record)
 
         self.record["cutover_preflight"]["sha256"] = "f" * 64
         with self.assertRaises(ValueError):
