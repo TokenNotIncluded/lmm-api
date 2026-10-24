@@ -39,6 +39,47 @@ import type {
   SettlementCurrencyPreference,
 } from './types'
 
+export type OAuthGrantSummary = {
+  id: string
+  client_id: 'lmm' | 'lmm-pi'
+  purpose: 'read_only' | 'normal_model' | 'honeypot_only' | string
+  scopes: string[]
+  budget_credits: number | null
+  created_at: number
+  expires_at: number
+  revoked_at: number | null
+  active: boolean
+}
+
+export async function getOAuthGrantSummaries(): Promise<
+  ApiResponse<OAuthGrantSummary[]>
+> {
+  const res = await api.get<ApiResponse<OAuthGrantSummary[]>>(
+    '/api/user/auth/oauth2/grants',
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function revokeOAuthGrant(id: string): Promise<ApiResponse> {
+  const res = await api.delete<ApiResponse>(
+    `/api/user/auth/oauth2/grants/${encodeURIComponent(id)}`,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function revokeAllOAuthGrants(): Promise<
+  ApiResponse<{ revoked: number }>
+> {
+  const res = await api.post<ApiResponse<{ revoked: number }>>(
+    '/api/user/auth/oauth2/grants/revoke-all',
+    undefined,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return res.data
+}
+
 // ============================================================================
 // User Profile APIs
 // ============================================================================
