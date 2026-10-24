@@ -110,6 +110,15 @@ The record must use this top-level shape:
       "mfa_factors": 2,
       "mfa_backup_codes": 8
     },
+    "source_archive_sha256": "<64 lowercase hex>",
+    "source_export_sha256": "<64 lowercase hex>",
+    "source_baseline_proof_sha256": "<64 lowercase hex>",
+    "mapping_sha256": "<64 lowercase hex>",
+    "mapping_file_sha256": "<64 lowercase hex>",
+    "source_target_id_map_sha256": "<64 lowercase hex>",
+    "identity_contract_sha256": "<64 lowercase hex>",
+    "target_import_sql_sha256": "<64 lowercase hex>",
+    "target_receipt_sha256": "<64 lowercase hex>",
     "reauth_required": 2172,
     "rekey_required": 815,
     "reenroll_required": 18,
@@ -134,8 +143,11 @@ seven non-negative counts shown above. `mapping_status` and
 sessions and OAuth records require reauthentication, API keys require new-key
 creation, and passkeys/MFA records require re-enrollment. The action counts may
 be `true` (all rows) or a non-negative integer covering the rows assigned to
-that action. Any uncovered or differently classified legacy row blocks the
-identity gate and therefore the complete cutover result.
+that action. Every hash field is required and must be bound to the same frozen
+source export, mapping, identity contract, target import SQL and target receipt;
+the preflight checks format and presence, while the independent runbook checks
+the bytes. Any uncovered, differently classified or unbound legacy row blocks
+the identity gate and therefore the complete cutover result.
 
 Run it from a reviewed evidence directory:
 

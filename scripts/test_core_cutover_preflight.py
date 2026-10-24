@@ -71,6 +71,7 @@ class Checks(unittest.TestCase):
                     "mfa_factors": 2,
                     "mfa_backup_codes": 8,
                 },
+                **{field: "d" * 64 for field in P.IDENTITY_HASH_FIELDS},
                 "reauth_required": 2172,
                 "rekey_required": 815,
                 "reenroll_required": 18,
@@ -154,6 +155,16 @@ class Checks(unittest.TestCase):
             P.parse(record)
         record = self.base()
         record["identity"]["actions"]["passkeys"] = "none"
+        with self.assertRaises(ValueError):
+            P.parse(record)
+
+    def test_identity_hash_bindings_are_required_and_strict(self):
+        record = self.base()
+        del record["identity"]["target_receipt_sha256"]
+        with self.assertRaises(ValueError):
+            P.parse(record)
+        record = self.base()
+        record["identity"]["mapping_sha256"] = "not-a-sha"
         with self.assertRaises(ValueError):
             P.parse(record)
 
