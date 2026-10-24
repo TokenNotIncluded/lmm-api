@@ -29,7 +29,12 @@ def unique(pairs):
 
 
 def parse(path):
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > 1024 * 1024:
+    if (
+        not path.is_file()
+        or path.is_symlink()
+        or path.stat().st_mode & 0o022
+        or path.stat().st_size > 1024 * 1024
+    ):
         raise ValueError("input must be a bounded regular file")
     value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
     if isinstance(value, dict) and set(value) == {"release"}:
