@@ -69,6 +69,12 @@ IDENTITY_ACTION_BY_CLASS = {
     "mfa_factors": "reenroll_required",
     "mfa_backup_codes": "reenroll_required",
 }
+FINANCIAL_EVIDENCE_FIELDS = (
+    "financial_evidence_sha256",
+    "pending_preview_evidence_sha256",
+    "provider_contract_evidence_sha256",
+    "provider_reconciliation_evidence_sha256",
+)
 ENUMS = {
     "config": {"absent", "reviewed"},
     "credentials": {"absent", "reviewed"},
@@ -242,13 +248,26 @@ def parse(record):
         raise ValueError("duplicate extension module")
     enum("credentials", extensions["host_credential"])
 
-    migration = object(record["migration"], ("status", "unknown_liabilities", "reconciliation", "writer_fenced", "active_writers", "legacy_workers_stopped"))
+    migration = object(
+        record["migration"],
+        (
+            "status", "unknown_liabilities", "reconciliation", "writer_fenced",
+            "active_writers", "legacy_workers_stopped", *FINANCIAL_EVIDENCE_FIELDS,
+            "provider_io_performed", "target_writes", "ledger_writes",
+            "spendable_writes", "receipt_writes",
+        ),
+    )
     enum("migration_status", migration["status"])
     enum("reconciliation", migration["reconciliation"])
     nonnegative(migration["unknown_liabilities"])
     nonnegative(migration["active_writers"])
     for field in ("writer_fenced", "legacy_workers_stopped"):
         boolean(migration[field])
+    for field in FINANCIAL_EVIDENCE_FIELDS:
+        sha(migration[field])
+    boolean(migration["provider_io_performed"])
+    for field in ("target_writes", "ledger_writes", "spendable_writes", "receipt_writes"):
+        nonnegative(migration[field])
     record["identity"] = parse_identity(record["identity"])
     return record
 
@@ -309,6 +328,11 @@ def evaluate(record):
         migration_missing.append("migration.active_writers")
     if not migration["legacy_workers_stopped"]:
         migration_missing.append("migration.legacy_workers_stopped")
+    if migration["provider_io_performed"]:
+        migration_missing.append("migration.provider_io_performed")
+    for field in ("target_writes", "ledger_writes", "spendable_writes", "receipt_writes"):
+        if migration[field] != 0:
+            migration_missing.append("migration." + field)
     if core["public_edge"]["mode"] != "candidate" or not core["public_edge"]["candidate_selected"]:
         migration_missing.append("core.public_edge.candidate_selected")
     if record["extensions"]["ready_http_status"] != 200:
