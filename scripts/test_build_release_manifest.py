@@ -41,7 +41,7 @@ class Checks(unittest.TestCase):
         source = self.root / "input.json"
         output = self.root / "release-manifest.json"
         source.write_text(json.dumps({"release": self.value}))
-        digest = M.build(source, output)
+        digest = M.build(source, output, "a" * 40)
         self.assertEqual(len(digest), 64)
         rendered = json.loads(output.read_text())
         self.assertEqual(rendered["protocol"], "release-manifest.v1")
@@ -49,6 +49,13 @@ class Checks(unittest.TestCase):
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         with self.assertRaises(ValueError):
             M.build(source, output)
+
+    def test_expected_candidate_commit_is_required_when_supplied(self):
+        source = self.root / "input.json"
+        output = self.root / "release-manifest.json"
+        source.write_text(json.dumps(self.value))
+        with self.assertRaisesRegex(ValueError, "expected candidate"):
+            M.build(source, output, "b" * 40)
 
     def test_rejects_mismatch_and_unknown_fields(self):
         source = self.root / "input.json"

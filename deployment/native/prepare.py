@@ -139,7 +139,7 @@ def version(value):
     return (int(major), int(minor), int(patch), {"alpha": 0, "beta": 1, "preview": 2, "rc": 3, None: 4}[label], int(number or 0))
 
 
-def verify_cutover_preflight(current, evidence):
+def verify_cutover_preflight(current, evidence, expected_source_commit=None):
     preflight_ref = evidence.get("cutover_preflight", {})
     require(isinstance(preflight_ref, dict), "cutover preflight reference required")
     path = preflight_ref.get("path")
@@ -157,6 +157,11 @@ def verify_cutover_preflight(current, evidence):
     source_commit = preflight.get("source_commit")
     require(isinstance(source_commit, str) and re.fullmatch(r"[0-9a-f]{40}", source_commit),
             "cutover source commit invalid")
+    if expected_source_commit is not None:
+        require(re.fullmatch(r"[0-9a-f]{40}", expected_source_commit),
+                "expected cutover source commit invalid")
+        require(source_commit == expected_source_commit,
+                "cutover source commit does not match expected candidate")
     require(source_commit == release.get("source_commit") == release.get("runtime_source_commit"),
             "cutover source commit provenance mismatch")
     for field in (
@@ -229,7 +234,11 @@ def gate(args):
         preflight_sha256 = None
         manifest_sha256 = None
         if any(component in current["components"] for component in ("core", "extensions")):
-            preflight_sha256, manifest_sha256 = verify_cutover_preflight(current, evidence)
+            expected_source_commit = getattr(args, "expected_source_commit", None)
+            require(expected_source_commit is not None,
+                    "expected source commit required for native cutover")
+            preflight_sha256, manifest_sha256 = verify_cutover_preflight(
+                current, evidence, expected_source_commit)
         backup = evidence.get("backup", {})
         require(SHA.fullmatch(backup.get("sha256", "")) and backup.get("restore_verified") is True,
                 "backup restoration unverified")
@@ -300,6 +309,7 @@ def main():
     for option in ["release-sha256", "host", "database-identity-sha256"]:
         item.add_argument("--" + option, required=True)
     item.add_argument("--previous-sha256")
+    item.add_argument("--expected-source-commit")
     args = parser.parse_args()
     try:
         if args.command == "stage":
