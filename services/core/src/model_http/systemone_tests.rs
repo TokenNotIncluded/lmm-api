@@ -22,7 +22,6 @@ use base64::{
 };
 use sqlx::PgPool;
 use std::{
-    collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
         Arc, Mutex,
