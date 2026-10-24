@@ -328,7 +328,7 @@ def parse(record):
     return record
 
 
-def evaluate(record):
+def evaluate(record, expected_source_commit=None):
     core = record["core"]
     ready = core["ready"]
     caps = ready["capabilities"]
@@ -337,6 +337,10 @@ def evaluate(record):
     gates = []
     release = record["release"]
     release_missing = []
+    if expected_source_commit is not None:
+        commit(expected_source_commit)
+        if record["source_commit"] != expected_source_commit:
+            release_missing.append("source_commit.expected_candidate")
     if record["source_commit"] is None:
         release_missing.append("source_commit")
     if release["source_commit"] is None:
@@ -416,6 +420,14 @@ def evaluate(record):
 
     migration_missing = []
     migration = record["migration"]
+    if (
+        release["financial_evidence_sha256"] is not None
+        and release["financial_evidence_sha256"] != migration["financial_evidence_sha256"]
+    ):
+        release_missing.append("release.financial_evidence_binding")
+        release_gate = next(gate for gate in gates if gate["name"] == "release_provenance")
+        release_gate["status"] = "BLOCKED"
+        release_gate["missing"] = sorted(set(release_missing))
     if migration["status"] != "completed":
         migration_missing.append("migration.status")
     if migration["unknown_liabilities"] != 0:
@@ -485,21 +497,22 @@ def evaluate(record):
     }
 
 
-def run(path):
+def run(path, expected_source_commit=None):
     if path.stat().st_size > 1024 * 1024:
         raise ValueError("preflight record too large")
     with path.open("r", encoding="utf-8") as stream:
         record = json.load(stream, object_pairs_hook=unique)
-    return evaluate(parse(record))
+    return evaluate(parse(record), expected_source_commit)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--expected-source-commit")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
-        result = run(args.evidence)
+        result = run(args.evidence, args.expected_source_commit)
         rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:
             if args.output.exists():

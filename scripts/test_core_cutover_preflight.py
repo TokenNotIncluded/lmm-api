@@ -44,7 +44,7 @@ class Checks(unittest.TestCase):
                 "schema_fingerprint_sha256": "4" * 64,
                 "provider_matrix_sha256": "5" * 64,
                 "identity_evidence_sha256": "6" * 64,
-                "financial_evidence_sha256": "7" * 64,
+                "financial_evidence_sha256": "e" * 64,
                 "edge_config_sha256": "8" * 64,
                 "runtime_release_identity_sha256": "9" * 64,
                 "runtime_source_commit": "a" * 40,
@@ -262,6 +262,21 @@ class Checks(unittest.TestCase):
         result = P.evaluate(P.parse(record))
         gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
         self.assertIn("release.writer_epoch_monotonic", gate["missing"])
+
+    def test_expected_candidate_commit_mismatch_is_blocked(self):
+        record = self.base()
+        result = P.evaluate(P.parse(record), expected_source_commit="f" * 40)
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("source_commit.expected_candidate", gate["missing"])
+
+    def test_release_financial_digest_mismatch_is_blocked(self):
+        record = self.base()
+        record["release"]["financial_evidence_sha256"] = "f" * 64
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("release.financial_evidence_binding", gate["missing"])
 
     def test_release_provenance_schema_is_strict(self):
         record = self.base()
