@@ -120,6 +120,14 @@ class ProviderContractTests(unittest.TestCase):
 
     def test_summary_never_claims_settlement(self):
         result = MODULE.summarize([base("epay"), base("fastpay"), base("waffo_pancake")])
+        self.assertEqual(
+            result["classification_counts_by_provider"],
+            {
+                "epay": {"INCOMPLETE_PROVIDER_EVIDENCE": 1},
+                "fastpay": {"UNSUPPORTED_PROVIDER_CONTRACT": 1},
+                "waffo_pancake": {"INCOMPLETE_PROVIDER_EVIDENCE": 1},
+            },
+        )
         self.assertEqual(result["verification_status"], "UNVERIFIED")
         self.assertEqual(result["settlement_state"], "unknown")
         self.assertFalse(result["spendable"])

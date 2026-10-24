@@ -205,12 +205,19 @@ def summarize(records: list[dict[str, Any]], evidence_by_record: dict[str, dict[
     evidence_by_record = evidence_by_record or {}
     results = [analyze(row, evidence_by_record.get(row.get("record_id"))) for row in records]
     counts: dict[str, int] = {}
+    provider_counts: dict[str, dict[str, int]] = {}
     for item in results:
         counts[item["classification"]] = counts.get(item["classification"], 0) + 1
+        by_provider = provider_counts.setdefault(item["provider"], {})
+        by_provider[item["classification"]] = by_provider.get(item["classification"], 0) + 1
     return {
         "protocol": CONTRACT,
         "record_count": len(results),
         "classification_counts": dict(sorted(counts.items())),
+        "classification_counts_by_provider": {
+            provider: dict(sorted(values.items()))
+            for provider, values in sorted(provider_counts.items())
+        },
         "verification_status": "UNVERIFIED",
         "settlement_state": UNKNOWN,
         "spendable": False,
