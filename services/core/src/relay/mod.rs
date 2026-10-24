@@ -15,6 +15,7 @@ mod sse;
 #[cfg(test)]
 mod tests;
 mod types;
+#[cfg(test)]
 pub(crate) use decode::usage as provider_usage;
 pub(crate) use decode::usage_with_cache_creation_mode as provider_usage_with_cache_creation_mode;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
