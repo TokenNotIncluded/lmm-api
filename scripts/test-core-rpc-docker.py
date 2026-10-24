@@ -1192,6 +1192,8 @@ def execute(temp, projects, context):
         "model-gateway",
         "commerce",
         "abuse",
+        "telegram-auth",
+        "trust-pricing",
     }
     assert set(compiled_names) == set(components)
     assert (

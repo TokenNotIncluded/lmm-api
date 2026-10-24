@@ -112,6 +112,8 @@ class PrivateFixtureTests(unittest.TestCase):
                 "model-gateway",
                 "commerce",
                 "abuse",
+                "telegram-auth",
+                "trust-pricing",
             },
         )
 
