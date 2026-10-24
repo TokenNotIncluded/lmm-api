@@ -218,9 +218,19 @@ def preview(*, source_export: Path, archive: Path, identity_map: Path,
         L.verify(F, document)
     except (F.MappingError, ValueError, TypeError) as error:
         raise PreviewError(str(error)) from error
+    unmapped_owner_count = document["public_summary"]["unmapped_owner_count"]
+    fence_reasons = [
+        "provider_status_not_observed",
+        "provider_callbacks_and_external_payment_not_proven_terminal",
+        "no_target_import_or_liability_close_authorized",
+    ]
+    gate = "BLOCKED_PENDING_PROVIDER_RECONCILIATION"
+    if unmapped_owner_count:
+        gate = "BLOCKED_IDENTITY_MAPPING"
+        fence_reasons.insert(0, "pending_rows_have_unmapped_owner")
     summary = {
         "status": "PENDING_LIABILITIES_PRESERVED_SOURCE_ONLY",
-        "gate": "BLOCKED_PENDING_PROVIDER_RECONCILIATION",
+        "gate": gate,
         "source_archive_sha256": archive_sha256,
         "source_export_sha256": export_sha256,
         "identity_mapping_sha256": mapping_sha256,
@@ -232,7 +242,7 @@ def preview(*, source_export: Path, archive: Path, identity_map: Path,
         "pending_record_count": len(document["records"]),
         "pending_counts_by_table": document["public_summary"]["counts_by_table"],
         "pending_counts_by_provider": document["public_summary"]["counts_by_provider"],
-        "unmapped_owner_count": document["public_summary"]["unmapped_owner_count"],
+        "unmapped_owner_count": unmapped_owner_count,
         "provider_io_performed": False,
         "target_writes": 0,
         "ledger_writes": 0,
@@ -251,11 +261,7 @@ def preview(*, source_export: Path, archive: Path, identity_map: Path,
             "spendable_units_zero_and_ledger_writes_zero",
             "provider_io_not_performed",
         ],
-        "fence_reasons": [
-            "provider_status_not_observed",
-            "provider_callbacks_and_external_payment_not_proven_terminal",
-            "no_target_import_or_liability_close_authorized",
-        ],
+        "fence_reasons": fence_reasons,
     }
     # Keep internal manifests referenced so future callers cannot accidentally
     # interpret this as a target or provider attestation.
