@@ -1,4 +1,7 @@
 -- Explicit offline GRANTs after the complete fresh lmm-core init-db transaction.
+-- This script is additive by default. To remove old optional ACLs, run the
+-- reviewed deployment/postgres/revoke-core-runtime.sql reset with
+-- confirm_revoke=true, then re-run this script with the final feature flags.
 -- No role passwords, automatic startup hook, wildcard grants or default ACLs.
 \set ON_ERROR_STOP on
 \if :{?runtime_role}

@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host-version: ['1.18.34', 'latest']
+        host-version: ['1.18.34', '1.19.4']
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -32,7 +32,12 @@ jobs:
       - name: Install supported OpenCode host
         env:
           HOST_VERSION: ${{ matrix.host-version }}
-        run: npm install --global "opencode-ai@$HOST_VERSION"
+        run: |
+          set -euo pipefail
+          npm install --global --ignore-scripts --no-package-lock --no-audit --no-fund "opencode-ai@$HOST_VERSION"
+          # Keep npm lifecycle hooks disabled; run only this pinned package
+          # setup script so its platform binary is installed for the host test.
+          node "$(npm root --global)/opencode-ai/postinstall.mjs"
       - name: Verify real host and OAuth integration
         run: npm run test:host && npm run test:integration
         working-directory: packages/opencode-lmm-auth

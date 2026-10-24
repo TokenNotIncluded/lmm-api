@@ -26,7 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ForgePublicShell } from '@/features/forge/forge-public-shell'
-import { isHttpUrl, isLikelyHtml } from '@/lib/content-format'
+import { isLikelyHtml, isSafePublicHttpUrl } from '@/lib/content-format'
 
 import { splitLegalSections } from './legal-reader'
 import type { LegalDocumentResponse } from './types'
@@ -97,7 +97,9 @@ export function LegalDocument({
 
   const rawContent = data?.data?.trim() ?? ''
   const hasContent = rawContent.length > 0
-  const isUrl = hasContent && isHttpUrl(rawContent)
+  const isConfiguredUrl = hasContent && /^https?:/i.test(rawContent)
+  const isUrl = hasContent && isSafePublicHttpUrl(rawContent)
+  const isBlockedUrl = isConfiguredUrl && !isUrl
   const contentIsHtml = hasContent && isLikelyHtml(rawContent)
   const success = data?.success ?? false
   const mode = contentIsHtml ? ('html' as const) : ('markdown' as const)
@@ -132,7 +134,7 @@ export function LegalDocument({
     )
   }
 
-  if (!success || !hasContent) {
+  if (!success || !hasContent || isBlockedUrl) {
     return (
       <ForgePublicShell>
         <div className='mx-auto max-w-2xl px-4 py-12'>
@@ -144,9 +146,11 @@ export function LegalDocument({
               <div className='space-y-1'>
                 <CardTitle className='text-lg font-semibold'>{title}</CardTitle>
                 <p className='text-muted-foreground text-sm'>
-                  {isError
-                    ? t('Request failed')
-                    : data?.message || emptyMessage}
+                  {isBlockedUrl
+                    ? t('Failed to load')
+                    : isError
+                      ? t('Request failed')
+                      : data?.message || emptyMessage}
                 </p>
               </div>
             </CardHeader>

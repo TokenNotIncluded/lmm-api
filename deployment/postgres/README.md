@@ -57,8 +57,31 @@ credentials. There are no wildcard grants or default ACLs for future objects.
 Legacy Web identity alone cannot write model requests, holds or consumption.
 Import records remain read-only. Runtime receives no opening-balance import
 function, owner switching, DDL, TRIGGER, direct ledger or model checkpoint writes.
-A false flag does not revoke previous grants; revocation is a separately reviewed
-offline operation, never an automatic startup mutation.
+The grant script is additive by default. When a capability is disabled, an earlier
+run can still leave its runtime ACLs in place. Revoke those optional ACLs in a
+reviewed offline session, then re-apply the final flag set in one maintenance
+window:
+
+```sh
+# Run as the private database administrator, while the runtime is stopped or
+# otherwise fenced from requests. The explicit confirmation is required.
+dc exec -T core-db psql -X -U lmm_core_admin -d lmm_core \
+  -v ON_ERROR_STOP=1 -v runtime_role=lmm_core_runtime \
+  -v confirm_revoke=true < deployment/postgres/revoke-core-runtime.sql
+
+# Include every capability that should remain enabled; this is only an example.
+dc exec -T core-db psql -X -U lmm_core_admin -d lmm_core \
+  -v ON_ERROR_STOP=1 -v runtime_role=lmm_core_runtime \
+  -v enable_models=true < deployment/postgres/grant-core-runtime.sql
+```
+
+`revoke-core-runtime.sql` resets only optional capability schemas and the
+optional Web routing, assistant and CREDIT-v2 tables. It preserves the baseline
+identity, ledger, history, abuse, gift qualification and billing authority. It
+never runs during startup and does not change ownership, passwords or default
+ACLs. Re-run `grant-tool-market-credit.sql` with the same explicit
+`-v runtime_role=lmm_core_runtime` after the reset when that separate
+installer-only complement is required.
 
 Startup independently checks exact authority and enabled capabilities before
 binding a listener. Roles/GRANTs are excluded from the catalog fingerprint and do

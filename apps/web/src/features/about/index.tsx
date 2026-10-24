@@ -28,7 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getBuildVersion } from '@/lib/build-metadata'
-import { isHttpUrl, isLikelyHtml } from '@/lib/content-format'
+import { isLikelyHtml, isSafePublicHttpUrl } from '@/lib/content-format'
 
 import { ForgePublicShell } from '../forge/forge-public-shell'
 import { getAboutContent } from './api'
@@ -127,7 +127,9 @@ export function About() {
 
   const rawContent = data?.data?.trim() ?? ''
   const hasContent = rawContent.length > 0
-  const isUrl = hasContent && isHttpUrl(rawContent)
+  const isConfiguredUrl = hasContent && /^https?:/i.test(rawContent)
+  const isUrl = hasContent && isSafePublicHttpUrl(rawContent)
+  const isBlockedUrl = isConfiguredUrl && !isUrl
   const contentIsHtml = hasContent && isLikelyHtml(rawContent)
 
   if (isLoading) {
@@ -160,6 +162,16 @@ export function About() {
     return (
       <ForgePublicShell>
         <EmptyAboutState />
+      </ForgePublicShell>
+    )
+  }
+
+  if (isBlockedUrl) {
+    return (
+      <ForgePublicShell>
+        <main className='mx-auto max-w-4xl px-5 pt-32 pb-24 md:px-10'>
+          <ErrorState title={t('Failed to load')} />
+        </main>
       </ForgePublicShell>
     )
   }
