@@ -143,8 +143,7 @@ pub async fn install_compiled_builtins(pool: &PgPool) -> Result<InstallReceipt> 
 }
 
 #[cfg(test)]
-#[path = "../../tests/common/runtime.rs"]
-mod runtime_fixture;
+use crate::test_runtime as runtime_fixture;
 #[cfg(test)]
 mod tests {
     use super::*;

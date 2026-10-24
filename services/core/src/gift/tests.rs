@@ -1,6 +1,5 @@
 use super::*;
-#[path = "../../tests/common/runtime.rs"]
-mod runtime;
+use crate::test_runtime as runtime;
 #[test]
 fn canonical_identity_and_strict_tool_decision() {
     assert_eq!(

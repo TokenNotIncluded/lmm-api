@@ -655,8 +655,7 @@ async fn image_api_disconnected_caller_drain_preserves_worker_and_settlement(poo
     );
 }
 
-#[path = "../../tests/common/runtime.rs"]
-pub(super) mod runtime_role;
+pub(super) use crate::test_runtime as runtime_role;
 
 #[sqlx::test(migrations = false)]
 async fn image_api_restricted_runtime_role_generates_and_settles_real_funds(pool: PgPool) {

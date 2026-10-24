@@ -1,6 +1,7 @@
 //! Native System One HTTP and real disposable Core PostgreSQL money tests.
 //! The only supplier is a counting numeric-loopback HTTP server.
 use super::*;
+use crate::test_runtime as runtime;
 use crate::{
     accounts::{Account, AccountKind},
     billing::{
@@ -31,8 +32,6 @@ use std::{
 };
 use tokio::{net::TcpListener, task::JoinHandle};
 use tower::ServiceExt;
-#[path = "../../tests/common/runtime.rs"]
-mod runtime;
 
 #[derive(Clone, Copy)]
 enum Reply {

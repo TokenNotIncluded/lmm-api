@@ -384,8 +384,7 @@ async fn extension_claim_is_once_and_unknown_resolves_only_same_original_claim(p
     );
 }
 
-#[path = "../../../tests/common/runtime.rs"]
-mod runtime_authority;
+use crate::test_runtime as runtime_authority;
 #[sqlx::test(migrations = false)]
 async fn actual_runtime_role_requires_agent_columns_and_executes_without_immutable_update(
     pool: PgPool,
