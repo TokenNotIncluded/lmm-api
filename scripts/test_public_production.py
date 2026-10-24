@@ -34,6 +34,27 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(result["pages"], 3)
         self.assertEqual(self.visited.count("/app.js"), 1)
 
+    def test_expected_runtime_identity_and_request_id_are_checked(self):
+        self.responses["/api/status"] = module.Response(
+            200, "application/json",
+            json.dumps({"success": True, "data": {"version": "0.2.51"}}).encode(),
+            {
+                "X-Release-Commit": "a" * 40,
+                "X-Core-Artifact-Sha256": "b" * 64,
+                "X-Extensions-Artifact-Sha256": "c" * 64,
+                "X-Schema-Fingerprint": "d" * 64,
+                "X-Route-Identity": "edge-v2",
+                "X-Request-Id": "req-123",
+            },
+        )
+        identity = {"source_commit": "a" * 40, "core_artifact_sha256": "b" * 64,
+                    "extensions_artifact_sha256": "c" * 64,
+                    "schema_fingerprint": "d" * 64, "route_identity": "edge-v2"}
+        self.assertEqual(module.verify(self.fetch, expected_identity=identity)["backend_version"], "0.2.51")
+        identity["route_identity"] = "old-edge"
+        with self.assertRaisesRegex(ValueError, "release identity"):
+            module.verify(self.fetch, expected_identity=identity)
+
     def test_old_backend_is_not_accepted_as_success(self):
         with self.assertRaisesRegex(ValueError, "version mismatch"):
             module.verify(self.fetch, "0.2.52")

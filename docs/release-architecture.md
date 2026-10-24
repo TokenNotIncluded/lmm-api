@@ -65,6 +65,11 @@ come from the same cutover manifest and be compared with the native preflight,
 edge logs and runtime process identity; setting them in a shell is not itself
 deployment proof.
 
+The read-only public acceptance probe can enforce this contract by passing all
+five `--expected-*` identity arguments. In that mode it also requires a usable
+request ID. Omitting those arguments keeps the probe useful for basic page
+checks, but does not prove runtime provenance.
+
 示例中的平台必须与实际编译结果一致，版本使用本次选择的预览版本；不要直接
 重复运行并覆盖已有产物。构建器检查程序格式和 CPU 架构，不接受脚本或错误架构。
 
