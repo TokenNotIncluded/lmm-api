@@ -132,7 +132,23 @@ The record must use this top-level shape:
       "mfa_backup_codes": "reenroll_required"
     }
   },
-  "migration": {"status":"blocked","unknown_liabilities":82,"reconciliation":"not_run","writer_fenced":false,"active_writers":1,"legacy_workers_stopped":false}
+  "migration": {
+    "status":"blocked",
+    "unknown_liabilities":82,
+    "reconciliation":"not_run",
+    "writer_fenced":false,
+    "active_writers":1,
+    "legacy_workers_stopped":false,
+    "financial_evidence_sha256":"<64 lowercase hex>",
+    "pending_preview_evidence_sha256":"<64 lowercase hex>",
+    "provider_contract_evidence_sha256":"<64 lowercase hex>",
+    "provider_reconciliation_evidence_sha256":"<64 lowercase hex>",
+    "provider_io_performed":false,
+    "target_writes":0,
+    "ledger_writes":0,
+    "spendable_writes":0,
+    "receipt_writes":0
+  }
 }
 ```
 
@@ -149,6 +165,34 @@ the preflight checks format and presence, while the independent runbook checks
 the bytes. Any uncovered, differently classified or unbound legacy row blocks
 the identity gate and therefore the complete cutover result.
 
+## Build the identity block from an apply directory
+
+`scripts/build-identity-cutover-evidence.py` reads a private identity apply
+directory and emits only the sanitized `identity` block. It verifies the
+identity manifest/report, mapping and source proof files, generated SQL,
+target-import result, target receipt, and an independent identity PASS result.
+It checks their SHA-256 bindings and target instance boundary without printing
+any file contents. The normal synthetic contract uses
+`independent-pass.private.json`; the existing rehearsal layout is also
+recognized when the input is `.../identity-apply`, with the target receipt in
+its parent and `independent-identity/identity-independent-result.private.json`
+beside it.
+
+The existing rehearsal PASS file does not contain the seven legacy credential
+counts or reauthentication plan. The builder therefore returns `not_run` until
+the same directory (or its parent) contains a sanitized
+`identity-inventory.private.json`; it never infers those counts from the source
+dump or empty Core credential tables.
+
+```sh
+python3 -B scripts/build-identity-cutover-evidence.py \
+  --input /absolute/private/identity-apply \
+  --output /absolute/private/identity-evidence.json
+```
+
+The command exits `0` only for `PASS`; incomplete evidence is a sanitized
+`not_run` or `blocked` result and exits `1`.
+
 Run it from a reviewed evidence directory:
 
 ```sh
@@ -163,6 +207,14 @@ source revision. The output's `secret_values_checked="schema_only"` means that
 schema validation prevented secret-shaped fields; it is not provider or
 credential verification. Independent host, database, provider and browser
 acceptance remain required.
+
+The migration block also requires four strict evidence SHA-256 bindings: the
+financial review, pending-liability preview, provider contract, and provider
+reconciliation evidence. It rejects any provider I/O or non-zero target,
+ledger, spendable, or receipt write counter. A hand-written
+`reconciliation="passed"` therefore cannot pass the cutover boundary without
+the bound evidence and a zero-write boundary. The current 82-row preview has
+no provider reconciliation evidence and remains blocked.
 
 Local synthetic checks (no host access) are:
 
