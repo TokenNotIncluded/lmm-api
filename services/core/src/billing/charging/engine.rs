@@ -314,19 +314,13 @@ fn decode(row: PgRow) -> Result<Stored> {
                 .is_some()
                 && (stored.charge.owner_account_id == stored.charge.payer_account_id
                     || row.try_get::<Option<i64>, _>("assistant_sponsor_account_id")?
-                        == Some(stored.charge.payer_account_id)) =>
-        {
-            ()
-        }
+                        == Some(stored.charge.payer_account_id)) => {}
         (None, None)
             if row
                 .try_get::<Option<String>, _>("image_operation_id")?
                 .is_some()
                 && stored.charge.price.image.is_some()
-                && stored.charge.owner_account_id == stored.charge.payer_account_id =>
-        {
-            ()
-        }
+                && stored.charge.owner_account_id == stored.charge.payer_account_id => {}
         _ => return Err(Error::Storage),
     }
     Ok(stored)

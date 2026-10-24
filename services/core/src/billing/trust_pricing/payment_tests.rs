@@ -6,7 +6,7 @@ use crate::{
     payments::{Channel, PaymentsStore},
 };
 use hmac::{Hmac, Mac};
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::Sha256;
 use sqlx::PgPool;
 const SECRET: &str = "whsec_trust_pricing_synthetic_only";
