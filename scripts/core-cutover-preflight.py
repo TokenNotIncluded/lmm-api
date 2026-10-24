@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Validate a sanitized Core/Extensions cutover record without touching a host.
 
-The record deliberately contains booleans, enum values and SHA-256 bindings only.
-It must never contain a token, password, provider payload, database URL or secret
-file contents. A blocked result is a normal outcome and exits with status 1.
+The record deliberately contains booleans, bounded counts, enum values and
+SHA-256 bindings only. It must never contain a token, password, provider
+payload, database URL or secret file contents. A blocked result is a normal
+outcome and exits with status 1.
 """
 
 import argparse

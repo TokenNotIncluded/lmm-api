@@ -148,6 +148,15 @@ class Checks(unittest.TestCase):
         record["identity"]["legacy_inventory"]["api_keys"] = True
         with self.assertRaises(ValueError):
             P.parse(record)
+
+    def test_identity_action_booleans_cover_all_rows(self):
+        record = self.base()
+        record["identity"]["reauth_required"] = True
+        record["identity"]["rekey_required"] = True
+        record["identity"]["reenroll_required"] = True
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "identity")
+        self.assertEqual(gate["status"], "READY")
         record = self.base()
         record["identity"]["legacy_inventory"]["unexpected"] = 1
         with self.assertRaises(ValueError):
