@@ -17,6 +17,27 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = {"core", "extensions", "web"}
 SHA = re.compile(r"[0-9a-f]{64}")
+PREFLIGHT_GATES = {
+    "release_provenance", "model_forwarding", "payments", "commerce",
+    "assistant", "assistant_tools", "tool_market", "cutover_boundary", "identity",
+}
+IDENTITY_INVENTORY_FIELDS = (
+    "sessions", "api_keys", "passkeys", "oauth_bindings",
+    "oauth_server_tokens", "mfa_factors", "mfa_backup_codes",
+)
+IDENTITY_HASH_FIELDS = (
+    "source_archive_sha256", "source_export_sha256",
+    "source_baseline_proof_sha256", "mapping_sha256", "mapping_file_sha256",
+    "source_target_id_map_sha256", "identity_contract_sha256",
+    "target_import_sql_sha256", "target_receipt_sha256",
+)
+IDENTITY_ACTION_FIELDS = ("reauth_required", "rekey_required", "reenroll_required")
+IDENTITY_ACTIONS = {
+    "sessions": "reauth_required", "api_keys": "rekey_required",
+    "passkeys": "reenroll_required", "oauth_bindings": "reauth_required",
+    "oauth_server_tokens": "reauth_required", "mfa_factors": "reenroll_required",
+    "mfa_backup_codes": "reenroll_required",
+}
 
 
 def require(condition, message):
@@ -126,6 +147,69 @@ def release(directory, expected):
     return record
 
 
+def verify_preflight_result(preflight):
+    """Validate the sanitized result emitted by core-cutover-preflight.py.
+
+    A pinned JSON file is provenance, not a schema check. Keep this boundary
+    strict so a hand-written READY summary cannot bypass the identity or route
+    gates that produced the result.
+    """
+    require(preflight.get("status") == "READY" and preflight.get("safe_to_cutover") is True,
+            "cutover preflight must be READY")
+    require(preflight.get("public_edge") == {"mode": "candidate", "candidate_selected": True},
+            "cutover preflight edge selection is not candidate")
+    gates = preflight.get("gates")
+    require(isinstance(gates, list) and len(gates) == len(PREFLIGHT_GATES),
+            "cutover preflight gate list is incomplete")
+    names = []
+    for gate in gates:
+        require(isinstance(gate, dict) and set(gate) == {"name", "status", "missing"},
+                "cutover preflight gate shape invalid")
+        require(gate["name"] in PREFLIGHT_GATES and gate["name"] not in names,
+                "cutover preflight gate name invalid")
+        require(gate["status"] == "READY" and gate["missing"] == [],
+                "cutover preflight contains a blocked gate")
+        names.append(gate["name"])
+    require(set(names) == PREFLIGHT_GATES, "cutover preflight gates are incomplete")
+    require(preflight.get("unsafe_enablement") == [],
+            "cutover preflight has unsafe enablement")
+    require(preflight.get("secret_values_checked") == "schema_only",
+            "cutover preflight secret boundary invalid")
+
+    identity = preflight.get("identity")
+    required_identity = {
+        "migration_status", "mapping_status", "target_comparison_status",
+        "legacy_inventory", *IDENTITY_HASH_FIELDS, *IDENTITY_ACTION_FIELDS, "actions",
+    }
+    require(isinstance(identity, dict) and set(identity) == required_identity,
+            "cutover preflight identity shape invalid")
+    require(identity["migration_status"] in {"identity_only", "completed"},
+            "cutover preflight identity migration status invalid")
+    require(identity["mapping_status"] == "passed"
+            and identity["target_comparison_status"] == "passed",
+            "cutover preflight identity comparison is incomplete")
+    inventory_values = identity["legacy_inventory"]
+    require(isinstance(inventory_values, dict)
+            and set(inventory_values) == set(IDENTITY_INVENTORY_FIELDS),
+            "cutover preflight identity inventory shape invalid")
+    for value in inventory_values.values():
+        require(type(value) is int and value >= 0,
+                "cutover preflight identity inventory count invalid")
+    for field in IDENTITY_HASH_FIELDS:
+        require(isinstance(identity[field], str) and SHA.fullmatch(identity[field]),
+                "cutover preflight identity hash invalid: " + field)
+    for field in IDENTITY_ACTION_FIELDS:
+        value = identity[field]
+        require(value is True or (type(value) is int and value >= 0),
+                "cutover preflight identity action count invalid: " + field)
+    actions = identity["actions"]
+    require(isinstance(actions, dict) and set(actions) == set(IDENTITY_INVENTORY_FIELDS),
+            "cutover preflight identity actions shape invalid")
+    for kind, action in IDENTITY_ACTIONS.items():
+        require(actions[kind] == action,
+                "cutover preflight identity action classification invalid: " + kind)
+
+
 def instant(value):
     result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     require(result.tzinfo is not None, "timestamp requires timezone")
@@ -150,8 +234,7 @@ def verify_cutover_preflight(current, evidence, expected_source_commit=None):
     require(path.stat().st_mode & 0o022 == 0, "cutover preflight writable evidence rejected")
     preflight = pinned_json(path, expected_sha)
     require(preflight.get("protocol") == "core-cutover-preflight.v1", "cutover preflight protocol invalid")
-    require(preflight.get("status") == "READY" and preflight.get("safe_to_cutover") is True,
-            "cutover preflight must be READY")
+    verify_preflight_result(preflight)
     release = preflight.get("release", {})
     require(isinstance(release, dict), "cutover release provenance missing")
     source_commit = preflight.get("source_commit")

@@ -489,6 +489,9 @@ def evaluate(record, expected_source_commit=None):
         "source_commit": record["source_commit"],
         "source_revision": record["source_revision"],
         "release": release,
+        # Keep the selected edge decision in the sanitized result. Consumers
+        # must not infer route selection from a READY status alone.
+        "public_edge": core["public_edge"],
         "migration": record["migration"],
         "identity": identity,
         "gates": gates,
