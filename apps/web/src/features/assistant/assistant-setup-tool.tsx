@@ -314,34 +314,54 @@ export function AssistantSetupTool(props: {
             )
 
   return (
-    <Card className='min-w-0 overflow-hidden rounded-2xl'>
-      <CardHeader className='gap-3 p-5 sm:p-6'>
-        <CardTitle className='flex items-center gap-2'>
-          <HugeiconsIcon
-            icon={LaptopIcon}
-            className='size-5'
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-          {t('Client setup guide')}
-        </CardTitle>
-        <CardDescription className='text-sm leading-6'>
+    <Card className='border-foreground/10 min-w-0 overflow-hidden rounded-2xl shadow-sm'>
+      <CardHeader className='bg-muted/20 gap-4 border-b p-5 sm:p-7'>
+        <div className='flex items-start justify-between gap-4'>
+          <div className='min-w-0'>
+            <p className='text-muted-foreground mb-2 font-mono text-[11px] font-semibold tracking-[0.16em] uppercase'>
+              {t('Client setup')}
+            </p>
+            <CardTitle className='flex items-center gap-2 text-xl sm:text-2xl'>
+              <HugeiconsIcon
+                icon={LaptopIcon}
+                className='size-5'
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+              {t('Client setup guide')}
+            </CardTitle>
+          </div>
+        </div>
+        <CardDescription className='max-w-2xl text-sm leading-6'>
           {t(
             'Choose your device and app. Follow the steps from download to your first reply, with help whenever you need it.'
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className='grid gap-6 px-5 pb-5 sm:px-6 sm:pb-6'>
-        <div className='grid gap-2.5'>
-          <span className='text-sm font-medium'>{t('Platform')}</span>
-          <div className='flex flex-wrap gap-2' aria-label={t('Platform')}>
+      <CardContent className='grid gap-7 px-5 py-6 sm:gap-8 sm:px-7 sm:py-7'>
+        <div className='grid gap-3'>
+          <div className='flex items-end justify-between gap-3'>
+            <div>
+              <p className='text-sm font-semibold'>{t('Platform')}</p>
+              <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                {t('Start with your device')}
+              </p>
+            </div>
+            <span className='text-muted-foreground font-mono text-[11px]'>
+              01 / 03
+            </span>
+          </div>
+          <div
+            className='grid grid-cols-2 gap-2 sm:flex sm:flex-wrap'
+            aria-label={t('Platform')}
+          >
             {(Object.keys(PLATFORM_LABELS) as AssistantSetupPlatform[]).map(
               (item) => (
                 <Button
                   key={item}
                   type='button'
                   size='sm'
-                  className='min-h-10 px-3'
+                  className='min-h-11 justify-start px-3.5 sm:min-w-28 sm:justify-center'
                   variant={platform === item ? 'default' : 'outline'}
                   aria-pressed={platform === item}
                   onClick={() => {
@@ -374,7 +394,7 @@ export function AssistantSetupTool(props: {
         </div>
 
         {oauthClient ? null : !canConnect ? (
-          <Alert>
+          <Alert className='border-primary/20 bg-primary/[0.04] rounded-xl'>
             <AlertTitle>
               {t(
                 props.publicGuide
@@ -391,9 +411,22 @@ export function AssistantSetupTool(props: {
             </AlertDescription>
           </Alert>
         ) : (
-          <label className='grid gap-2 text-sm font-medium'>
-            {t('Model ID')}
+          <div className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
+            <div className='mb-3 flex items-end justify-between gap-3'>
+              <div>
+                <label
+                  className='text-sm font-semibold'
+                  htmlFor='guide-model-id'
+                >
+                  {t('Model ID')}
+                </label>
+              </div>
+              <span className='text-muted-foreground font-mono text-[11px]'>
+                02 / 03
+              </span>
+            </div>
             <NativeSelect
+              id='guide-model-id'
               value={model || ''}
               disabled={props.modelsLoading || eligibleModels.length === 0}
               onChange={(event) => setSelectedModel(event.target.value)}
@@ -415,7 +448,7 @@ export function AssistantSetupTool(props: {
                 ))
               )}
             </NativeSelect>
-          </label>
+          </div>
         )}
 
         <Tabs
@@ -427,17 +460,33 @@ export function AssistantSetupTool(props: {
           }}
           className='min-w-0'
         >
-          <TabsList className='flex h-auto w-full flex-wrap justify-start gap-1.5 p-1.5 group-data-horizontal/tabs:h-auto'>
-            {clients.map((client) => (
-              <TabsTrigger
-                key={client}
-                value={client}
-                className='h-auto min-h-11 max-w-full flex-none px-3 py-2 text-sm whitespace-normal'
-              >
-                {clientNames[client]}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className='bg-muted/20 rounded-xl border p-3 sm:p-4'>
+            <div className='mb-3 flex items-end justify-between gap-3'>
+              <div>
+                <p className='text-sm font-semibold'>
+                  {t('Choose your client')}
+                </p>
+              </div>
+              <span className='text-muted-foreground font-mono text-[11px]'>
+                03 / 03
+              </span>
+            </div>
+            <TabsList className='bg-background/70 flex h-auto w-full flex-nowrap justify-start gap-1.5 overflow-x-auto p-1.5 group-data-horizontal/tabs:h-auto'>
+              {clients.map((client) => (
+                <TabsTrigger
+                  key={client}
+                  value={client}
+                  className='h-auto min-h-10 min-w-max flex-none px-3 py-2 text-xs whitespace-nowrap sm:text-sm'
+                >
+                  {clientNames[client]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
+
+          <div className='sr-only' aria-live='polite'>
+            {t('{{client}} setup steps', { client: clientNames[clientTab] })}
+          </div>
 
           {(['cherry-studio', 'chatbox'] as const)
             .filter((client) => clients.includes(client))
