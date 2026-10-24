@@ -59,8 +59,10 @@ export LMM_SCHEMA_FINGERPRINT="<verified target schema fingerprint>"
 export LMM_ROUTE_IDENTITY="<reviewed edge/upstream route identity>"
 ```
 
-Core emits the five corresponding `X-*` headers on `/api/status` only when all
-five values are present. A partial environment emits none. These values must
+Core emits `X-LMM-API-Version` with the Core package version on every public
+`/api/status` response. The legacy JSON `version` field remains available for
+older clients. Core also emits the five corresponding `X-*` provenance headers
+only when all five build-time values are present. A partial environment emits none. These values must
 come from the same cutover manifest and be compared with the native preflight,
 edge logs and runtime process identity; setting them in a shell is not itself
 deployment proof.

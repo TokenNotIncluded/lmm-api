@@ -250,6 +250,13 @@ async fn public_status_response(State(state): State<Readiness>, headers: HeaderM
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Public product identity. Keep the JSON `version` field for older clients;
+    // this header gives new clients a stable, branded version signal without
+    // exposing any upstream implementation name.
+    response.headers_mut().insert(
+        "x-lmm-api-version",
+        HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
     if let Ok(value) = request_id(&headers).parse() {
         response.headers_mut().insert("x-request-id", value);
     }
@@ -455,6 +462,10 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                response.headers()["x-lmm-api-version"],
+                env!("CARGO_PKG_VERSION")
+            );
             assert_eq!(response.headers()["x-request-id"].len(), 32);
             if [
                 option_env!("LMM_RELEASE_COMMIT"),
