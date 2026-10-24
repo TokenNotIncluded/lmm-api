@@ -185,7 +185,26 @@ def verify_cutover_preflight(current, evidence):
                 component + " artifact does not match preflight")
         require(release.get("runtime_" + artifact_field) == item.get("archive_sha256"),
                 component + " runtime artifact does not match preflight")
-    return expected_sha
+    manifest_ref = evidence.get("cutover_manifest", {})
+    require(isinstance(manifest_ref, dict), "cutover release manifest reference required")
+    manifest_path = manifest_ref.get("path")
+    manifest_sha = manifest_ref.get("sha256", "")
+    require(isinstance(manifest_path, str) and manifest_path and Path(manifest_path).is_absolute(),
+            "absolute cutover release manifest path required")
+    manifest = pinned_json(Path(manifest_path), manifest_sha)
+    require(manifest.get("protocol") == "release-manifest.v1", "cutover release manifest protocol invalid")
+    manifest_fields = (
+        "source_commit", "core_artifact_sha256", "extensions_artifact_sha256",
+        "sbom_sha256", "schema_fingerprint_sha256", "provider_matrix_sha256",
+        "identity_evidence_sha256", "financial_evidence_sha256", "edge_config_sha256",
+        "runtime_release_identity_sha256", "runtime_source_commit",
+        "runtime_core_artifact_sha256", "runtime_extensions_artifact_sha256",
+        "previous_writer_epoch", "writer_epoch",
+    )
+    for field in manifest_fields:
+        require(manifest.get(field) == release.get(field),
+                "cutover manifest binding mismatch: " + field)
+    return expected_sha, manifest_sha
 
 
 def gate(args):
@@ -208,8 +227,9 @@ def gate(args):
         require(SHA.fullmatch(expected_sha) and digest(Path(path)) == expected_sha, "runtime configuration changed")
     if args.mode == "cutover":
         preflight_sha256 = None
+        manifest_sha256 = None
         if any(component in current["components"] for component in ("core", "extensions")):
-            preflight_sha256 = verify_cutover_preflight(current, evidence)
+            preflight_sha256, manifest_sha256 = verify_cutover_preflight(current, evidence)
         backup = evidence.get("backup", {})
         require(SHA.fullmatch(backup.get("sha256", "")) and backup.get("restore_verified") is True,
                 "backup restoration unverified")
@@ -241,6 +261,7 @@ def gate(args):
     return {"status": "activation-record-and-files-verified", "formal_release": False,
             "release_sha256": args.release_sha256, "evidence_sha256": args.review_sha256,
             "cutover_preflight_sha256": preflight_sha256 if args.mode == "cutover" else None,
+            "cutover_manifest_sha256": manifest_sha256 if args.mode == "cutover" else None,
             "warning": "Hashes bind actual operator evidence, not publisher signatures or proof of migration truth."}
 
 

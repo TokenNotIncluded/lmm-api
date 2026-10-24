@@ -144,13 +144,15 @@ not supply that missing migration. Preserve every valid write and unknown outcom
    ```
 
    A `cutover` activation record must also contain
-   `cutover_preflight: {path, sha256}`. The native gate reads that pinned
+   `cutover_preflight: {path, sha256}` and
+   `cutover_manifest: {path, sha256}`. The native gate reads those pinned
    `core-cutover-preflight.v1` result and requires
    `status=READY`/`safe_to_cutover=true`, a matching source commit and
    core/extensions archive digests, matching runtime artifact digests, and a
-   strictly advancing writer epoch. This prevents the native activation path
-   from bypassing the release provenance gate. Update-only records do not use
-   this cutover-only preflight reference.
+   strictly advancing writer epoch. It then compares every release provenance
+   field with the canonical `release-manifest.v1` file. This prevents the
+   native activation path from bypassing or splicing the release provenance
+   gate. Update-only records do not use these cutover-only references.
 
 5. `activate-component.sh` takes11 explicit positional parameters:
    `component candidate-directory release-sha activation-record record-sha host database-sha mode previous-directory previous-sha tool-directory`.
@@ -213,6 +215,9 @@ Cutover additionally records:
   `core-cutover-preflight.v1` result. The referenced result must bind the
   staged Core/Extensions artifacts and runtime identity to the same source
   commit and a monotonic writer epoch.
+- `cutover_manifest`: a private path and SHA-256 for the canonical
+  `release-manifest.v1`; every provenance field must equal the pinned
+  preflight release block.
 - `backup`: actual `sha256` and `restore_verified=true`.
 - `migration`: `status=completed`, `unresolved_count=0`,
   `financial_reconciliation_passed=true`, `source_final_boundary_sha256`.
