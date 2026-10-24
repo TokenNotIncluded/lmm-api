@@ -16,6 +16,7 @@ from pathlib import Path
 
 PROTOCOL = "core-cutover-preflight.v1"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
+COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 CONTRACTS = (
     "model_forwarding",
     "payments",
@@ -75,6 +76,23 @@ FINANCIAL_EVIDENCE_FIELDS = (
     "provider_contract_evidence_sha256",
     "provider_reconciliation_evidence_sha256",
 )
+RELEASE_FIELDS = (
+    "source_commit",
+    "core_artifact_sha256",
+    "extensions_artifact_sha256",
+    "sbom_sha256",
+    "schema_fingerprint_sha256",
+    "provider_matrix_sha256",
+    "identity_evidence_sha256",
+    "financial_evidence_sha256",
+    "edge_config_sha256",
+    "runtime_release_identity_sha256",
+    "runtime_source_commit",
+    "runtime_core_artifact_sha256",
+    "runtime_extensions_artifact_sha256",
+    "previous_writer_epoch",
+    "writer_epoch",
+)
 ENUMS = {
     "config": {"absent", "reviewed"},
     "credentials": {"absent", "reviewed"},
@@ -132,6 +150,40 @@ def sha(value, nullable=False):
 def nonnegative(value):
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError("nonnegative integer required")
+    return value
+
+
+def commit(value, nullable=False):
+    if nullable and value is None:
+        return value
+    if not isinstance(value, str) or not COMMIT.fullmatch(value):
+        raise ValueError("40-character source commit required")
+    return value
+
+
+def parse_release(value):
+    if value is None:
+        return {field: None for field in RELEASE_FIELDS}
+    value = object(value, RELEASE_FIELDS)
+    for field in ("source_commit", "runtime_source_commit"):
+        commit(value[field], nullable=True)
+    for field in (
+        "core_artifact_sha256",
+        "extensions_artifact_sha256",
+        "sbom_sha256",
+        "schema_fingerprint_sha256",
+        "provider_matrix_sha256",
+        "identity_evidence_sha256",
+        "financial_evidence_sha256",
+        "edge_config_sha256",
+        "runtime_release_identity_sha256",
+        "runtime_core_artifact_sha256",
+        "runtime_extensions_artifact_sha256",
+    ):
+        sha(value[field], nullable=True)
+    for field in ("previous_writer_epoch", "writer_epoch"):
+        if value[field] is not None:
+            nonnegative(value[field])
     return value
 
 
@@ -197,7 +249,7 @@ def state_covers(state, required):
 
 
 def parse(record):
-    record = object(record, ("protocol", "scope", "host", "observed_at", "source_revision", "check_db_evidence_sha256", "core", "extensions", "migration", "identity"))
+    record = object(record, ("protocol", "scope", "host", "observed_at", "source_revision", "check_db_evidence_sha256", "core", "extensions", "migration", "identity"), ("source_commit", "release"))
     if record["protocol"] != PROTOCOL or record["scope"] != "production-cutover":
         raise ValueError("unsupported preflight protocol or scope")
     if not isinstance(record["observed_at"], str):
@@ -213,8 +265,12 @@ def parse(record):
         raise ValueError("preflight evidence is stale")
     if not isinstance(record["host"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", record["host"]):
         raise ValueError("invalid host")
+    if "source_commit" not in record:
+        record["source_commit"] = None
+    commit(record["source_commit"], nullable=True)
     sha(record["source_revision"])
     sha(record["check_db_evidence_sha256"])
+    record["release"] = parse_release(record.get("release"))
 
     core = object(record["core"], ("ready", "public_edge", "contracts"))
     ready = object(core["ready"], ("http_status", "database", "model_ready_status", "capabilities"))
@@ -279,6 +335,50 @@ def evaluate(record):
     contracts = core["contracts"]
     extension_modules = set(record["extensions"]["modules"])
     gates = []
+    release = record["release"]
+    release_missing = []
+    if record["source_commit"] is None:
+        release_missing.append("source_commit")
+    if release["source_commit"] is None:
+        release_missing.append("release.source_commit")
+    elif release["source_commit"] != record["source_commit"]:
+        release_missing.append("release.source_commit_binding")
+    if release["runtime_source_commit"] is None:
+        release_missing.append("release.runtime_source_commit")
+    elif release["runtime_source_commit"] != release["source_commit"]:
+        release_missing.append("release.runtime_source_commit")
+    for field in (
+        "core_artifact_sha256",
+        "extensions_artifact_sha256",
+        "sbom_sha256",
+        "schema_fingerprint_sha256",
+        "provider_matrix_sha256",
+        "identity_evidence_sha256",
+        "financial_evidence_sha256",
+        "edge_config_sha256",
+        "runtime_release_identity_sha256",
+    ):
+        if release[field] is None:
+            release_missing.append("release." + field)
+    if release["runtime_core_artifact_sha256"] is None:
+        release_missing.append("release.runtime_core_artifact_sha256")
+    elif release["runtime_core_artifact_sha256"] != release["core_artifact_sha256"]:
+        release_missing.append("release.runtime_core_artifact_sha256")
+    if release["runtime_extensions_artifact_sha256"] is None:
+        release_missing.append("release.runtime_extensions_artifact_sha256")
+    elif release["runtime_extensions_artifact_sha256"] != release["extensions_artifact_sha256"]:
+        release_missing.append("release.runtime_extensions_artifact_sha256")
+    if release["previous_writer_epoch"] is None:
+        release_missing.append("release.previous_writer_epoch")
+    if release["writer_epoch"] is None:
+        release_missing.append("release.writer_epoch")
+    elif release["previous_writer_epoch"] is not None and release["writer_epoch"] <= release["previous_writer_epoch"]:
+        release_missing.append("release.writer_epoch_monotonic")
+    gates.append({
+        "name": "release_provenance",
+        "status": "READY" if not release_missing else "BLOCKED",
+        "missing": sorted(set(release_missing)),
+    })
     for name in CONTRACTS:
         missing = []
         for capability in CAPABILITIES[name]:
@@ -374,7 +474,9 @@ def evaluate(record):
         "status": status,
         "safe_to_cutover": status == "READY",
         "host": record["host"],
+        "source_commit": record["source_commit"],
         "source_revision": record["source_revision"],
+        "release": release,
         "migration": record["migration"],
         "identity": identity,
         "gates": gates,

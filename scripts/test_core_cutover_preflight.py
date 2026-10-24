@@ -33,8 +33,26 @@ class Checks(unittest.TestCase):
             "scope": "production-cutover",
             "host": "ArchDmit",
             "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source_commit": "a" * 40,
             "source_revision": "b" * 64,
             "check_db_evidence_sha256": "c" * 64,
+            "release": {
+                "source_commit": "a" * 40,
+                "core_artifact_sha256": "1" * 64,
+                "extensions_artifact_sha256": "2" * 64,
+                "sbom_sha256": "3" * 64,
+                "schema_fingerprint_sha256": "4" * 64,
+                "provider_matrix_sha256": "5" * 64,
+                "identity_evidence_sha256": "6" * 64,
+                "financial_evidence_sha256": "7" * 64,
+                "edge_config_sha256": "8" * 64,
+                "runtime_release_identity_sha256": "9" * 64,
+                "runtime_source_commit": "a" * 40,
+                "runtime_core_artifact_sha256": "1" * 64,
+                "runtime_extensions_artifact_sha256": "2" * 64,
+                "previous_writer_epoch": 7,
+                "writer_epoch": 8,
+            },
             "core": {
                 "ready": {
                     "http_status": 200,
@@ -222,6 +240,47 @@ class Checks(unittest.TestCase):
     def test_financial_evidence_hashes_are_required(self):
         record = self.base()
         del record["migration"]["pending_preview_evidence_sha256"]
+        with self.assertRaises(ValueError):
+            P.parse(record)
+
+    def test_release_provenance_is_bound_to_source_and_runtime(self):
+        record = self.base()
+        record["release"]["source_commit"] = "f" * 40
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("release.source_commit_binding", gate["missing"])
+
+        record = self.base()
+        record["release"]["runtime_core_artifact_sha256"] = "f" * 64
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertIn("release.runtime_core_artifact_sha256", gate["missing"])
+
+        record = self.base()
+        record["release"]["writer_epoch"] = record["release"]["previous_writer_epoch"]
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertIn("release.writer_epoch_monotonic", gate["missing"])
+
+    def test_release_provenance_schema_is_strict(self):
+        record = self.base()
+        del record["release"]["sbom_sha256"]
+        with self.assertRaises(ValueError):
+            P.parse(record)
+
+    def test_legacy_record_without_release_is_fail_closed(self):
+        record = self.base()
+        del record["source_commit"]
+        del record["release"]
+        result = P.evaluate(P.parse(record))
+        gate = next(g for g in result["gates"] if g["name"] == "release_provenance")
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("source_commit", gate["missing"])
+        self.assertIn("release.core_artifact_sha256", gate["missing"])
+        self.assertFalse(result["safe_to_cutover"])
+        record = self.base()
+        record["release"]["source_commit"] = "not-a-commit"
         with self.assertRaises(ValueError):
             P.parse(record)
         record = self.base()
