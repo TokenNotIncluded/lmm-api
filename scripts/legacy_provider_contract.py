@@ -48,18 +48,20 @@ PROVIDERS = {
     "fastpay": None,
 }
 
-EVIDENCE_FIELDS = frozenset({
+BASE_EVIDENCE_FIELDS = frozenset({
     "contract_revision", "source_row_sha256", "merchant_sha256", "environment",
     "currency", "amount_raw_sha256", "provider_transaction_sha256",
-    "provider_event_id_sha256", "store_sha256", "product_sha256",
-    "payload_sha256", "signature_sha256", "signature_verification",
+    "provider_event_id_sha256", "payload_sha256", "signature_sha256",
+    "signature_verification",
     "provider_status", "observed_at",
 })
-HASH_FIELDS = frozenset({
+WAFFO_EVIDENCE_FIELDS = BASE_EVIDENCE_FIELDS | {"store_sha256", "product_sha256"}
+BASE_HASH_FIELDS = frozenset({
     "source_row_sha256", "merchant_sha256", "amount_raw_sha256",
-    "provider_transaction_sha256", "provider_event_id_sha256", "store_sha256",
-    "product_sha256", "payload_sha256", "signature_sha256",
+    "provider_transaction_sha256", "provider_event_id_sha256", "payload_sha256",
+    "signature_sha256",
 })
+WAFFO_HASH_FIELDS = BASE_HASH_FIELDS | {"store_sha256", "product_sha256"}
 STATUS_VALUES = frozenset({"pending", "paid", "failed", "refunded", "unknown"})
 SIGNATURE_VALUES = frozenset({"not_run", "verified", "failed"})
 ENVIRONMENTS = frozenset({"test", "live"})
@@ -96,15 +98,17 @@ def _source_present(record: dict[str, Any], field: str) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _validate_evidence(evidence: Any) -> list[str]:
+def _validate_evidence(evidence: Any, provider: str) -> list[str]:
     if evidence is None:
         return ["external_evidence"]
-    if not isinstance(evidence, dict) or set(evidence) != EVIDENCE_FIELDS:
+    expected_fields = WAFFO_EVIDENCE_FIELDS if provider == "waffo_pancake" else BASE_EVIDENCE_FIELDS
+    if not isinstance(evidence, dict) or set(evidence) != expected_fields:
         return ["evidence_shape"]
     missing: list[str] = []
     if not isinstance(evidence["contract_revision"], str) or not evidence["contract_revision"]:
         missing.append("contract_revision")
-    for field in HASH_FIELDS:
+    hash_fields = WAFFO_HASH_FIELDS if provider == "waffo_pancake" else BASE_HASH_FIELDS
+    for field in hash_fields:
         if not _is_hash(evidence[field]):
             missing.append(field)
     if evidence["environment"] not in ENVIRONMENTS:
@@ -144,7 +148,7 @@ def analyze(record: dict[str, Any], evidence: dict[str, Any] | None = None) -> d
         not isinstance(raw_currency, dict) or not raw_currency.get("settlement_currency")
     ):
         missing.append("source_currency")
-    evidence_missing = _validate_evidence(evidence)
+    evidence_missing = _validate_evidence(evidence, provider)
     missing.extend(evidence_missing)
 
     if evidence is not None and not evidence_missing:
