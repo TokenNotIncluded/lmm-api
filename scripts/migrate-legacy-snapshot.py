@@ -106,6 +106,13 @@ DEVELOPER_POLICY = "legacy-explicit-override-before-manual-v1-paid-unproven"
 # current implementation: a hand-authored plan/manifest must not be able to
 # claim that sessions, API keys, passkeys/OAuth links, or financial rows moved.
 IDENTITY_ONLY_ZERO_FIELDS = ("sessions_imported", "api_keys_imported", "financial_rows_written")
+# These fields are not emitted by the identity-only mapper today, but a
+# hand-authored summary must not use them to imply that another credential
+# family moved. If present for forward compatibility, they must remain zero.
+IDENTITY_ONLY_FORBIDDEN_NONZERO_FIELDS = (
+    "passkeys_imported", "oauth_bindings_imported", "oauth_server_tokens_imported",
+    "mfa_factors_imported", "mfa_backup_codes_imported",
+)
 IDENTITY_ONLY_REQUIRED_GAPS = frozenset((
     "legacy_oauth_and_passkeys_archived_only",
     "financial_data_not_migrated",
@@ -391,6 +398,10 @@ def validate_import_material(plan: dict, source_sha256: str, manifest: dict) -> 
     for field in IDENTITY_ONLY_ZERO_FIELDS:
         require(type(summary.get(field)) is int and summary[field] == 0,
                 "identity_summary_scope_invalid")
+    for field in IDENTITY_ONLY_FORBIDDEN_NONZERO_FIELDS:
+        if field in summary:
+            require(type(summary[field]) is int and summary[field] == 0,
+                    "identity_summary_scope_invalid")
     gaps = summary.get("functional_gaps")
     require(isinstance(gaps, list) and all(isinstance(gap, str) for gap in gaps)
             and IDENTITY_ONLY_REQUIRED_GAPS.issubset(gaps),
