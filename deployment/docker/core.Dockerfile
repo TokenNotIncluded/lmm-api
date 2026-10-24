@@ -12,8 +12,18 @@ FROM scratch AS binaries
 COPY --from=build /src/services/core/target/release/lmm-core /lmm-core
 
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
-RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
+# Keep runtime packages and their dependencies on the immutable snapshot from
+# which this digest-pinned Debian base was created.
+RUN set -eux; \
+    sed -i \
+      -e 's#http://deb.debian.org/debian-security#http://snapshot.debian.org/archive/debian-security/20261005T000000Z#' \
+      -e 's#http://deb.debian.org/debian#http://snapshot.debian.org/archive/debian/20261005T000000Z#' \
+      /etc/apt/sources.list.d/debian.sources; \
+    apt-get -o Acquire::Check-Valid-Until=false update; \
+    apt-get install --no-install-recommends -y \
+      ca-certificates=20250419~deb12u1 \
+      curl=7.88.1-10+deb12u15; \
+    rm -rf /var/lib/apt/lists/* \
     && mkdir -p /run/lmm-core-rpc \
     && chown 65532:65532 /run/lmm-core-rpc \
     && chmod 0700 /run/lmm-core-rpc

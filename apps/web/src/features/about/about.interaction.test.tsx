@@ -264,6 +264,19 @@ test('URL override keeps the existing iframe sandbox and takes priority', async 
   assert.doesNotMatch(host.textContent ?? '', /One gateway/)
 })
 
+test('private URL overrides are rendered as content instead of embedded', async () => {
+  const host = await mount({
+    content: () => ({
+      success: true,
+      message: '',
+      data: 'https://127.0.0.1/private',
+    }),
+  })
+  assert.equal(host.querySelector('iframe'), null)
+  assert.equal(host.querySelector('a[href]'), null)
+  assert.match(host.textContent ?? '', /Failed to load/)
+})
+
 test('HTML override remains isolated and takes priority', async () => {
   const host = await mount({
     content: () => ({

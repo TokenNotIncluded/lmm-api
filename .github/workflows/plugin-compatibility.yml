@@ -16,11 +16,11 @@ jobs:
       matrix:
         plugin: [pi-lmm-provider, dsh-lmm-provider, codewhale-lmm-provider, opencode-lmm-auth]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
       - name: Validate the exact pinned plugin source
@@ -38,7 +38,8 @@ jobs:
               npm run test:pi
               ;;
             dsh-lmm-provider)
-              npm install --global pnpm@latest
+              # DSH host contract: pin the supported pnpm major and suppress lifecycle hooks.
+              npm install --global --ignore-scripts --no-package-lock --no-audit --no-fund pnpm@11.28.8
               npm run typecheck
               npm test
               npm run pack:check
@@ -50,7 +51,7 @@ jobs:
               npm run check
               npm test
               npm run pack:check
-              npm install --prefix "$RUNNER_TEMP/codewhale-host" codewhale@0.10.0
+              npm install --prefix "$RUNNER_TEMP/codewhale-host" --ignore-scripts --no-package-lock --no-audit --no-fund codewhale@0.10.0
               LMM_CODEWHALE_BIN=$(HOST_ROOT="$RUNNER_TEMP/codewhale-host/node_modules/codewhale" node --input-type=commonjs -e 'require(process.env.HOST_ROOT + "/scripts/install.js").getBinaryPath("codewhale").then(p=>console.log(p)).catch(e=>{console.error(e);process.exitCode=1})')
               export LMM_CODEWHALE_BIN
               test -x "$LMM_CODEWHALE_BIN"
@@ -62,7 +63,10 @@ jobs:
               npm run typecheck
               npm test
               npm run pack:check
-              npm install --prefix "$RUNNER_TEMP/opencode-host" opencode-ai@1.18.34
+              npm install --prefix "$RUNNER_TEMP/opencode-host" --ignore-scripts --no-package-lock --no-audit --no-fund opencode-ai@1.18.34
+              # Keep npm lifecycle hooks disabled; run only this pinned package
+              # setup script so its platform binary is installed for the host test.
+              node "$RUNNER_TEMP/opencode-host/node_modules/opencode-ai/postinstall.mjs"
               export OPENCODE_BIN="$RUNNER_TEMP/opencode-host/node_modules/opencode-ai/bin/opencode.exe"
               npm run test:host
               npm run test:integration
@@ -72,11 +76,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
       - name: Check installer contracts
