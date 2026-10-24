@@ -33,6 +33,12 @@ func TestPaymentProviderDocument(t *testing.T) {
 	for _, raw := range []string{
 		strings.Replace(empty, "version=1", "version=2", 1),
 		strings.Replace(empty, "stripe-test", "stripe-live", 1),
+		// Legacy provider rows are intentionally not accepted by the new
+		// composition boundary. They need an independently reviewed Core proof
+		// verifier before they can participate in settlement.
+		strings.Replace(empty, "stripe-test", "epay", 1),
+		strings.Replace(empty, "stripe-test", "fastpay", 1),
+		strings.Replace(empty, "stripe-test", "waffo_pancake", 1),
 		"version=1\nprovider='stripe-test'\n",
 		strings.Replace(empty, "provider=", "Provider=", 1),
 		base + channel + "webhook_secret='whsec_private_should_never_reach_go'\n",
