@@ -98,13 +98,17 @@ function parseLiteralIp(hostname: string): LiteralIpAddress | null {
 }
 
 function blockedIpv4(octets: readonly number[]): boolean {
-  const [a, b, c] = octets
+  // Keep literal-address handling aligned with the server's public_address /
+  // publicIP policies. Browser code cannot safely resolve DNS without opening
+  // the configured destination, so hostnames remain a separate policy check.
+  const [a, b, c, d] = octets
   return (
     a === 0 ||
     a === 10 ||
     a === 127 ||
     (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254) ||
+    (a === 168 && b === 63 && c === 129 && d === 16) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 0 && c === 0) ||
     (a === 192 && b === 0 && c === 2) ||

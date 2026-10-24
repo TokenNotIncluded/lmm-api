@@ -49,6 +49,7 @@ describe('safe URL helpers', () => {
 
     for (const value of [
       'http://example.com/legal',
+      'https://user:pass@example.com/legal',
       'https://localhost/legal',
       'https://admin.localhost/legal',
       'https://admin.local/legal',
@@ -59,6 +60,7 @@ describe('safe URL helpers', () => {
       'https://172.16.0.1/legal',
       'https://192.168.1.1/legal',
       'https://169.254.169.254/legal',
+      'https://168.63.129.16/legal',
       'https://100.64.0.1/legal',
       'https://192.0.2.1/legal',
       'https://[::1]/legal',
