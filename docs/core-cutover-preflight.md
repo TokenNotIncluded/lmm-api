@@ -27,6 +27,10 @@ The latest read-only rehearsal record (2026-10-24) is still blocked:
 - The source snapshot retains 45 pending subscription liabilities and 37 pending
   top-ups (82 unknown, non-spendable rows). There is no final writer fence or
   financial reconciliation receipt.
+- Identity remains a separate gate: the legacy snapshot has 723 sessions, 815
+  API keys, 8 passkeys, 235 OAuth bindings, 1,214 OAuth server tokens, 2 MFA
+  factors and 8 backup codes. These rows require reauthentication, key
+  recreation or re-enrollment; they are not native Core credentials.
 
 These facts are recorded in
 `.local-tests/deploy-next-20261024/DEPLOY-STAGING-STATUS.md` (the RPC/Web
@@ -93,9 +97,45 @@ The record must use this top-level shape:
     }
   },
   "extensions": {"ready_http_status": 200, "modules": [], "host_credential": "absent"},
+  "identity": {
+    "migration_status": "identity_only",
+    "mapping_status": "passed",
+    "target_comparison_status": "passed",
+    "legacy_inventory": {
+      "sessions": 723,
+      "api_keys": 815,
+      "passkeys": 8,
+      "oauth_bindings": 235,
+      "oauth_server_tokens": 1214,
+      "mfa_factors": 2,
+      "mfa_backup_codes": 8
+    },
+    "reauth_required": 2172,
+    "rekey_required": 815,
+    "reenroll_required": 18,
+    "actions": {
+      "sessions": "reauth_required",
+      "api_keys": "rekey_required",
+      "passkeys": "reenroll_required",
+      "oauth_bindings": "reauth_required",
+      "oauth_server_tokens": "reauth_required",
+      "mfa_factors": "reenroll_required",
+      "mfa_backup_codes": "reenroll_required"
+    }
+  },
   "migration": {"status":"blocked","unknown_liabilities":82,"reconciliation":"not_run","writer_fenced":false,"active_writers":1,"legacy_workers_stopped":false}
 }
 ```
+
+The `identity` block is strict. `legacy_inventory` must contain exactly the
+seven non-negative counts shown above. `mapping_status` and
+`target_comparison_status` must both be `passed`; `migration_status` must be
+`identity_only` or `completed`. Each inventory class has a fixed safe action:
+sessions and OAuth records require reauthentication, API keys require new-key
+creation, and passkeys/MFA records require re-enrollment. The action counts may
+be `true` (all rows) or a non-negative integer covering the rows assigned to
+that action. Any uncovered or differently classified legacy row blocks the
+identity gate and therefore the complete cutover result.
 
 Run it from a reviewed evidence directory:
 

@@ -38,6 +38,25 @@ CAPABILITIES = {
     "assistant_tools": ("assistant_tools",),
     "tool_market": ("tool_market",),
 }
+IDENTITY_INVENTORY_FIELDS = (
+    "sessions",
+    "api_keys",
+    "passkeys",
+    "oauth_bindings",
+    "oauth_server_tokens",
+    "mfa_factors",
+    "mfa_backup_codes",
+)
+IDENTITY_ACTION_FIELDS = ("reauth_required", "rekey_required", "reenroll_required")
+IDENTITY_ACTION_BY_CLASS = {
+    "sessions": "reauth_required",
+    "api_keys": "rekey_required",
+    "passkeys": "reenroll_required",
+    "oauth_bindings": "reauth_required",
+    "oauth_server_tokens": "reauth_required",
+    "mfa_factors": "reenroll_required",
+    "mfa_backup_codes": "reenroll_required",
+}
 ENUMS = {
     "config": {"absent", "reviewed"},
     "credentials": {"absent", "reviewed"},
@@ -48,6 +67,9 @@ ENUMS = {
     "migration_status": {"blocked", "completed"},
     "reconciliation": {"not_run", "passed"},
     "edge_mode": {"legacy", "candidate"},
+    "identity_migration_status": {"not_run", "blocked", "identity_only", "completed"},
+    "identity_evidence_status": {"not_run", "passed"},
+    "identity_action": set(IDENTITY_ACTION_FIELDS),
 }
 
 
@@ -119,8 +141,42 @@ def parse_contract(name, value):
     return value
 
 
+def parse_identity(value):
+    value = object(
+        value,
+        (
+            "migration_status",
+            "mapping_status",
+            "target_comparison_status",
+            "legacy_inventory",
+            *IDENTITY_ACTION_FIELDS,
+            "actions",
+        ),
+    )
+    enum("identity_migration_status", value["migration_status"])
+    for field in ("mapping_status", "target_comparison_status"):
+        enum("identity_evidence_status", value[field])
+    inventory = object(value["legacy_inventory"], IDENTITY_INVENTORY_FIELDS)
+    for field in IDENTITY_INVENTORY_FIELDS:
+        inventory[field] = nonnegative(inventory[field])
+    for field in IDENTITY_ACTION_FIELDS:
+        state = value[field]
+        if not isinstance(state, bool):
+            state = nonnegative(state)
+        value[field] = state
+    actions = object(value["actions"], IDENTITY_INVENTORY_FIELDS)
+    for field in IDENTITY_INVENTORY_FIELDS:
+        enum("identity_action", actions[field])
+    return value
+
+
+def state_covers(state, required):
+    """A boolean enables the action for all rows; an integer bounds its rows."""
+    return state is True or (type(state) is int and state >= required)
+
+
 def parse(record):
-    record = object(record, ("protocol", "scope", "host", "observed_at", "source_revision", "check_db_evidence_sha256", "core", "extensions", "migration"))
+    record = object(record, ("protocol", "scope", "host", "observed_at", "source_revision", "check_db_evidence_sha256", "core", "extensions", "migration", "identity"))
     if record["protocol"] != PROTOCOL or record["scope"] != "production-cutover":
         raise ValueError("unsupported preflight protocol or scope")
     if not isinstance(record["observed_at"], str):
@@ -178,6 +234,7 @@ def parse(record):
     nonnegative(migration["active_writers"])
     for field in ("writer_fenced", "legacy_workers_stopped"):
         boolean(migration[field])
+    record["identity"] = parse_identity(record["identity"])
     return record
 
 
@@ -242,7 +299,36 @@ def evaluate(record):
     if record["extensions"]["ready_http_status"] != 200:
         migration_missing.append("extensions.health")
     gates.append({"name": "cutover_boundary", "status": "READY" if not migration_missing else "BLOCKED", "missing": sorted(set(migration_missing))})
-    unsafe = [gate["name"] for gate in gates[:-1] if any(caps.get(cap, False) for cap in CAPABILITIES[gate["name"]]) and gate["status"] != "READY"]
+    identity = record["identity"]
+    identity_missing = []
+    if identity["migration_status"] not in {"identity_only", "completed"}:
+        identity_missing.append("identity.migration_status")
+    if identity["mapping_status"] != "passed":
+        identity_missing.append("identity.mapping_status")
+    if identity["target_comparison_status"] != "passed":
+        identity_missing.append("identity.target_comparison_status")
+    required_actions = {field: 0 for field in IDENTITY_ACTION_FIELDS}
+    for kind, count in identity["legacy_inventory"].items():
+        action = identity["actions"][kind]
+        expected = IDENTITY_ACTION_BY_CLASS[kind]
+        if action != expected:
+            identity_missing.append(f"identity.actions.{kind}")
+        required_actions[action] += count
+    for action, required in required_actions.items():
+        if required and not state_covers(identity[action], required):
+            identity_missing.append(f"identity.{action}")
+    gates.append({
+        "name": "identity",
+        "status": "READY" if not identity_missing else "BLOCKED",
+        "missing": sorted(set(identity_missing)),
+    })
+    unsafe = [
+        gate["name"]
+        for gate in gates
+        if gate["name"] in CAPABILITIES
+        and any(caps.get(cap, False) for cap in CAPABILITIES[gate["name"]])
+        and gate["status"] != "READY"
+    ]
     status = "READY" if all(gate["status"] == "READY" for gate in gates) else "BLOCKED"
     return {
         "protocol": PROTOCOL,
@@ -250,6 +336,7 @@ def evaluate(record):
         "safe_to_cutover": status == "READY",
         "host": record["host"],
         "source_revision": record["source_revision"],
+        "identity": identity,
         "gates": gates,
         "unsafe_enablement": sorted(set(unsafe)),
         "secret_values_checked": "schema_only",
