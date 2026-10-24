@@ -225,6 +225,7 @@ Run it from a reviewed evidence directory:
 ```sh
 python3 -B scripts/core-cutover-preflight.py \
   --evidence /absolute/private/core-cutover-preflight.json \
+  --expected-source-commit <40 lowercase hex candidate commit> \
   --output /absolute/private/core-cutover-preflight-result.json
 ```
 
@@ -234,6 +235,12 @@ source revision. The output's `secret_values_checked="schema_only"` means that
 schema validation prevented secret-shaped fields; it is not provider or
 credential verification. Independent host, database, provider and browser
 acceptance remain required.
+
+When `--expected-source-commit` is supplied, the candidate commit is an
+external deployment input and must match the record and runtime source commit.
+The release financial evidence digest must also equal the canonical migration
+financial evidence digest; a digest-shaped value from another evidence bundle
+is blocked.
 
 The migration block also requires four strict evidence SHA-256 bindings: the
 financial review, pending-liability preview, provider contract, and provider
