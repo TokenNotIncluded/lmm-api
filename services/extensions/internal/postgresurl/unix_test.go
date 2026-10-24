@@ -58,6 +58,34 @@ func TestUnixURLClosedSocketProfile(t *testing.T) {
 	}
 }
 
+func TestTCPTransportPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		ok        bool
+	}{
+		{"numeric loopback plaintext", "postgres://runtime:synthetic@127.0.0.1/lmm_store?sslmode=disable", true},
+		{"IPv6 loopback plaintext", "postgres://runtime:synthetic@[::1]/lmm_store?sslmode=disable", true},
+		{"remote verified TLS", "postgres://runtime:synthetic@db.example/lmm_store?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt", true},
+		{"remote plaintext", "postgres://runtime:synthetic@192.0.2.10/lmm_store?sslmode=disable", false},
+		{"remote unverified TLS", "postgres://runtime:synthetic@192.0.2.10/lmm_store?sslmode=require", false},
+		{"remote default mode", "postgres://runtime:synthetic@192.0.2.10/lmm_store", false},
+		{"DNS loopback is not local", "postgres://runtime:synthetic@localhost/lmm_store?sslmode=disable", false},
+		{"password required", "postgres://runtime@192.0.2.10/lmm_store?sslmode=verify-full", false},
+		{"root cert must be absolute", "postgres://runtime:synthetic@db.example/lmm_store?sslmode=verify-full&sslrootcert=relative.crt", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, policyErr := TCP(u)
+			if (policyErr == nil) != tc.ok {
+				t.Fatalf("accepted=%v want %v: %v", policyErr == nil, tc.ok, policyErr)
+			}
+		})
+	}
+}
+
 func TestUnixURLRejectsConnectionEnvironmentWithoutLeakingValues(t *testing.T) {
 	u, _ := url.Parse("postgres://runtime:synthetic@/lmm_toolmarket?host=%2Frun%2Flmm-postgresql&sslmode=disable")
 	for _, name := range []string{"PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGOPTIONS", "PGHOSTADDR", "PGSERVICE", "PGPASSFILE"} {

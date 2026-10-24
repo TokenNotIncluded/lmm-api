@@ -14,12 +14,16 @@ func TestStorageURLRejectsUnisolatedConfiguration(t *testing.T) {
 		mode                           os.FileMode
 		ok                             bool
 	}{
-		{"valid", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=disable", "lmm_store_test", "store", 0600, true},
+		{"valid", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt", "lmm_store_test", "store", 0600, true},
+		{"loopback plaintext", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=disable", "lmm_store_test", "store", 0600, true},
 		{"Unix socket", "postgresql://role:synthetic@/lmm_store_test?host=%2Frun%2Flmm-postgresql&port=5433&sslmode=disable", "lmm_store_test", "store", 0600, true},
 		{"mixed endpoint", "postgresql://role:synthetic@127.0.0.1/lmm_store_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
 		{"Unix database override", "postgresql://role:synthetic@/core_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
 		{"Unix password required", "postgresql://role@/lmm_store_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
-		{"operations", "postgres://role:synthetic@127.0.0.1:5432/lmm_operations_test?sslmode=disable", "lmm_operations_test", "operations", 0600, true},
+		{"operations", "postgres://role:synthetic@127.0.0.1:5432/lmm_operations_test?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt", "lmm_operations_test", "operations", 0600, true},
+		{"remote plaintext", "postgres://role:synthetic@192.0.2.10:5432/lmm_store_test?sslmode=disable", "lmm_store_test", "store", 0600, false},
+		{"TCP unverified TLS", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=require&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt", "lmm_store_test", "store", 0600, false},
+		{"TCP missing root certificate", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=verify-full", "lmm_store_test", "store", 0600, false},
 		{"operations core database", "postgres://role@127.0.0.1/core_test", "core_test", "operations", 0600, false},
 		{"operations wrong component", "postgres://role@127.0.0.1/lmm_store_test", "lmm_store_test", "operations", 0600, false},
 		{"wrong database", "postgres://role:synthetic@127.0.0.1/core_test", "lmm_store_test", "store", 0600, false},

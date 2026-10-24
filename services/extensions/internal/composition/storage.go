@@ -60,6 +60,9 @@ func storageURL(c StorageConfig) (string, error) {
 	}
 	// URL query parameters cannot replace the checked database, role or host, or
 	// install a caller-controlled search_path/statement configuration.
+	if _, err := postgresurl.TCP(u); err != nil {
+		return "", errors.New("invalid extension PostgreSQL TCP transport policy")
+	}
 	for key, values := range u.Query() {
 		if len(values) != 1 || (key != "sslmode" && key != "sslrootcert" && key != "connect_timeout" && key != "application_name") {
 			return "", errors.New("unsupported extension PostgreSQL URL option")
