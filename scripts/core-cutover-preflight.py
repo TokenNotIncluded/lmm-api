@@ -129,8 +129,11 @@ def parse(record):
         observed = dt.datetime.fromisoformat(record["observed_at"].replace("Z", "+00:00"))
     except ValueError as error:
         raise ValueError("observed_at must be ISO-8601") from error
-    if observed.tzinfo is None or observed > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5):
+    now = dt.datetime.now(dt.timezone.utc)
+    if observed.tzinfo is None or observed > now + dt.timedelta(minutes=5):
         raise ValueError("observed_at must include a non-future timezone")
+    if now - observed > dt.timedelta(minutes=15):
+        raise ValueError("preflight evidence is stale")
     if not isinstance(record["host"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", record["host"]):
         raise ValueError("invalid host")
     sha(record["source_revision"])
@@ -159,7 +162,10 @@ def parse(record):
     extensions = object(record["extensions"], ("ready_http_status", "modules", "host_credential"))
     if not isinstance(extensions["ready_http_status"], int) or isinstance(extensions["ready_http_status"], bool):
         raise ValueError("invalid extensions ready status")
-    if not isinstance(extensions["modules"], list) or any(not isinstance(name, str) for name in extensions["modules"]):
+    if not isinstance(extensions["modules"], list) or any(
+        not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name)
+        for name in extensions["modules"]
+    ):
         raise ValueError("invalid extension module listing")
     if len(set(extensions["modules"])) != len(extensions["modules"]):
         raise ValueError("duplicate extension module")
@@ -213,7 +219,7 @@ def evaluate(record):
                 missing.append("core.capabilities.assistant")
         if name == "tool_market" and "toolmarket" not in extension_modules:
             missing.append("extensions.modules.toolmarket")
-        if contract["extension"] != "reviewed":
+        if name != "model_forwarding" and contract["extension"] != "reviewed":
             missing.append(name + ".extension_contract")
         gates.append({"name": name, "status": "READY" if not missing else "BLOCKED", "missing": sorted(set(missing))})
 

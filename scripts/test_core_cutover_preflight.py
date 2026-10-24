@@ -2,6 +2,7 @@
 """Synthetic contract checks for core-cutover-preflight.py."""
 
 import copy
+import datetime as dt
 import importlib.util
 import json
 from pathlib import Path
@@ -29,8 +30,11 @@ class Checks(unittest.TestCase):
             }
         return {
             "protocol": P.PROTOCOL,
+            "scope": "production-cutover",
             "host": "ArchDmit",
+            "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "source_revision": "b" * 64,
+            "check_db_evidence_sha256": "c" * 64,
             "core": {
                 "ready": {
                     "http_status": 200,
@@ -80,6 +84,8 @@ class Checks(unittest.TestCase):
         })
         record["core"]["public_edge"] = {"mode": "legacy", "candidate_selected": False}
         record["extensions"]["modules"] = []
+        for contract in record["core"]["contracts"].values():
+            contract.update({"config": "absent", "credentials": "absent", "contract": "absent", "probe": "not_run", "contract_sha256": None, "extension": "absent", "provider": "none"})
         record["migration"].update({"status": "blocked", "unknown_liabilities": 82,
                                    "reconciliation": "not_run", "writer_fenced": False,
                                    "active_writers": 1, "legacy_workers_stopped": False})
@@ -89,6 +95,8 @@ class Checks(unittest.TestCase):
         boundary = next(g for g in result["gates"] if g["name"] == "cutover_boundary")
         self.assertIn("migration.unknown_liabilities", boundary["missing"])
         self.assertIn("core.public_edge.candidate_selected", boundary["missing"])
+        model = next(g for g in result["gates"] if g["name"] == "model_forwarding")
+        self.assertIn("model_forwarding.credentials", model["missing"])
 
     def test_enabled_capability_without_contract_is_unsafe(self):
         record = self.base()
@@ -111,6 +119,12 @@ class Checks(unittest.TestCase):
             record["core"]["contracts"]["model_forwarding"]["api_key"] = "secret"
             with self.assertRaises(ValueError):
                 P.parse(record)
+
+    def test_stale_evidence_is_refused(self):
+        record = self.base()
+        record["observed_at"] = "2020-01-01T00:00:00+00:00"
+        with self.assertRaises(ValueError):
+            P.parse(record)
 
     def test_test_provider_cannot_pass_production_payment_gate(self):
         record = self.base()
