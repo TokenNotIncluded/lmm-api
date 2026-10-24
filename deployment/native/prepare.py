@@ -205,9 +205,16 @@ def verify_preflight_result(preflight):
     actions = identity["actions"]
     require(isinstance(actions, dict) and set(actions) == set(IDENTITY_INVENTORY_FIELDS),
             "cutover preflight identity actions shape invalid")
+    required_actions = {field: 0 for field in IDENTITY_ACTION_FIELDS}
     for kind, action in IDENTITY_ACTIONS.items():
         require(actions[kind] == action,
                 "cutover preflight identity action classification invalid: " + kind)
+        required_actions[action] += inventory_values[kind]
+    for field, required in required_actions.items():
+        if required:
+            value = identity[field]
+            require(value is True or (type(value) is int and value >= required),
+                    "cutover preflight identity action coverage incomplete: " + field)
 
 
 def instant(value):

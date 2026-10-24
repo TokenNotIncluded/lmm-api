@@ -197,6 +197,14 @@ class Checks(unittest.TestCase):
                 self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
                 with self.assertRaises(ValueError):
                     P.verify_cutover_preflight(current, self.record, "e" * 40)
+        mutated = dict(original)
+        mutated["identity"] = dict(original["identity"])
+        mutated["identity"]["legacy_inventory"] = dict(original["identity"]["legacy_inventory"])
+        mutated["identity"]["legacy_inventory"]["api_keys"] = 1
+        self.preflight.write_text(json.dumps(mutated))
+        self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
+        with self.assertRaises(ValueError):
+            P.verify_cutover_preflight(current, self.record, "e" * 40)
         self.preflight.write_text(json.dumps(original))
         self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
 
