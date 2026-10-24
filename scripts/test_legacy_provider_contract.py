@@ -65,14 +65,15 @@ def evidence(record, provider="epay"):
         "amount_raw_sha256": digest('{"money":"10.00"}'),
         "provider_transaction_sha256": digest(source_transaction),
         "provider_event_id_sha256": digest(refs.get("provider_event_id", "evt_1001")),
-        "store_sha256": digest(refs.get("provider_store_id", "store_1001")),
-        "product_sha256": digest(refs.get("provider_product_id", "prod_1001")),
         "payload_sha256": "d" * 64,
         "signature_sha256": "e" * 64,
         "signature_verification": "verified",
         "provider_status": "paid",
         "observed_at": 1_800_000_000,
     }
+    if provider == "waffo_pancake":
+        value["store_sha256"] = digest(refs["provider_store_id"])
+        value["product_sha256"] = digest(refs["provider_product_id"])
     return value
 
 
