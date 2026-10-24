@@ -500,6 +500,14 @@ impl ValidatedRequest {
             if !image {
                 item["prompt_tokens"] = json!(self.usage.input);
                 item["completion_tokens"] = json!(self.usage.output);
+                if let Some(created) = self.usage.cache_creation {
+                    other["cache_creation_tokens"] = json!(created.total);
+                    other["cache_creation_tokens_5m"] = json!(created.five_minute);
+                    other["cache_creation_tokens_1h"] = json!(created.one_hour);
+                    if let Some(twelve_hour) = created.twelve_hour {
+                        other["cache_creation_tokens_12h"] = json!(twelve_hour);
+                    }
+                }
             }
         }
         item["other"] = json!(other.to_string());

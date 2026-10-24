@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 // Pricing Types
 // ----------------------------------------------------------------------------
 import type {
+  NativeCacheWrite12hTier,
   NativeImageVariant,
   NativePricingContext,
   NativeUpstreamCostPrice,
@@ -56,6 +57,8 @@ export type PricingModel = {
   pricing_context?: NativePricingContext
   /** Core rates already include group factors. Never apply them a second time. */
   group_prices?: Record<string, PricingGroupPrices>
+  /** Exact USD per million token tiers, including the selected group/account factors. */
+  group_cache_write_12h_tiers?: Record<string, NativeCacheWrite12hTier[]>
   group_endpoints?: Record<string, string[]>
   group_quota_types?: Record<string, 0 | 2 | 3>
   group_upstream_cost_prices?: Record<string, NativeUpstreamCostPrice>

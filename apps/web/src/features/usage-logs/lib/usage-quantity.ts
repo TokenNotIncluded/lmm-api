@@ -6,6 +6,28 @@ type UsageQuantity =
   | { kind: 'image'; count: number | null }
   | { kind: 'tokens'; input: number | null; output: number | null }
 
+/** A measured subset of total writes, never a guess from the request TTL. */
+export function cacheWrite12hQuantity(
+  other: LogOtherData | null,
+  tokenUsageAvailable?: boolean
+): number | null {
+  const total = other?.cache_creation_tokens
+  const twelve = other?.cache_creation_tokens_12h
+  if (
+    tokenUsageAvailable === false ||
+    other?.token_usage_available === false ||
+    typeof total !== 'number' ||
+    !Number.isSafeInteger(total) ||
+    total < 0 ||
+    typeof twelve !== 'number' ||
+    !Number.isSafeInteger(twelve) ||
+    twelve < 0 ||
+    twelve > total
+  )
+    return null
+  return twelve
+}
+
 export function logUsageQuantity(
   log: UsageLog,
   other: LogOtherData | null

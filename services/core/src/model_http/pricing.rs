@@ -56,6 +56,35 @@ pub struct TokenPrice {
     pub cache_write: Option<Number>,
     pub request: Option<Number>,
     pub final_cost_depends_on_usage: bool,
+    /// Revision 4 prices remain exact and tiered; no headline scalar is inferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_12h_tiers: Option<Vec<CacheWrite12hTier>>,
+}
+#[derive(Clone, Serialize)]
+pub struct CacheWrite12hTier {
+    pub up_to_input_tokens: Option<String>,
+    pub input: ExactFraction,
+    pub output: ExactFraction,
+    pub cache_read: ExactFraction,
+    pub cache_write: ExactFraction,
+    pub cache_write_12h: ExactFraction,
+}
+impl CacheWrite12hTier {
+    fn apply_discount(
+        &mut self,
+        discount: crate::billing::trust_pricing::DiscountRatio,
+    ) -> Result<(), PricingError> {
+        for rate in [
+            &mut self.input,
+            &mut self.output,
+            &mut self.cache_read,
+            &mut self.cache_write,
+            &mut self.cache_write_12h,
+        ] {
+            *rate = discounted_fraction(rate, discount)?;
+        }
+        Ok(())
+    }
 }
 /// Decimal strings avoid integer precision loss in browser JSON parsers.
 #[derive(Clone, Serialize, PartialEq, Eq)]
@@ -135,6 +164,14 @@ impl PricingSurface {
                 else {
                     continue;
                 };
+                if quote.tiered().is_some_and(|tariff| tariff.revision() == 4)
+                    && !matches!(
+                        upstream.protocol,
+                        Protocol::OpenAiChat | Protocol::OpenAiResponses
+                    )
+                {
+                    continue;
+                }
                 let local = crate::relay::honeypot_network::literal_ip(
                     &reqwest::Url::parse(upstream.endpoint.as_str())
                         .map_err(|_| PricingError::Unavailable)?,
@@ -392,7 +429,52 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
         cache_write: None,
         request: None,
         final_cost_depends_on_usage: true,
+        cache_write_12h_tiers: cache_write_12h_tiers(quote)?,
     })
+}
+
+fn cache_write_12h_tiers(
+    quote: PriceQuote,
+) -> Result<Option<Vec<CacheWrite12hTier>>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.tiered().filter(|tariff| tariff.revision() == 4) else {
+        return Ok(None);
+    };
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::DecimalRate| -> Result<ExactFraction, PricingError> {
+        if value.denominator == 0 {
+            return Err(PricingError::Unavailable);
+        }
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        Ok(ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        })
+    };
+    tariff
+        .tariff()
+        .tiers
+        .into_iter()
+        .map(|tier| {
+            Ok(CacheWrite12hTier {
+                up_to_input_tokens: tier.up_to_input_tokens.map(|bound| bound.to_string()),
+                input: rate(tier.rates.input)?,
+                output: rate(tier.rates.output)?,
+                cache_read: rate(tier.rates.cache_read)?,
+                cache_write: rate(tier.rates.cache_write)?,
+                cache_write_12h: rate(
+                    tier.rates
+                        .cache_write_12h
+                        .ok_or(PricingError::Unavailable)?,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn upstream_cost_price(quote: PriceQuote) -> UpstreamCostPrice {
@@ -834,6 +916,7 @@ pub(crate) mod tests {
             uses_cache_read: true,
             uses_cache_write: false,
             uses_cache_write_1h: false,
+            uses_cache_write_12h: false,
             tiers: vec![
                 TokenTier {
                     up_to_input_tokens: Some(9),
@@ -843,6 +926,7 @@ pub(crate) mod tests {
                         cache_read: rate(1, 8),
                         cache_write: rate(0, 1),
                         cache_write_1h: None,
+                        cache_write_12h: None,
                     },
                 },
                 TokenTier {
@@ -853,6 +937,7 @@ pub(crate) mod tests {
                         cache_read: rate(1, 4),
                         cache_write: rate(0, 1),
                         cache_write_1h: None,
+                        cache_write_12h: None,
                     },
                 },
             ],
@@ -1384,6 +1469,11 @@ impl PricingProjection {
                 ] {
                     *v = scaled_number(v.as_ref(), discount)?;
                 }
+                if let Some(tiers) = &mut token.cache_write_12h_tiers {
+                    for tier in tiers {
+                        tier.apply_discount(discount)?;
+                    }
+                }
             }
             for image in &mut row.image_variants {
                 image.rate_basis = "effective_user_rate";
@@ -1465,5 +1555,90 @@ mod user_rate_tests {
             ((&n + &den - num_bigint::BigUint::from(1_u8)) / den).to_string(),
             "1"
         );
+    }
+}
+
+#[cfg(test)]
+mod cache_write_12h_projection_tests {
+    use super::*;
+    use crate::routing::*;
+
+    #[test]
+    fn cache_write_12h_projection_keeps_tiers_and_exact_effective_rates() {
+        let rate = |numerator, denominator| DecimalRate {
+            numerator,
+            denominator,
+        };
+        let prices = PriceSnapshot::compile(PriceConfig {
+            version: 7,
+            rules: vec![PriceRule {
+                id: 1,
+                model: "cache-model".into(),
+                group: "default".into(),
+                speed: Speed::Standard,
+                billing_mode: BillingMode::TieredDecimal,
+                rates: TokenRates {
+                    input: 0,
+                    output: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                    request: 0,
+                },
+                group_multiplier_ppm: 1_250_000,
+                speed_multiplier_ppm: 2_000_000,
+                tiered: Some(TieredTariff {
+                    revision: 4,
+                    source_digest: "ab".repeat(32),
+                    uses_cache_read: true,
+                    uses_cache_write: true,
+                    uses_cache_write_1h: false,
+                    uses_cache_write_12h: true,
+                    tiers: [Some(272_000), None]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, bound)| {
+                            let scale = index as u64 + 1;
+                            TokenTier {
+                                up_to_input_tokens: bound,
+                                rates: TieredRates {
+                                    input: rate(scale, 1),
+                                    output: rate(5 * scale, 1),
+                                    cache_read: rate(0, 1),
+                                    cache_write: rate(5 * scale, 4),
+                                    cache_write_1h: None,
+                                    cache_write_12h: Some(rate(5 * scale, 2)),
+                                },
+                            }
+                        })
+                        .collect(),
+                }),
+            }],
+        })
+        .unwrap();
+        let projected = token_price(
+            prices
+                .quote("cache-model", "default", Speed::Standard)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(projected.input.is_none());
+        assert!(projected.output.is_none());
+        let mut tiers = projected.cache_write_12h_tiers.unwrap();
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].up_to_input_tokens.as_deref(), Some("272000"));
+        assert!(tiers[1].up_to_input_tokens.is_none());
+        assert_eq!(tiers[0].cache_write.numerator, "25");
+        assert_eq!(tiers[0].cache_write.denominator, "8");
+        assert_eq!(tiers[0].cache_write_12h.numerator, "25");
+        assert_eq!(tiers[0].cache_write_12h.denominator, "4");
+        assert_eq!(tiers[1].cache_write_12h.numerator, "25");
+        assert_eq!(tiers[1].cache_write_12h.denominator, "2");
+        tiers[0]
+            .apply_discount(crate::billing::trust_pricing::DiscountRatio::new(97, 100).unwrap())
+            .unwrap();
+        assert_eq!(tiers[0].cache_write_12h.numerator, "97");
+        assert_eq!(tiers[0].cache_write_12h.denominator, "16");
+        assert_eq!(tiers[0].cache_read.numerator, "0");
+        assert_eq!(tiers[0].cache_read.denominator, "1");
     }
 }

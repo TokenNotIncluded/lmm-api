@@ -276,6 +276,7 @@ fn gateway_with_prices(
 }
 fn scalar_tariff() -> TieredTariff {
     TieredTariff {
+        uses_cache_write_12h: false,
         revision: 1,
         source_digest: "af0d4b7d188d58f20f9eb13cef18353659ca208151824014795189b70dc0afd7".into(),
         uses_cache_read: false,
@@ -284,6 +285,7 @@ fn scalar_tariff() -> TieredTariff {
         tiers: vec![TokenTier {
             up_to_input_tokens: None,
             rates: TieredRates {
+                cache_write_12h: None,
                 cache_write_1h: None,
                 input: DecimalRate {
                     numerator: 21,

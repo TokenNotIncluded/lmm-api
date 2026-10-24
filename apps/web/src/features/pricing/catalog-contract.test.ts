@@ -7,6 +7,7 @@ import {
   nativePricingSchema,
   nativeRuntimeSchema,
   nativeUpstreamCostPriceSchema,
+  type NativeCacheWrite12hTier,
   type NativePricingDocument,
 } from './catalog-contract'
 import { filterAndSortModels } from './lib/filters'
@@ -549,5 +550,105 @@ test('runtime projection cannot turn configuration into a live healthy badge', (
       data: { model: { ...document.data.model, status: 'available' } },
     }).success,
     false
+  )
+})
+
+test('12-hour cache pricing keeps each group and tier without a fictional scalar price', () => {
+  const document = fixture()
+  const fraction = (numerator: string, denominator = '1') => ({
+    numerator,
+    denominator,
+  })
+  const tier: NativeCacheWrite12hTier = {
+    up_to_input_tokens: '272000',
+    input: fraction('10'),
+    output: fraction('50'),
+    cache_read: fraction('1'),
+    cache_write: fraction('25', '2'),
+    cache_write_12h: fraction('25'),
+  }
+  for (const [index, row] of document.models.entries()) {
+    assert.ok(row.token_price)
+    row.billing_status = 'usage_dependent'
+    row.token_price = {
+      ...row.token_price,
+      input: null,
+      output: null,
+      cache_read: null,
+      cache_write_12h_tiers: [
+        tier,
+        {
+          ...tier,
+          up_to_input_tokens: null,
+          cache_write_12h: fraction(index === 0 ? '50' : '0'),
+        },
+      ],
+    }
+  }
+  const parsed = nativePricingSchema.parse(document)
+  const [model] = adaptNativePricing(parsed).data
+  assert.ok(model)
+  assert.equal(model.input_price, null)
+  assert.equal(model.cache_write_price, null)
+  assert.equal(
+    model.group_cache_write_12h_tiers?.standard?.[0]?.up_to_input_tokens,
+    '272000'
+  )
+  assert.equal(
+    model.group_cache_write_12h_tiers?.standard?.[1]?.cache_write_12h.numerator,
+    '50'
+  )
+  assert.equal(
+    model.group_cache_write_12h_tiers?.premium?.[1]?.cache_write_12h.numerator,
+    '0'
+  )
+  for (const mutate of [
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[0]!.cache_write_12h = fraction('-1')
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[0]!.cache_write_12h = fraction('1', '0')
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[0]!.up_to_input_tokens = '18446744073709551616'
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[1]!.up_to_input_tokens = '1'
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[0]!.up_to_input_tokens = 'invalid'
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers.push(...tiers, ...tiers)
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers[0]!.up_to_input_tokens = null
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers.splice(1, 0, { ...tiers[0]!, up_to_input_tokens: '272000' })
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers.splice(1, 0, { ...tiers[0]!, up_to_input_tokens: '1' })
+    },
+    (tiers: NativeCacheWrite12hTier[]) => {
+      tiers.length = 0
+    },
+  ]) {
+    const invalid = structuredClone(document)
+    mutate(
+      invalid.models[0]!.token_price!.cache_write_12h_tiers!
+    )
+    assert.equal(nativePricingSchema.safeParse(invalid).success, false)
+  }
+  const wrongBasis = structuredClone(document)
+  wrongBasis.models[0]!.token_price!.rate_basis = 'effective_user_rate'
+  assert.equal(nativePricingSchema.safeParse(wrongBasis).success, false)
+  const scalar = structuredClone(document)
+  scalar.models[0]!.token_price!.input = 10
+  assert.equal(nativePricingSchema.safeParse(scalar).success, false)
+  assert.equal(
+    nativePricingSchema.parse(fixture()).models[0]?.token_price
+      ?.cache_write_12h_tiers,
+    undefined
   )
 })

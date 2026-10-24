@@ -50,6 +50,52 @@ fn next_recovery_page(rows: &[CompletedStream], limit: usize) -> Option<String> 
         .map(|row| row.0.clone())
 }
 
+/// Reject a known billable dimension before either partial or terminal output
+/// becomes durable. A missing aggregate does not erase a known positive subset.
+fn validate_cache_write_dimensions(
+    usage: crate::relay::Usage,
+    price: &charging::Price,
+) -> Result<(), RelayError> {
+    price
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    // This separate contract prices the supplier's measured total USD cost;
+    // individual token categories do not determine its settlement amount.
+    if price.upstream_cost_group_ppm.is_some() {
+        return Ok(());
+    }
+    let revision = price.tiered.as_ref().map(|tariff| tariff.tariff.revision);
+    let requires_creation = revision.is_some_and(|revision| revision != 1);
+    let supports_12h = revision == Some(4);
+    let anthropic_creation = usage.cache_creation_details.is_some_and(|details| {
+        details
+            .ephemeral_5m_input_tokens
+            .is_some_and(|value| value != 0)
+            || details
+                .ephemeral_1h_input_tokens
+                .is_some_and(|value| value != 0)
+    });
+    let short_creation = usage
+        .openai_cache_write_details
+        .is_some_and(|details| details.ttl_30m_tokens.is_some_and(|value| value != 0));
+    let long_creation = usage
+        .openai_cache_write_details
+        .is_some_and(|details| details.ttl_12h_tokens.is_some_and(|value| value != 0));
+    if (!requires_creation
+        && (usage
+            .cache_creation_input_tokens
+            .is_some_and(|value| value != 0)
+            || anthropic_creation
+            || short_creation
+            || long_creation))
+        || (!supports_12h && long_creation)
+        || (supports_12h && anthropic_creation)
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(())
+}
+
 impl Bridge {
     pub(super) async fn reconcile_completed_streams(
         &self,
@@ -184,11 +230,7 @@ impl Bridge {
         };
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
         let tiered_tariff = selected.price.tiered.as_ref();
-        let requires_creation = tiered_tariff
-            .map(|tariff| tariff.tariff.compile().map(|t| t.requires_cache_creation()))
-            .transpose()
-            .map_err(|_| RelayError::SettlementPending)?
-            .unwrap_or(false);
+        validate_cache_write_dimensions(checkpoint.usage, &selected.price)?;
         let normalized = if checkpoint.terminal_observed {
             tiered_tariff
                 .map(|tariff| super::billing::complete_tiered_usage(checkpoint.usage, tariff))
@@ -219,16 +261,6 @@ impl Bridge {
                 .usage
                 .output_tokens
                 .is_some_and(|v| v > u64::from(output_ceiling))
-            || (!upstream_cost
-                && !requires_creation
-                && (checkpoint
-                    .usage
-                    .cache_creation_input_tokens
-                    .is_some_and(|v| v != 0)
-                    || checkpoint.usage.cache_creation_details.is_some_and(|v| {
-                        v.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
-                            || v.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
-                    })))
             || matches!((checkpoint.usage.cached_input_tokens,checkpoint.usage.input_tokens),(Some(cached),Some(input)) if cached>input)
             || matches!((checkpoint.usage.reasoning_output_tokens,checkpoint.usage.output_tokens),(Some(reasoning),Some(output)) if reasoning>output)
         {
@@ -321,6 +353,133 @@ fn recovery_priced_usage(
 mod a07_recovery_tests {
     use super::*;
     use serde_json::json;
+
+    fn dimension_price(revision: Option<u32>) -> charging::Price {
+        let mut value = json!({
+            "version":"routing-1-rule-1","model":"model","group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0
+        });
+        if let Some(revision) = revision {
+            let mut tariff = json!({
+                "revision":revision,"source_digest":"56".repeat(32),
+                "uses_cache_read":true,"uses_cache_write":revision != 1,
+                "tiers":[{"up_to_input_tokens":null,"rates":{
+                    "input":{"numerator":2,"denominator":1},
+                    "output":{"numerator":10,"denominator":1},
+                    "cache_read":{"numerator":1,"denominator":5},
+                    "cache_write":{"numerator":if revision == 1 {0} else {5},"denominator":2}
+                }}]
+            });
+            if revision == 2 || revision == 3 {
+                tariff["uses_cache_write_1h"] = json!(true);
+                tariff["tiers"][0]["rates"]["cache_write_1h"] =
+                    json!({"numerator":4,"denominator":1});
+            }
+            if revision == 4 {
+                tariff["uses_cache_write_12h"] = json!(true);
+                tariff["tiers"][0]["rates"]["cache_write_12h"] =
+                    json!({"numerator":5,"denominator":1});
+            }
+            value["tiered"] = json!({
+                "tariff":tariff,"input_semantics":"inclusive",
+                "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,
+                "credits_per_usd":500000
+            });
+            if revision == 3 {
+                value["tiered"]["cache_creation_mode"] = json!("generic_remainder_v1");
+            }
+        }
+        let price: charging::Price = serde_json::from_value(value).unwrap();
+        price.validate().unwrap();
+        price
+    }
+
+    #[test]
+    fn cache_dimensions_reject_known_unsupported_subsets_even_without_aggregate() {
+        use crate::relay::{CacheCreationDetails, OpenAiCacheWriteDetails, Usage};
+        let twelve = Usage {
+            input_tokens: Some(12),
+            cached_input_tokens: Some(0),
+            output_tokens: Some(1),
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: None,
+                ttl_12h_tokens: Some(3),
+            }),
+            ..Usage::default()
+        };
+        for aggregate in [None, Some(3)] {
+            let observed = Usage {
+                cache_creation_input_tokens: aggregate,
+                ..twelve
+            };
+            observed.validate().unwrap();
+            for revision in [None, Some(1), Some(2), Some(3)] {
+                assert!(
+                    matches!(
+                        validate_cache_write_dimensions(observed, &dimension_price(revision)),
+                        Err(RelayError::SettlementPending)
+                    ),
+                    "{revision:?}: {observed:?}"
+                );
+            }
+            assert!(validate_cache_write_dimensions(observed, &dimension_price(Some(4))).is_ok());
+        }
+        let short = Usage {
+            openai_cache_write_details: Some(OpenAiCacheWriteDetails {
+                ttl_30m_tokens: Some(3),
+                ttl_12h_tokens: Some(0),
+            }),
+            ..twelve
+        };
+        short.validate().unwrap();
+        for revision in [None, Some(1)] {
+            assert!(validate_cache_write_dimensions(short, &dimension_price(revision)).is_err());
+        }
+        // Supported partial dimensions may await their total; terminal
+        // normalization separately requires a complete authoritative receipt.
+        for revision in [2, 3, 4] {
+            assert!(
+                validate_cache_write_dimensions(short, &dimension_price(Some(revision))).is_ok()
+            );
+        }
+        let anthropic = Usage {
+            openai_cache_write_details: None,
+            cache_creation_details: Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: None,
+                ephemeral_1h_input_tokens: Some(3),
+            }),
+            ..twelve
+        };
+        anthropic.validate().unwrap();
+        assert!(validate_cache_write_dimensions(anthropic, &dimension_price(Some(4))).is_err());
+        for revision in [None, Some(1), Some(2), Some(3), Some(4)] {
+            assert!(
+                validate_cache_write_dimensions(Usage::default(), &dimension_price(revision))
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_cost_checkpoint_contract_keeps_total_cost_independent_of_cache_dimensions() {
+        let mut price = dimension_price(None);
+        price.model = "openrouter/auto-beta".into();
+        price.upstream_cost_group_ppm = Some(1_000_000);
+        price.validate().unwrap();
+        let observed: crate::relay::Usage = serde_json::from_value(json!({
+            "input_tokens":12,"output_tokens":1,"cached_input_tokens":0,
+            "cache_creation_input_tokens":null,"reasoning_output_tokens":null,
+            "openai_cache_write_details":{"ttl_12h_tokens":3},
+            "upstream_cost_atto_usd":crate::upstream_cost::ATTO_USD
+        }))
+        .unwrap();
+        observed.validate().unwrap();
+        assert!(validate_cache_write_dimensions(observed, &price).is_ok());
+        let usage =
+            recovery_priced_usage(serde_json::to_value(observed).unwrap(), 1, &price).unwrap();
+        assert_eq!(price.cost(usage).unwrap(), 500_000);
+        assert!(usage.cache_creation.is_none());
+    }
 
     #[test]
     fn cache_v2_recovery_uses_the_original_frozen_usage_contract() {
@@ -496,6 +655,46 @@ mod a07_recovery_tests {
                 matches!(result, Err(RelayError::SettlementPending)),
                 "invalid terminal reached persistence: {result:?}"
             );
+        }
+        for terminal_observed in [false, true] {
+            for details in [
+                crate::relay::OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: None,
+                    ttl_12h_tokens: Some(3),
+                },
+                crate::relay::OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: Some(3),
+                    ttl_12h_tokens: Some(0),
+                },
+            ] {
+                let checkpoint = OutputCheckpoint {
+                    sequence: 1,
+                    packet_sha256: [4; 32],
+                    packet_bytes: 1,
+                    usage: crate::relay::Usage {
+                        input_tokens: Some(12),
+                        cached_input_tokens: Some(0),
+                        output_tokens: Some(3),
+                        openai_cache_write_details: Some(details),
+                        ..Default::default()
+                    },
+                    terminal_observed,
+                };
+                checkpoint.usage.validate().unwrap();
+                let result = gateway
+                    .bridge
+                    .persist_output(
+                        &Reservation {
+                            id: "terminal-contract".into(),
+                        },
+                        &checkpoint,
+                    )
+                    .await;
+                assert!(
+                    matches!(result, Err(RelayError::SettlementPending)),
+                    "unsupported cache subset reached persistence: {terminal_observed}: {result:?}"
+                );
+            }
         }
     }
 

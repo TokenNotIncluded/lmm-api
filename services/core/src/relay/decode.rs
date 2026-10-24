@@ -1,8 +1,8 @@
 //! Provider decoders share a bounded block model. Usage counters are cumulative.
 use super::sse::Frame;
 use super::{
-    BlockKind, CacheCreationDetails, Event, FinishReason, Limits, RelayError, UpstreamProtocol,
-    Usage,
+    BlockKind, CacheCreationDetails, Event, FinishReason, Limits, OpenAiCacheWriteDetails,
+    RelayError, UpstreamProtocol, Usage,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -68,6 +68,18 @@ fn cache_creation_details(v: &Value) -> Result<Option<CacheCreationDetails>, Rel
     serde_json::from_value(v.clone())
         .map(Some)
         .map_err(|_| RelayError::Protocol("invalid cache creation details"))
+}
+
+fn openai_cache_write_details(v: &Value) -> Result<Option<OpenAiCacheWriteDetails>, RelayError> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    if !v.is_object() {
+        return Err(RelayError::Protocol("invalid OpenAI cache write details"));
+    }
+    serde_json::from_value(v.clone())
+        .map(Some)
+        .map_err(|_| RelayError::Protocol("invalid OpenAI cache write details"))
 }
 
 fn cache_creation_usage(u: &mut Usage, v: &Value, details_key: &str) -> Result<(), RelayError> {
@@ -224,6 +236,10 @@ pub(crate) fn usage_with_cache_creation_mode(
             }
             u.cache_creation_input_tokens = Some(alias);
         }
+        // Lifetimes are provider observations, not a consequence of requested
+        // cache retention. Missing aggregate or lifetime fields remain unknown.
+        u.openai_cache_write_details =
+            openai_cache_write_details(&input_details["cache_write_tokens_details"])?;
         if let Some(total) = counter(v, "total_tokens")? {
             let known = u
                 .input_tokens
@@ -1367,6 +1383,7 @@ mod tests {
             cached_input_tokens: Some(3),
             cache_creation_input_tokens: Some(2),
             cache_creation_details: None,
+            openai_cache_write_details: None,
             cache_creation_mode: None,
             reasoning_output_tokens: Some(1),
         };
@@ -1718,6 +1735,222 @@ mod tests {
         assert!(events.iter().any(|event| matches!(event, Event::Done)));
         assert!(!events.iter().any(|event| matches!(event, Event::Start(_))));
         assert!(decoder.is_done());
+    }
+}
+
+#[cfg(test)]
+mod openai_cache_write_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn details_key(protocol: UpstreamProtocol) -> &'static str {
+        match protocol {
+            UpstreamProtocol::Chat => "prompt_tokens_details",
+            UpstreamProtocol::Responses => "input_tokens_details",
+            _ => unreachable!(),
+        }
+    }
+
+    fn receipt(protocol: UpstreamProtocol) -> Value {
+        let (input, output) = match protocol {
+            UpstreamProtocol::Chat => ("prompt_tokens", "completion_tokens"),
+            UpstreamProtocol::Responses => ("input_tokens", "output_tokens"),
+            _ => unreachable!(),
+        };
+        let details = details_key(protocol);
+        json!({input:12000,output:10,details:{
+            "cached_tokens":4000,"cache_write_tokens":7000,
+            "cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}
+        }})
+    }
+
+    fn response(protocol: UpstreamProtocol, receipt: Value, stream: bool) -> Value {
+        match protocol {
+            UpstreamProtocol::Chat if stream => json!({
+                "id":"cache-write-response","choices":[{
+                    "index":0,"delta":{"content":"ok"},"finish_reason":"stop"
+                }],"usage":receipt
+            }),
+            UpstreamProtocol::Chat => json!({
+                "id":"cache-write-response","choices":[{
+                    "index":0,"message":{"content":"ok"},"finish_reason":"stop"
+                }],"usage":receipt
+            }),
+            UpstreamProtocol::Responses => {
+                let value = json!({
+                    "id":"cache-write-response","status":"completed","output":[],"usage":receipt
+                });
+                if stream {
+                    json!({"type":"response.completed","response":value})
+                } else {
+                    value
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn both_openai_protocols_preserve_the_reported_lifetime_partition() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let value = usage(protocol, &receipt(protocol)).unwrap();
+            assert_eq!(value.input_tokens, Some(12000));
+            assert_eq!(value.cached_input_tokens, Some(4000));
+            assert_eq!(value.cache_creation_input_tokens, Some(7000));
+            assert_eq!(
+                value.openai_cache_write_details,
+                Some(OpenAiCacheWriteDetails {
+                    ttl_30m_tokens: Some(3000),
+                    ttl_12h_tokens: Some(4000),
+                })
+            );
+            assert_eq!(value.cache_creation_details, None);
+            for (output_protocol, client) in [
+                (UpstreamProtocol::Chat, crate::relay::ClientProtocol::Chat),
+                (
+                    UpstreamProtocol::Responses,
+                    crate::relay::ClientProtocol::Responses,
+                ),
+            ] {
+                assert_eq!(usage(output_protocol, &value.wire(client)).unwrap(), value);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_lifetimes_and_aggregate_are_never_invented() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let key = details_key(protocol);
+            for breakdown in [Value::Null, json!({}), json!({"ttl_12h_tokens":null})] {
+                let mut body = receipt(protocol);
+                body[key]["cache_write_tokens_details"] = breakdown.clone();
+                let value = usage(protocol, &body).unwrap();
+                assert_eq!(
+                    value
+                        .openai_cache_write_details
+                        .and_then(|v| v.ttl_12h_tokens),
+                    None
+                );
+                assert_eq!(value.cache_creation_input_tokens, Some(7000));
+            }
+            let mut body = receipt(protocol);
+            body[key]["cache_write_tokens_details"] = json!({"ttl_12h_tokens":0});
+            assert_eq!(
+                usage(protocol, &body)
+                    .unwrap()
+                    .openai_cache_write_details
+                    .unwrap()
+                    .ttl_12h_tokens,
+                Some(0)
+            );
+            body[key]
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_write_tokens");
+            body[key]["cache_write_tokens_details"] =
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":4000});
+            let value = usage(protocol, &body).unwrap();
+            assert_eq!(value.cache_creation_input_tokens, None);
+            assert_eq!(value.effective_cache_creation_input_tokens().unwrap(), None);
+            assert_eq!(
+                value.openai_cache_write_details.unwrap().ttl_12h_tokens,
+                Some(4000)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_lifetime_objects_counters_and_partitions_are_rejected() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let key = details_key(protocol);
+            for invalid in [
+                json!(false),
+                json!(1),
+                json!("1"),
+                json!([]),
+                json!([3000, 4000]),
+                json!({"ttl_12h_tokens":-1}),
+                json!({"ttl_12h_tokens":1.5}),
+                json!({"ttl_12h_tokens":"4000"}),
+                json!({"ttl_12h_tokens":true}),
+                json!({"ttl_12h_tokens":[]}),
+                json!({"ttl_12h_tokens":{}}),
+                json!({"ttl_12h_tokens":7001}),
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":3999}),
+                json!({"ttl_30m_tokens":3000,"ttl_12h_tokens":4001}),
+                json!({"ttl_30m_tokens":u64::MAX,"ttl_12h_tokens":1}),
+                json!({"ttl_12h_tokens":4000,"unreviewed_lifetime":3000}),
+            ] {
+                let mut body = receipt(protocol);
+                body[key]["cache_write_tokens_details"] = invalid.clone();
+                assert!(usage(protocol, &body).is_err(), "{protocol:?}: {invalid}");
+            }
+            let mut body = receipt(protocol);
+            body["cache_creation_input_tokens"] = json!(6999);
+            assert!(usage(protocol, &body).is_err());
+            body["cache_creation_input_tokens"] = json!(7000);
+            body["cache_creation_details"] = json!({"ephemeral_5m_input_tokens":1});
+            assert!(usage(protocol, &body).is_err());
+        }
+    }
+
+    #[test]
+    fn json_and_sse_terminals_produce_identical_cache_write_evidence() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let expected = usage(protocol, &receipt(protocol)).unwrap();
+            for stream in [false, true] {
+                let mut decoder = Decoder::new(protocol, &Limits::default());
+                let body = response(protocol, receipt(protocol), stream);
+                let mut events = if stream {
+                    decoder
+                        .frame(Frame {
+                            event: None,
+                            data: body.to_string(),
+                        })
+                        .unwrap()
+                } else {
+                    decoder.json(&body).unwrap()
+                };
+                if stream && protocol == UpstreamProtocol::Chat {
+                    events.extend(
+                        decoder
+                            .frame(Frame {
+                                event: None,
+                                data: "[DONE]".into(),
+                            })
+                            .unwrap(),
+                    );
+                }
+                let mut combined = Usage::default();
+                for event in events {
+                    if let Event::Usage(value) = event {
+                        combined.merge(value).unwrap();
+                    }
+                }
+                assert_eq!(combined, expected);
+                assert!(decoder.is_done());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_sse_lifetimes_cannot_form_a_successful_terminal() {
+        for protocol in [UpstreamProtocol::Chat, UpstreamProtocol::Responses] {
+            let mut body = receipt(protocol);
+            body[details_key(protocol)]["cache_write_tokens_details"]["ttl_12h_tokens"] =
+                json!(7001);
+            let mut decoder = Decoder::new(protocol, &Limits::default());
+            assert!(
+                decoder
+                    .frame(Frame {
+                        event: None,
+                        data: response(protocol, body, true).to_string(),
+                    })
+                    .is_err()
+            );
+            assert!(!decoder.is_done());
+            assert_eq!(decoder.eof().unwrap_err(), RelayError::Truncated);
+        }
     }
 }
 

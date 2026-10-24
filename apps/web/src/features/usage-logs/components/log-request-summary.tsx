@@ -32,7 +32,7 @@ import {
 } from '../lib/money'
 import { usageReceiptState } from '../lib/receipt-state'
 import { logRecovery, safeLogDiagnostic } from '../lib/recovery'
-import { logUsageQuantity } from '../lib/usage-quantity'
+import { cacheWrite12hQuantity, logUsageQuantity } from '../lib/usage-quantity'
 import type { LogOtherData } from '../types'
 
 export function LogRequestSummary({
@@ -176,6 +176,19 @@ export function LogRequestSummary({
               : formatTokens(other.cache_creation_tokens)}
           </dd>
         </div>
+        {other && 'cache_creation_tokens_12h' in other && (
+          <div>
+            <dt className='text-muted-foreground'>
+              {t('12-hour cache writes')}
+            </dt>
+            <dd className='tabular-nums'>
+              {cacheWrite12hQuantity(
+                other,
+                log.token_usage_available
+              )?.toLocaleString() ?? t('Unknown')}
+            </dd>
+          </div>
+        )}
         {(other?.audio_usage_status != null || audioSeconds != null) && (
           <div>
             <dt className='text-muted-foreground'>
