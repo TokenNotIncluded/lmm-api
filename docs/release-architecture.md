@@ -48,6 +48,23 @@ python3 scripts/build-distribution.py build --component core \
   --platform linux-amd64 --input out/core
 ```
 
+For a candidate that will serve the new runtime, pass the complete identity
+set to the Core build environment:
+
+```sh
+export LMM_RELEASE_COMMIT="$SOURCE_SHA"
+export LMM_CORE_ARTIFACT_SHA256="<verified core archive digest>"
+export LMM_EXTENSIONS_ARTIFACT_SHA256="<verified extensions archive digest>"
+export LMM_SCHEMA_FINGERPRINT="<verified target schema fingerprint>"
+export LMM_ROUTE_IDENTITY="<reviewed edge/upstream route identity>"
+```
+
+Core emits the five corresponding `X-*` headers on `/api/status` only when all
+five values are present. A partial environment emits none. These values must
+come from the same cutover manifest and be compared with the native preflight,
+edge logs and runtime process identity; setting them in a shell is not itself
+deployment proof.
+
 示例中的平台必须与实际编译结果一致，版本使用本次选择的预览版本；不要直接
 重复运行并覆盖已有产物。构建器检查程序格式和 CPU 架构，不接受脚本或错误架构。
 
