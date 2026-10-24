@@ -101,6 +101,15 @@ REVIEWED_RUST_FILES = {
     'services/core/src/billing/trust_pricing.rs': 'c4c5f47d372fde4e5f7afd854a7a4691ef1b31ff74c1695d4242f0ab5133312f',
 }
 DEVELOPER_POLICY = "legacy-explicit-override-before-manual-v1-paid-unproven"
+# Identity import is deliberately narrower than a complete account cutover.
+# Keep these invariants explicit instead of relying only on map_identity()'s
+# current implementation: a hand-authored plan/manifest must not be able to
+# claim that sessions, API keys, passkeys/OAuth links, or financial rows moved.
+IDENTITY_ONLY_ZERO_FIELDS = ("sessions_imported", "api_keys_imported", "financial_rows_written")
+IDENTITY_ONLY_REQUIRED_GAPS = frozenset((
+    "legacy_oauth_and_passkeys_archived_only",
+    "financial_data_not_migrated",
+))
 
 
 class MappingError(Exception):
@@ -377,6 +386,15 @@ def validate_import_material(plan: dict, source_sha256: str, manifest: dict) -> 
     records = plan.get("records")
     require(isinstance(records, list) and all(isinstance(row, dict) for row in records), "mapping_shape_invalid")
     require(hashlib.sha256(canonical({"source_sha256": source_sha256, "records": records}).encode()).hexdigest() == plan.get("mapping_sha256"), "mapping_hash_mismatch")
+    summary = plan.get("summary")
+    require(isinstance(summary, dict), "identity_summary_scope_invalid")
+    for field in IDENTITY_ONLY_ZERO_FIELDS:
+        require(type(summary.get(field)) is int and summary[field] == 0,
+                "identity_summary_scope_invalid")
+    gaps = summary.get("functional_gaps")
+    require(isinstance(gaps, list) and all(isinstance(gap, str) for gap in gaps)
+            and IDENTITY_ONLY_REQUIRED_GAPS.issubset(gaps),
+            "identity_summary_scope_invalid")
     ids = [positive_int(row.get("user_id"), "mapped_user_id_invalid") for row in records]
     require(ids == sorted(set(ids)) and [row.get("account_id") for row in records] == list(range(1, len(records) + 1)), "id_map_invalid")
     require(isinstance(manifest, dict) and manifest.get("format_version") == 2 and type(manifest.get("format_version")) is int

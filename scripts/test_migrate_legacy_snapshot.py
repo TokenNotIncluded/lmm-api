@@ -736,6 +736,32 @@ class ImportSqlTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(MODULE.MappingError, "identity_manifest_mismatch"):
                 MODULE.validate_import_material(plan, SOURCE_SHA256, manifest_for(plan, **{field: "f" * 64}))
 
+    def test_identity_only_scope_cannot_claim_credentials_or_financial_rows_moved(self):
+        plan = mapped([user()])
+        manifest = manifest_for(plan)
+        for field in MODULE.IDENTITY_ONLY_ZERO_FIELDS:
+            mutated = deepcopy(plan)
+            mutated["summary"][field] = 1
+            mutated["mapping_sha256"] = hashlib.sha256(
+                MODULE.canonical({"source_sha256": SOURCE_SHA256, "records": mutated["records"]}).encode()
+            ).hexdigest()
+            # The mapping hash intentionally remains valid: the scope guard,
+            # rather than the hash check, must reject this misleading receipt.
+            with self.subTest(field=field), self.assertRaisesRegex(
+                MODULE.MappingError, "^identity_summary_scope_invalid$"):
+                MODULE.validate_import_material(mutated, SOURCE_SHA256, manifest)
+
+        mutated = deepcopy(plan)
+        mutated["summary"]["functional_gaps"] = [
+            gap for gap in mutated["summary"]["functional_gaps"]
+            if gap != "legacy_oauth_and_passkeys_archived_only"
+        ]
+        mutated["mapping_sha256"] = hashlib.sha256(
+            MODULE.canonical({"source_sha256": SOURCE_SHA256, "records": mutated["records"]}).encode()
+        ).hexdigest()
+        with self.assertRaisesRegex(MODULE.MappingError, "^identity_summary_scope_invalid$"):
+            MODULE.validate_import_material(mutated, SOURCE_SHA256, manifest)
+
     def test_quotes_backslashes_controls_and_unicode_roundtrip_as_data(self):
         original = user(username="模型 O'Reilly\\fixture", setting="quote ' \\ newline\n tab\t 雪")
         sql, plan = self.sql([original])
