@@ -242,7 +242,28 @@ impl RouteProvider for Bridge {
             );
             let mut price = credit_price(quote.price(), plan.canonical_model(), &group)?;
             let attempt = plan.start().map_err(|_| RelayError::RouteUnavailable)?;
+            if request.prompt_cache_options.is_some()
+                && (attempt.protocol() != Protocol::OpenAiResponses
+                    || !price
+                        .tiered
+                        .as_ref()
+                        .is_some_and(|t| t.tariff.revision == 4))
+            {
+                return Err(RelayError::Unsupported(
+                    "cache lifetime controls require a reviewed twelve-hour tariff",
+                ));
+            }
             if let Some(tariff) = &mut price.tiered {
+                if tariff.tariff.revision == 4
+                    && !matches!(
+                        attempt.protocol(),
+                        Protocol::OpenAiChat | Protocol::OpenAiResponses
+                    )
+                {
+                    return Err(RelayError::Unsupported(
+                        "twelve-hour cache pricing requires an OpenAI protocol route",
+                    ));
+                }
                 tariff.input_semantics = if attempt.protocol() == Protocol::AnthropicMessages {
                     crate::routing::InputSemantics::AnthropicText
                 } else {

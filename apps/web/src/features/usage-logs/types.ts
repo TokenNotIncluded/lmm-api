@@ -199,9 +199,10 @@ export interface LogOtherData {
   cache_text_tokens?: number | null
   cache_image_tokens?: number | null
   cache_audio_tokens?: number | null
-  cache_creation_tokens?: number
-  cache_creation_tokens_5m?: number
-  cache_creation_tokens_1h?: number
+  cache_creation_tokens?: number | null
+  cache_creation_tokens_5m?: number | null
+  cache_creation_tokens_1h?: number | null
+  cache_creation_tokens_12h?: number | null
   claude?: boolean
   model_ratio?: number
   completion_ratio?: number

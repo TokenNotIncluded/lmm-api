@@ -119,6 +119,13 @@ export function adaptNativePricing(
       output_price: commonPrice(prices, 'output_price'),
       cache_read_price: commonPrice(prices, 'cache_read_price'),
       cache_write_price: null,
+      group_cache_write_12h_tiers: Object.fromEntries(
+        rows.flatMap((row) =>
+          row.token_price?.cache_write_12h_tiers
+            ? [[row.group, row.token_price.cache_write_12h_tiers]]
+            : []
+        )
+      ),
       group_prices: tokenRows.length
         ? Object.fromEntries(rows.map((row) => [row.group, groupPrices(row)]))
         : undefined,

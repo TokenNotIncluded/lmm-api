@@ -162,6 +162,7 @@ mod activity_tests {
             Usage {
                 input: 1,
                 cache_creation: Some(CacheCreationUsage {
+                    twelve_hour: None,
                     total: 1,
                     five_minute: None,
                     one_hour: None,
@@ -291,7 +292,7 @@ fn decode(row: PgRow) -> Result<Stored> {
         {
             return Err(Error::Storage);
         }
-        if tariff.cache_creation_mode.is_some() {
+        if tariff.cache_creation_mode.is_some() || tariff.tariff.revision == 4 {
             stored
                 .charge
                 .price

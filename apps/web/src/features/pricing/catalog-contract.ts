@@ -68,18 +68,65 @@ export const nativeImageVariantSchema = z
     )
   }, 'Image currency amounts disagree')
 
-export const nativeTokenPriceSchema = z.object({
-  currency: z.literal('USD'),
-  unit: z.literal('million_tokens'),
-  rate_basis: rateBasis,
-  group_multiplier: z.number().finite().nonnegative(),
-  input: amount,
-  output: amount,
-  cache_read: amount,
-  cache_write: z.null(),
-  request: z.null(),
-  final_cost_depends_on_usage: z.literal(true),
-})
+const tokenBound = z
+  .string()
+  .regex(/^[1-9]\d{0,19}$/)
+  .refine(
+    (value) =>
+      /^[1-9]\d{0,19}$/.test(value) &&
+      BigInt(value) <= 18_446_744_073_709_551_615n,
+    'Invalid input token bound'
+  )
+export const nativeCacheWrite12hTierSchema = z
+  .object({
+    up_to_input_tokens: tokenBound.nullable(),
+    input: fraction.strict(),
+    output: fraction.strict(),
+    cache_read: fraction.strict(),
+    cache_write: fraction.strict(),
+    cache_write_12h: fraction.strict(),
+  })
+  .strict()
+const cacheWrite12hTiers = z
+  .array(nativeCacheWrite12hTierSchema)
+  .min(1)
+  .max(4)
+  .refine((tiers) => {
+    let previous = 0n
+    return tiers.every((tier, index) => {
+      const bound = tier.up_to_input_tokens
+      if (index === tiers.length - 1) return bound === null
+      if (bound === null || !/^[1-9]\d{0,19}$/.test(bound)) return false
+      const current = BigInt(bound)
+      if (current <= previous) return false
+      previous = current
+      return true
+    })
+  }, 'Input token bounds must increase and end with an unlimited tier')
+
+export const nativeTokenPriceSchema = z
+  .object({
+    currency: z.literal('USD'),
+    unit: z.literal('million_tokens'),
+    rate_basis: rateBasis,
+    group_multiplier: z.number().finite().nonnegative(),
+    input: amount,
+    output: amount,
+    cache_read: amount,
+    cache_write: z.null(),
+    request: z.null(),
+    final_cost_depends_on_usage: z.literal(true),
+    // Every tier inherits this token price's currency, unit and rate basis.
+    cache_write_12h_tiers: cacheWrite12hTiers.optional(),
+  })
+  .refine(
+    (price) =>
+      !price.cache_write_12h_tiers ||
+      (price.input === null &&
+        price.output === null &&
+        price.cache_read === null),
+    'Tiered prices cannot also claim a scalar token price'
+  )
 
 export const nativeUpstreamCostPriceSchema = z
   .object({
@@ -251,3 +298,7 @@ export type NativeUpstreamCostPrice = z.infer<
   typeof nativeUpstreamCostPriceSchema
 >
 export type NativeUnavailableReason = z.infer<typeof unavailableReason>
+
+export type NativeCacheWrite12hTier = z.infer<
+  typeof nativeCacheWrite12hTierSchema
+>
