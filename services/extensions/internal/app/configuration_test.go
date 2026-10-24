@@ -69,6 +69,10 @@ func TestStrictTypedConfig(t *testing.T) {
 	if err != nil || cfg.Host.TokenFile != "/tmp/host-token" || cfg.Host.Listen != "0.0.0.0:8081" {
 		t.Fatal(cfg, err)
 	}
+	cfg, err = LoadConfig(write(base + "plugin_state_file='/var/lib/lmm/extensions/plugins.json'\n"))
+	if err != nil || cfg.Host.PluginStateFile != "/var/lib/lmm/extensions/plugins.json" {
+		t.Fatal("plugin state path was not accepted", cfg, err)
+	}
 	for _, raw := range []string{strings.Replace(base, "version=1", "version=2", 1), base + "unknown='private-value'\n", base + "modules=['identity']\n", strings.Replace(base, "[host]", "[Host]", 1), strings.Replace(base, "token_file=", "TokenFile=", 1), strings.Replace(base, "'/tmp/host-token'", "'relative'", 1), base + "[core]\nsocket='/tmp/core.sock'\n", base + "[store]\ndatabase_name='lmm_store_test'\n", base + "listen='bad-address'\n", `{"version":1}`} {
 		_, err := LoadConfig(write(raw))
 		if err == nil {
@@ -77,6 +81,9 @@ func TestStrictTypedConfig(t *testing.T) {
 		if strings.Contains(err.Error(), "private-value") {
 			t.Fatal("config value leaked")
 		}
+	}
+	if _, err := LoadConfig(write(base + "plugin_state_file='relative/plugins.json'\n")); err == nil {
+		t.Fatal("relative plugin state path accepted")
 	}
 	link := filepath.Join(t.TempDir(), "link.toml")
 	if err := os.Symlink(write(base), link); err != nil {
