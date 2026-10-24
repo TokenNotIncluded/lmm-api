@@ -21,6 +21,13 @@ go build -trimpath -o lmm-extensions ./cmd/extensions
 
 Run `./lmm-extensions --config /absolute/private/extensions.toml` with the versioned, strict TOML contract described in [development](../../docs/development.md). The default path is `/etc/lmm.conf.d/extensions.toml`; `.env` files are not read. Exported configuration is accepted only with explicit `--legacy-env`; the following `LMM_*` examples describe that legacy mode, not the default file mode. It rejects non-empty `SQL_DSN`, `LOG_SQL_DSN`, `DATABASE_URL`, `LMM_CORE_DATABASE_URL`, `LMM_CORE_DATABASE_URL_FILE` and `LMM_DB_MIGRATION_MODE` before any file or network access. Errors contain variable names, never their values. Do not inherit the core process environment.
 
+Extension PostgreSQL URL files must contain an explicit user and password. Unix
+socket URLs are the preferred local profile; numeric loopback TCP may use
+`sslmode=disable`, while every other TCP endpoint requires
+`sslmode=verify-full` and an absolute `sslrootcert` path. PostgreSQL connection
+environment variables are rejected so the driver cannot silently replace the
+URL's transport or credentials.
+
 Configure `LMM_EXTENSION_TOKEN_FILE` with a private service credential file. `LMM_EXTENSION_LISTEN` defaults to `0.0.0.0:8081`. Configure both `LMM_CORE_RPC_SOCKET` and `LMM_CORE_RPC_TOKEN_FILE` to enable identity reads. Construction is lazy, so an offline Rust core does not prevent the extension host from starting. Identity requests fail closed while Rust is unavailable.
 
 `LMM_EXTENSION_MODULES` selects a comma-separated list; `none` disables every module. Empty configuration enables only the explicit defaults: identity when RPC is configured, otherwise no modules. Unknown or duplicate names fail startup. New modules are not enabled automatically.
