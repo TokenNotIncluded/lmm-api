@@ -84,12 +84,12 @@ The record must use this top-level shape:
     },
     "public_edge": {"mode": "legacy", "candidate_selected": false},
     "contracts": {
-      "model_forwarding": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null},
-      "payments": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null},
-      "commerce": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null},
-      "assistant": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null},
-      "assistant_tools": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null},
-      "tool_market": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null}
+      "model_forwarding": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"},
+      "payments": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"},
+      "commerce": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"},
+      "assistant": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"},
+      "assistant_tools": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"},
+      "tool_market": {"config":"absent","credentials":"absent","contract":"absent","probe":"not_run","contract_sha256":null,"extension":"absent","provider":"none"}
     }
   },
   "extensions": {"ready_http_status": 200, "modules": [], "host_credential": "absent"},
