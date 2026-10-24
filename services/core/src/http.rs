@@ -3,7 +3,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{Request, State},
     http::{
-        StatusCode,
+        HeaderMap, StatusCode,
         header::{CACHE_CONTROL, HeaderValue},
     },
     middleware::Next,
@@ -11,6 +11,7 @@ use axum::{
     routing::get,
 };
 use http_body::{Body as HttpBody, Frame, SizeHint};
+use rand::RngCore;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -180,7 +181,24 @@ pub fn configured_router_with_runtime_status(
         .merge(history)
 }
 
-async fn public_status_response(State(state): State<Readiness>) -> Response {
+fn request_id(headers: &HeaderMap) -> String {
+    let incoming = headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-oneapi-request-id"))
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value.bytes().all(|byte| byte.is_ascii_graphic())
+        });
+    if let Some(value) = incoming {
+        return value.to_owned();
+    }
+    let mut random = rand::thread_rng();
+    format!("{:016x}{:016x}", random.next_u64(), random.next_u64())
+}
+
+async fn public_status_response(State(state): State<Readiness>, headers: HeaderMap) -> Response {
     let status = state.public_status;
     let google_client_id = status
         .google_client_id
@@ -232,6 +250,9 @@ async fn public_status_response(State(state): State<Readiness>) -> Response {
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(value) = request_id(&headers).parse() {
+        response.headers_mut().insert("x-request-id", value);
+    }
     let release_identity = [
         ("x-release-commit", option_env!("LMM_RELEASE_COMMIT")),
         (
@@ -434,6 +455,7 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.headers()["x-request-id"].len(), 32);
             if [
                 option_env!("LMM_RELEASE_COMMIT"),
                 option_env!("LMM_CORE_ARTIFACT_SHA256"),
@@ -461,6 +483,25 @@ mod tests {
             assert!(data.get("google_client_secret_file").is_none());
             assert_eq!(data["custom_oauth_providers"], json!([]));
         }
+    }
+
+    #[tokio::test]
+    async fn public_status_preserves_a_valid_edge_request_id() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+            .unwrap();
+        let app = configured_router(pool, Capabilities::default());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .header("x-oneapi-request-id", "edge-request-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["x-request-id"], "edge-request-123");
     }
 
     #[tokio::test]
