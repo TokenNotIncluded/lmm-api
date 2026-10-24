@@ -326,8 +326,7 @@ async fn http_origin_cookie_and_internal_host_authority_are_separate(pool: PgPoo
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[path = "../../tests/common/runtime.rs"]
-mod runtime;
+use crate::test_runtime as runtime;
 #[sqlx::test(migrations = false)]
 async fn runtime_column_authority_preserves_immutable_economics(pool: PgPool) {
     let f = setup(&pool).await;

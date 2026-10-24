@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_runtime as runtime;
 use crate::{
     identity::IdentityStore,
     model_http::pricing::{PricingSurface, tests::gateway},
@@ -8,8 +9,6 @@ use axum::{
     http::Request,
 };
 use tower::ServiceExt;
-#[path = "../tests/common/runtime.rs"]
-mod runtime;
 async fn call(
     router: &Router,
     path: &str,
