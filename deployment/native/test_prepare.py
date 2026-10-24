@@ -26,10 +26,25 @@ class Checks(unittest.TestCase):
                         "components": {"web": {"version": "1.2.3", "files": P.inventory(self.candidate / "web")}}}
         (self.candidate / "release.json").write_text(json.dumps(self.release))
         self.preflight = self.root / "preflight.json"
+        identity = {
+            "migration_status": "identity_only", "mapping_status": "passed",
+            "target_comparison_status": "passed",
+            "legacy_inventory": {field: 0 for field in P.IDENTITY_INVENTORY_FIELDS},
+            **{field: "d" * 64 for field in P.IDENTITY_HASH_FIELDS},
+            "reauth_required": 0, "rekey_required": 0, "reenroll_required": 0,
+            "actions": {field: action for field, action in P.IDENTITY_ACTIONS.items()},
+        }
+        gates = [{"name": name, "status": "READY", "missing": []}
+                 for name in sorted(P.PREFLIGHT_GATES)]
         self.preflight.write_text(json.dumps({
             "protocol": "core-cutover-preflight.v1",
             "status": "READY",
             "safe_to_cutover": True,
+            "public_edge": {"mode": "candidate", "candidate_selected": True},
+            "identity": identity,
+            "gates": gates,
+            "unsafe_enablement": [],
+            "secret_values_checked": "schema_only",
             "source_commit": "e" * 40,
             "release": {
                 "source_commit": "e" * 40,
@@ -162,6 +177,28 @@ class Checks(unittest.TestCase):
         self.record["cutover_preflight"]["sha256"] = "f" * 64
         with self.assertRaises(ValueError):
             P.verify_cutover_preflight(current, self.record)
+
+    def test_preflight_result_requires_all_identity_route_and_gate_evidence(self):
+        current = {"components": {"core": {
+            "source_revision": "e" * 40,
+            "archive_sha256": "1" * 64,
+        }}}
+        original = json.loads(self.preflight.read_text())
+        for field, value in (
+            ("gates", []),
+            ("identity", None),
+            ("public_edge", {"mode": "legacy", "candidate_selected": False}),
+            ("unsafe_enablement", ["payments"]),
+        ):
+            with self.subTest(field=field):
+                mutated = dict(original)
+                mutated[field] = value
+                self.preflight.write_text(json.dumps(mutated))
+                self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
+                with self.assertRaises(ValueError):
+                    P.verify_cutover_preflight(current, self.record, "e" * 40)
+        self.preflight.write_text(json.dumps(original))
+        self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
 
     def test_fence_and_boundary_rejected(self):
         for key, value in [("active_writers", 1), ("legacy_workers_stopped", False),

@@ -124,6 +124,7 @@ class Checks(unittest.TestCase):
         self.assertEqual(result["status"], "READY")
         self.assertTrue(result["safe_to_cutover"])
         self.assertEqual(result["unsafe_enablement"], [])
+        self.assertEqual(result["public_edge"], {"mode": "candidate", "candidate_selected": True})
 
     def test_archdmit_like_disabled_record_is_blocked(self):
         record = self.base()
