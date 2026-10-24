@@ -218,6 +218,18 @@ Cutover additionally records:
 - `cutover_manifest`: a private path and SHA-256 for the canonical
   `release-manifest.v1`; every provenance field must equal the pinned
   preflight release block.
+
+Build that file from a reviewed release block without hand-editing its field
+set:
+
+```sh
+python3 scripts/build-release-manifest.py \
+  --input /absolute/private/release-block.json \
+  --output /absolute/private/release-manifest.json
+```
+
+The output is deterministic, mode 0600, and refuses unknown fields, mismatched
+runtime artifacts, non-monotonic epochs and output replacement.
 - `backup`: actual `sha256` and `restore_verified=true`.
 - `migration`: `status=completed`, `unresolved_count=0`,
   `financial_reconciliation_passed=true`, `source_final_boundary_sha256`.
