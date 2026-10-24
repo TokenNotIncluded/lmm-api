@@ -2,9 +2,12 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{Request, State},
-    http::StatusCode,
+    http::{
+        StatusCode,
+        header::{CACHE_CONTROL, HeaderValue},
+    },
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use http_body::{Body as HttpBody, Frame, SizeHint};
@@ -177,9 +180,7 @@ pub fn configured_router_with_runtime_status(
         .merge(history)
 }
 
-async fn public_status_response(
-    State(state): State<Readiness>,
-) -> ([(String, String); 1], Json<Value>) {
+async fn public_status_response(State(state): State<Readiness>) -> Response {
     let status = state.public_status;
     let google_client_id = status
         .google_client_id
@@ -227,10 +228,34 @@ async fn public_status_response(
     data.as_object_mut()
         .expect("status data is a JSON object")
         .extend(extra);
-    (
-        [("cache-control".into(), "no-store".into())],
-        Json(json!({"success":true,"message":"","data":data})),
-    )
+    let mut response = Json(json!({"success":true,"message":"","data":data})).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let release_identity = [
+        ("x-release-commit", option_env!("LMM_RELEASE_COMMIT")),
+        (
+            "x-core-artifact-sha256",
+            option_env!("LMM_CORE_ARTIFACT_SHA256"),
+        ),
+        (
+            "x-extensions-artifact-sha256",
+            option_env!("LMM_EXTENSIONS_ARTIFACT_SHA256"),
+        ),
+        (
+            "x-schema-fingerprint",
+            option_env!("LMM_SCHEMA_FINGERPRINT"),
+        ),
+        ("x-route-identity", option_env!("LMM_ROUTE_IDENTITY")),
+    ];
+    if release_identity.iter().all(|(_, value)| value.is_some()) {
+        for (name, value) in release_identity {
+            if let Some(value) = value.and_then(|value| value.parse().ok()) {
+                response.headers_mut().insert(name, value);
+            }
+        }
+    }
+    response
 }
 
 async fn live() -> Json<Value> {
@@ -409,6 +434,18 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
+            if [
+                option_env!("LMM_RELEASE_COMMIT"),
+                option_env!("LMM_CORE_ARTIFACT_SHA256"),
+                option_env!("LMM_EXTENSIONS_ARTIFACT_SHA256"),
+                option_env!("LMM_SCHEMA_FINGERPRINT"),
+                option_env!("LMM_ROUTE_IDENTITY"),
+            ]
+            .iter()
+            .any(Option::is_none)
+            {
+                assert!(response.headers().get("x-release-commit").is_none());
+            }
             let bytes = axum::body::to_bytes(response.into_body(), 65536)
                 .await
                 .unwrap();

@@ -21,6 +21,14 @@ This is still an evidence contract: a correctly shaped hash is not proof that a
 provider, database or public edge actually produced it. Independent host and
 runtime checks must calculate these values and bind them to the same record.
 
+When all five build-time values are present, Core's real `/api/status`
+response exposes the corresponding `X-Release-Commit`,
+`X-Core-Artifact-SHA256`, `X-Extensions-Artifact-SHA256`,
+`X-Schema-Fingerprint` and `X-Route-Identity` headers. Core emits the set
+only when it has a complete identity; a partial set is omitted. These headers
+are routing/provenance evidence to correlate with the edge and runtime logs,
+not proof by themselves.
+
 ## Current ArchDmit evidence
 
 The latest read-only rehearsal record (2026-10-24) is still blocked:
