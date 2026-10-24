@@ -40,9 +40,12 @@ func TestOwnerURLCannotOverrideCheckedDatabaseOrRole(t *testing.T) {
 		raw string
 		ok  bool
 	}{
+		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt", true},
 		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=disable", true},
 		{"postgresql://installer:private@/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&port=5433&sslmode=disable", true},
 		{"postgresql://installer:private@127.0.0.1/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&sslmode=require", false},
+		{"postgres://installer:private@192.0.2.10:55555/lmm_toolmarket_new?sslmode=disable", false},
+		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=verify-full", false},
 		{"postgresql://installer:private@/lmm_core_new?host=%2Frun%2Flmm-postgresql&sslmode=disable", false},
 		{"postgresql://installer@/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&sslmode=disable", false},
 		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?options=-crole%3Dsuperuser", false},

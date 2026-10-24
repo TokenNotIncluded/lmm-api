@@ -102,6 +102,9 @@ func ownerURL(c Config, p plan) (string, error) {
 	if unix {
 		return s, nil
 	}
+	if _, err := postgresurl.TCP(u); err != nil {
+		return "", ErrRejected
+	}
 	for k, v := range u.Query() {
 		if len(v) != 1 || (k != "sslmode" && k != "sslrootcert" && k != "connect_timeout" && k != "application_name") {
 			return "", ErrRejected
