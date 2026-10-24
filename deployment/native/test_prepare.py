@@ -38,6 +38,13 @@ class Checks(unittest.TestCase):
                 "extensions_artifact_sha256": "2" * 64,
                 "runtime_core_artifact_sha256": "1" * 64,
                 "runtime_extensions_artifact_sha256": "2" * 64,
+                "sbom_sha256": "3" * 64,
+                "schema_fingerprint_sha256": "4" * 64,
+                "provider_matrix_sha256": "5" * 64,
+                "identity_evidence_sha256": "6" * 64,
+                "financial_evidence_sha256": "7" * 64,
+                "edge_config_sha256": "8" * 64,
+                "runtime_release_identity_sha256": "9" * 64,
                 "previous_writer_epoch": 7,
                 "writer_epoch": 8,
             },
@@ -79,14 +86,23 @@ class Checks(unittest.TestCase):
                     self.run_gate()
                 self.record[key] = previous
 
-    def test_cutover_preflight_is_required_and_pinned(self):
-        previous = self.record.pop("cutover_preflight")
-        with self.assertRaises(ValueError):
-            self.run_gate()
-        self.record["cutover_preflight"] = previous
+    def test_web_only_cutover_does_not_require_core_preflight(self):
+        self.record.pop("cutover_preflight")
+        self.assertEqual(self.run_gate()["status"], "activation-record-and-files-verified")
+
+    def test_core_cutover_preflight_is_required_and_pinned(self):
+        current = {"components": {"core": {
+            "source_revision": "e" * 40,
+            "archive_sha256": "1" * 64,
+        }}}
+        self.assertEqual(P.verify_cutover_preflight(current, self.record),
+                         self.record["cutover_preflight"]["sha256"])
+
         self.preflight.write_text(json.dumps({**json.loads(self.preflight.read_text()), "status": "BLOCKED"}))
+        self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
         with self.assertRaises(ValueError):
-            self.run_gate()
+            P.verify_cutover_preflight(current, self.record)
+
         self.preflight.write_text(json.dumps({
             "protocol": "core-cutover-preflight.v1",
             "status": "READY",
@@ -99,13 +115,32 @@ class Checks(unittest.TestCase):
                 "extensions_artifact_sha256": "2" * 64,
                 "runtime_core_artifact_sha256": "1" * 64,
                 "runtime_extensions_artifact_sha256": "2" * 64,
+                "sbom_sha256": "3" * 64,
+                "schema_fingerprint_sha256": "4" * 64,
+                "provider_matrix_sha256": "5" * 64,
+                "identity_evidence_sha256": "6" * 64,
+                "financial_evidence_sha256": "7" * 64,
+                "edge_config_sha256": "8" * 64,
+                "runtime_release_identity_sha256": "9" * 64,
                 "previous_writer_epoch": 7,
                 "writer_epoch": 8,
             },
         }))
+        self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)
+        with self.assertRaises(ValueError):
+            P.verify_cutover_preflight({"components": {"core": {
+                "source_revision": "f" * 40,
+                "archive_sha256": "1" * 64,
+            }}}, self.record)
+        with self.assertRaises(ValueError):
+            P.verify_cutover_preflight({"components": {"core": {
+                "source_revision": "e" * 40,
+                "archive_sha256": "f" * 64,
+            }}}, self.record)
+
         self.record["cutover_preflight"]["sha256"] = "f" * 64
         with self.assertRaises(ValueError):
-            self.run_gate()
+            P.verify_cutover_preflight(current, self.record)
 
     def test_fence_and_boundary_rejected(self):
         for key, value in [("active_writers", 1), ("legacy_workers_stopped", False),

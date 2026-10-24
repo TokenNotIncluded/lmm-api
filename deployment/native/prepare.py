@@ -45,6 +45,7 @@ def regular(path):
 
 def pinned_json(path, expected):
     regular(path)
+    require(path.stat().st_mode & 0o022 == 0, "writable evidence rejected")
     require(SHA.fullmatch(expected) and digest(path) == expected, "pinned evidence digest mismatch")
     require(path.stat().st_size <= 8 * 1024 * 1024, "evidence too large")
     return json.loads(path.read_text(), object_pairs_hook=unique)
@@ -144,16 +145,31 @@ def verify_cutover_preflight(current, evidence):
     path = preflight_ref.get("path")
     expected_sha = preflight_ref.get("sha256", "")
     require(isinstance(path, str) and path, "cutover preflight path required")
-    preflight = pinned_json(Path(path), expected_sha)
+    path = Path(path)
+    require(path.is_absolute(), "cutover preflight path must be absolute")
+    require(path.stat().st_mode & 0o022 == 0, "cutover preflight writable evidence rejected")
+    preflight = pinned_json(path, expected_sha)
     require(preflight.get("protocol") == "core-cutover-preflight.v1", "cutover preflight protocol invalid")
     require(preflight.get("status") == "READY" and preflight.get("safe_to_cutover") is True,
             "cutover preflight must be READY")
     release = preflight.get("release", {})
     require(isinstance(release, dict), "cutover release provenance missing")
-    require(preflight.get("source_commit") == release.get("source_commit") == release.get("runtime_source_commit"),
+    source_commit = preflight.get("source_commit")
+    require(isinstance(source_commit, str) and re.fullmatch(r"[0-9a-f]{40}", source_commit),
+            "cutover source commit invalid")
+    require(source_commit == release.get("source_commit") == release.get("runtime_source_commit"),
             "cutover source commit provenance mismatch")
-    require(release.get("writer_epoch") is not None
-            and release.get("previous_writer_epoch") is not None
+    for field in (
+        "core_artifact_sha256", "extensions_artifact_sha256", "sbom_sha256",
+        "schema_fingerprint_sha256", "provider_matrix_sha256",
+        "identity_evidence_sha256", "financial_evidence_sha256",
+        "edge_config_sha256", "runtime_release_identity_sha256",
+        "runtime_core_artifact_sha256", "runtime_extensions_artifact_sha256",
+    ):
+        require(isinstance(release.get(field), str) and SHA.fullmatch(release[field]),
+                "cutover release provenance field invalid: " + field)
+    require(type(release.get("writer_epoch")) is int
+            and type(release.get("previous_writer_epoch")) is int
             and release["writer_epoch"] > release["previous_writer_epoch"],
             "cutover writer epoch is not monotonic")
     for component, artifact_field in (
@@ -191,7 +207,9 @@ def gate(args):
         regular(Path(path))
         require(SHA.fullmatch(expected_sha) and digest(Path(path)) == expected_sha, "runtime configuration changed")
     if args.mode == "cutover":
-        preflight_sha256 = verify_cutover_preflight(current, evidence)
+        preflight_sha256 = None
+        if any(component in current["components"] for component in ("core", "extensions")):
+            preflight_sha256 = verify_cutover_preflight(current, evidence)
         backup = evidence.get("backup", {})
         require(SHA.fullmatch(backup.get("sha256", "")) and backup.get("restore_verified") is True,
                 "backup restoration unverified")
