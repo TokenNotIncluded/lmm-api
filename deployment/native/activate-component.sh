@@ -4,7 +4,7 @@
 # until the independent operator has verified actual business readback.
 set -eu
 test "$(id -u)" = 0
-test "$#" = 11
+test "$#" = 12
 component=$1
 candidate=$2
 release_sha=$3
@@ -17,6 +17,7 @@ previous=$9
 shift 9
 previous_sha=$1
 tool_directory=$2
+expected_source_commit=$3
 test "$(hostname)" = "$host"
 case "$component" in core|extensions|web) ;; *) exit 2;; esac
 case "$candidate" in /opt/lmm/releases/*) ;; *) exit 2;; esac
@@ -35,7 +36,8 @@ python3 "$tool_directory/prepare.py" gate --mode "$mode" \
     --release-dir "$candidate" --release-sha256 "$release_sha" \
     --evidence "$review" --evidence-sha256 "$review_sha" \
     --host "$host" --database-identity-sha256 "$database_sha" \
-    --previous-dir "$previous" --previous-sha256 "$previous_sha"
+    --previous-dir "$previous" --previous-sha256 "$previous_sha" \
+    --expected-source-commit "$expected_source_commit"
 test -d "$candidate/$component"
 link=/opt/lmm/current/$component
 if test "$mode" = update; then

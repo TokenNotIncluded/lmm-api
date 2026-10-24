@@ -28,7 +28,7 @@ def unique(pairs):
     return result
 
 
-def parse(path):
+def parse(path, expected_source_commit=None):
     if (
         not path.is_file()
         or path.is_symlink()
@@ -43,6 +43,11 @@ def parse(path):
         raise ValueError("release input fields are incomplete or unexpected")
     if not isinstance(value["source_commit"], str) or not COMMIT.fullmatch(value["source_commit"]):
         raise ValueError("source_commit must be a 40-character lowercase commit")
+    if expected_source_commit is not None:
+        if not isinstance(expected_source_commit, str) or not COMMIT.fullmatch(expected_source_commit):
+            raise ValueError("expected_source_commit must be a 40-character lowercase commit")
+        if value["source_commit"] != expected_source_commit:
+            raise ValueError("source commit does not match expected candidate")
     if value["runtime_source_commit"] != value["source_commit"]:
         raise ValueError("runtime source commit mismatch")
     for field in (
@@ -66,10 +71,10 @@ def parse(path):
     return value
 
 
-def build(input_path, output_path):
+def build(input_path, output_path, expected_source_commit=None):
     if output_path.exists():
         raise ValueError("output already exists")
-    value = {"protocol": "release-manifest.v1", **parse(input_path)}
+    value = {"protocol": "release-manifest.v1", **parse(input_path, expected_source_commit)}
     rendered = json.dumps(value, indent=2, sort_keys=True) + "\n"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
@@ -81,9 +86,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--expected-source-commit")
     args = parser.parse_args()
     try:
-        print(build(args.input, args.output))
+        print(build(args.input, args.output, args.expected_source_commit))
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
         parser.exit(2, "release manifest refused (" + type(error).__name__ + ")\n")
 

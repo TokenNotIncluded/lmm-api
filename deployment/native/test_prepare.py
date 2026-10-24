@@ -102,12 +102,14 @@ class Checks(unittest.TestCase):
             "archive_sha256": "1" * 64,
         }}}
         self.assertEqual(
-            P.verify_cutover_preflight(current, self.record),
+            P.verify_cutover_preflight(current, self.record, "e" * 40),
             (
                 self.record["cutover_preflight"]["sha256"],
                 self.record["cutover_manifest"]["sha256"],
             ),
         )
+        with self.assertRaisesRegex(ValueError, "expected candidate"):
+            P.verify_cutover_preflight(current, self.record, "f" * 40)
 
         self.preflight.write_text(json.dumps({**json.loads(self.preflight.read_text()), "status": "BLOCKED"}))
         self.record["cutover_preflight"]["sha256"] = P.digest(self.preflight)

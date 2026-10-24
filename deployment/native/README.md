@@ -140,7 +140,8 @@ not supply that missing migration. Preserve every valid write and unknown outcom
    python3 deployment/native/prepare.py gate --mode cutover \
      --release-dir "$HOST_RELEASE_DIRECTORY" --release-sha256 "$RELEASE_SHA256" \
      --evidence "$ACTIVATION_RECORD" --evidence-sha256 "$ACTUAL_RECORD_SHA256" \
-     --host "$EXACT_HOST" --database-identity-sha256 "$TARGET_DATABASE_IDENTITY_SHA256"
+     --host "$EXACT_HOST" --database-identity-sha256 "$TARGET_DATABASE_IDENTITY_SHA256" \
+     --expected-source-commit "$EXPECTED_SOURCE_COMMIT"
    ```
 
    A `cutover` activation record must also contain
@@ -154,8 +155,8 @@ not supply that missing migration. Preserve every valid write and unknown outcom
    native activation path from bypassing or splicing the release provenance
    gate. Update-only records do not use these cutover-only references.
 
-5. `activate-component.sh` takes11 explicit positional parameters:
-   `component candidate-directory release-sha activation-record record-sha host database-sha mode previous-directory previous-sha tool-directory`.
+5. `activate-component.sh` takes12 explicit positional parameters:
+   `component candidate-directory release-sha activation-record record-sha host database-sha mode previous-directory previous-sha tool-directory expected-source-commit`.
    In cutover mode previous values may be `- -`. It re-runs the gate under an
    exclusive host lock, stops only the chosen modern service, waits for actual
    inactive/MainPID0, atomically selects the component, and starts it. Web changes
@@ -225,7 +226,8 @@ set:
 ```sh
 python3 scripts/build-release-manifest.py \
   --input /absolute/private/release-block.json \
-  --output /absolute/private/release-manifest.json
+  --output /absolute/private/release-manifest.json \
+  --expected-source-commit "$EXPECTED_SOURCE_COMMIT"
 ```
 
 The output is deterministic, mode 0600, and refuses unknown fields, mismatched
