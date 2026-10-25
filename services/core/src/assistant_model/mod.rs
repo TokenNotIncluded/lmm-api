@@ -662,17 +662,15 @@ impl AssistantModel {
                     .await
                     .is_ok();
             }
-            if !settled {
-                if let Ok(mut tx) = service.begin().await {
-                    if service
-                        .charging
-                        .unknown_assistant(&mut tx, &request_id, &worker)
-                        .await
-                        .is_ok()
-                    {
-                        let _ = tx.commit().await;
-                    }
-                }
+            if !settled
+                && let Ok(mut tx) = service.begin().await
+                && service
+                    .charging
+                    .unknown_assistant(&mut tx, &request_id, &worker)
+                    .await
+                    .is_ok()
+            {
+                let _ = tx.commit().await;
             }
             service.operation(&original, &binding).await
         });
