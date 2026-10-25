@@ -177,27 +177,22 @@ fn image_config_value(v: &Value) -> Result<String, RelayError> {
     }
     Ok(value)
 }
-fn image_config(v: Option<&Value>, snake_case: bool) -> Result<Option<Value>, RelayError> {
+fn image_config(v: Option<&Value>) -> Result<Option<Value>, RelayError> {
     let Some(v) = v.filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    let (size_key, ratio_key) = if snake_case {
-        ("image_size", "aspect_ratio")
-    } else {
-        ("imageSize", "aspectRatio")
-    };
-    keys(v, &[size_key, ratio_key])?;
+    keys(v, &["imageSize", "aspectRatio"])?;
     let mut out = Map::new();
-    if let Some(value) = v.get(size_key) {
+    if let Some(value) = v.get("imageSize") {
         out.insert("imageSize".into(), json!(image_config_value(value)?));
     }
-    if let Some(value) = v.get(ratio_key) {
+    if let Some(value) = v.get("aspectRatio") {
         out.insert("aspectRatio".into(), json!(image_config_value(value)?));
     }
     Ok(Some(Value::Object(out)))
 }
 fn chat_image_config(v: &Value) -> Result<Option<Value>, RelayError> {
-    image_config(v.get("imageConfig"), false)
+    image_config(v.get("imageConfig"))
 }
 
 fn signature(v: Option<&Value>) -> Result<Option<(UpstreamProtocol, String)>, RelayError> {
