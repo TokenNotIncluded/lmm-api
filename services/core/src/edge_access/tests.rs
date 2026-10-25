@@ -54,7 +54,7 @@ async fn physical_peer_and_purpose_proof_are_both_required() {
     );
 }
 #[tokio::test]
-async fn middleware_replaces_client_peer_preserves_transport_and_removes_proof() {
+async fn middleware_replaces_client_peer_preserves_transport_and_removes_edge_headers() {
     async fn inspect(request: Request) -> StatusCode {
         assert_eq!(
             request
@@ -75,6 +75,7 @@ async fn middleware_replaces_client_peer_preserves_transport_and_removes_proof()
                 .is_loopback()
         );
         assert!(!request.headers().contains_key(PROOF_HEADER));
+        assert!(!request.headers().contains_key(CLIENT_HEADER));
         StatusCode::NO_CONTENT
     }
     let app = state().protect(Router::new().route("/inspect", get(inspect)));

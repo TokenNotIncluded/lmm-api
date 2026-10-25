@@ -94,6 +94,9 @@ func TestPluginAdminRoutesRequirePlatformAdministratorAndSupportLifecycle(t *tes
 	if response := pluginRequest(handler, http.MethodPost, "/api/extensions/plugins/reload", "{}", webToken); response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("reload body status=%d body=%s", response.Code, response.Body)
 	}
+	if response := pluginRequest(handler, http.MethodPost, "/api/extensions/plugins/reload", " ", webToken); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("reload whitespace status=%d body=%s", response.Code, response.Body)
+	}
 	if response := pluginRequest(handler, http.MethodPost, "/api/extensions/plugins/reload", "", webToken); response.Code != http.StatusOK || manager.reloads != 1 {
 		t.Fatalf("reload status=%d body=%s reloads=%d", response.Code, response.Body, manager.reloads)
 	}
@@ -102,6 +105,28 @@ func TestPluginAdminRoutesRequirePlatformAdministratorAndSupportLifecycle(t *tes
 	}
 	if response := pluginRequest(handler, http.MethodPost, "/api/extensions/plugins/alpha/enable", "", webToken); response.Code != http.StatusOK || !manager.enabled["alpha"] {
 		t.Fatalf("enable status=%d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestPluginInstallRejectsManifestThatExceedsBodyLimitWithWhitespace(t *testing.T) {
+	manager := &pluginControllerFake{info: []modules.PluginInfo{{Name: "alpha", Version: "1.0.0", APIVersion: 1, RegistrationSHA256: modules.RegistrationSHA256("alpha", "1.0.0"), Available: true}}, enabled: map[string]bool{}}
+	host, err := modules.NewHost(nil, []byte(hostToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.MarkReady(); err != nil {
+		t.Fatal(err)
+	}
+	core := &authCore{fn: func(_ context.Context, _ string) (*pb.AuthorizeResponse, error) {
+		self := sessionSelf()
+		self.PlatformLevel = 5
+		return self, nil
+	}}
+	handler := Mount(host, newAuth(t, core), nil, nil, AdditionalServices{Plugins: manager})
+	manifest := `{"name":"alpha","version":"1.0.0","api_version":1,"registration_sha256":"` + modules.RegistrationSHA256("alpha", "1.0.0") + `"}`
+	response := pluginRequest(handler, http.MethodPost, "/api/extensions/plugins/install", manifest+strings.Repeat(" ", 16<<10), webToken)
+	if response.Code != http.StatusUnprocessableEntity || manager.installs != 0 {
+		t.Fatalf("status=%d body=%s installs=%d", response.Code, response.Body, manager.installs)
 	}
 }
 

@@ -51,7 +51,7 @@ def response_header(response, name):
     return None
 
 
-def verify(fetch, expected_version=None, expected_identity=None):
+def verify(fetch, expected_version=None):
     status = fetch(ORIGIN + "/api/status")
     if status.status != 200 or "json" not in status.content_type:
         raise ValueError("status endpoint did not return HTTP 200 JSON")
@@ -61,21 +61,18 @@ def verify(fetch, expected_version=None, expected_identity=None):
         raise ValueError("status endpoint is not a healthy versioned response")
     if expected_version and data["version"] != expected_version:
         raise ValueError(f"backend version mismatch: expected {expected_version}, got {data['version']}")
-    if expected_identity is not None:
-        required = {
-            "x-release-commit": expected_identity["source_commit"],
-            "x-core-artifact-sha256": expected_identity["core_artifact_sha256"],
-            "x-extensions-artifact-sha256": expected_identity["extensions_artifact_sha256"],
-            "x-schema-fingerprint": expected_identity["schema_fingerprint"],
-            "x-route-identity": expected_identity["route_identity"],
-        }
-        for name, expected in required.items():
-            actual = response_header(status, name)
-            if actual != expected:
-                raise ValueError(f"public release identity mismatch: {name}")
-        request_id = response_header(status, "x-request-id") or response_header(status, "x-oneapi-request-id")
-        if not request_id or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", request_id):
-            raise ValueError("public status response has no usable request ID")
+    for name in (
+        "x-release-commit",
+        "x-core-artifact-sha256",
+        "x-extensions-artifact-sha256",
+        "x-schema-fingerprint",
+        "x-route-identity",
+    ):
+        if response_header(status, name) is not None:
+            raise ValueError(f"public status exposes private release identity: {name}")
+    request_id = response_header(status, "x-request-id") or response_header(status, "x-oneapi-request-id")
+    if not request_id or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", request_id):
+        raise ValueError("public status response has no usable request ID")
     assets = set()
     for path in ("/", "/login", "/console"):
         response = fetch(ORIGIN + path)
@@ -113,11 +110,6 @@ def verify(fetch, expected_version=None, expected_identity=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-backend-version")
-    parser.add_argument("--expected-source-commit")
-    parser.add_argument("--expected-core-artifact-sha256")
-    parser.add_argument("--expected-extensions-artifact-sha256")
-    parser.add_argument("--expected-schema-fingerprint")
-    parser.add_argument("--expected-route-identity")
     args = parser.parse_args()
     opener = urllib.request.build_opener(SameOriginRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
     deadline = time.monotonic() + 120
@@ -134,23 +126,7 @@ def main():
             return Response(response.status, response.headers.get("Content-Type", ""), body,
                             dict(response.headers.items()))
 
-    identity_values = (
-        args.expected_source_commit, args.expected_core_artifact_sha256,
-        args.expected_extensions_artifact_sha256, args.expected_schema_fingerprint,
-        args.expected_route_identity,
-    )
-    expected_identity = None
-    if any(value is not None for value in identity_values):
-        if not all(value is not None for value in identity_values):
-            parser.error("all five expected release identity values are required together")
-        expected_identity = {
-            "source_commit": args.expected_source_commit,
-            "core_artifact_sha256": args.expected_core_artifact_sha256,
-            "extensions_artifact_sha256": args.expected_extensions_artifact_sha256,
-            "schema_fingerprint": args.expected_schema_fingerprint,
-            "route_identity": args.expected_route_identity,
-        }
-    print(json.dumps(verify(fetch, args.expected_backend_version, expected_identity), sort_keys=True))
+    print(json.dumps(verify(fetch, args.expected_backend_version), sort_keys=True))
 
 
 if __name__ == "__main__":
