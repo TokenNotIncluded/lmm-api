@@ -192,10 +192,7 @@ impl ImageConfig {
         keys(v, &["imageSize", "aspectRatio"])?;
         let config = Self {
             image_size: v.get("imageSize").map(image_config_value).transpose()?,
-            aspect_ratio: v
-                .get("aspectRatio")
-                .map(image_config_value)
-                .transpose()?,
+            aspect_ratio: v.get("aspectRatio").map(image_config_value).transpose()?,
         };
         if config.image_size.is_none() && config.aspect_ratio.is_none() {
             return Ok(None);
