@@ -224,10 +224,11 @@ pub(crate) fn usage_with_cache_creation_mode(
             UpstreamProtocol::Responses => &v["input_tokens_details"],
             _ => unreachable!(),
         };
-        // Legacy OpenAI-compatible providers report either alias for the same
+        // OpenAI-compatible providers report these aliases for the same
         // cache writes. Their maximum avoids counting those tokens twice.
         let alias = counter(input_details, "cached_creation_tokens")?
-            .max(counter(input_details, "cache_write_tokens")?);
+            .max(counter(input_details, "cache_write_tokens")?)
+            .max(counter(input_details, "cache_creation_input_tokens")?);
         if let Some(alias) = alias {
             if u.cache_creation_input_tokens
                 .is_some_and(|canonical| canonical != alias)
@@ -1265,14 +1266,25 @@ mod tests {
             (UpstreamProtocol::Chat, "prompt_tokens_details"),
             (UpstreamProtocol::Responses, "input_tokens_details"),
         ] {
-            for (created, written, expected) in [
-                (None, None, None),
-                (Some(0), None, Some(0)),
-                (None, Some(0), Some(0)),
-                (Some(2), Some(5), Some(5)),
-                (Some(5), Some(2), Some(5)),
-                (Some(5), Some(5), Some(5)),
-                (Some(u64::MAX), Some(u64::MAX), Some(u64::MAX)),
+            for (created, written, nested, expected) in [
+                (None, None, None, None),
+                (Some(0), None, None, Some(0)),
+                (None, Some(0), None, Some(0)),
+                (None, None, Some(0), Some(0)),
+                (None, None, Some(5), Some(5)),
+                (Some(2), Some(5), None, Some(5)),
+                (Some(5), Some(2), None, Some(5)),
+                (Some(5), Some(5), None, Some(5)),
+                (Some(2), Some(5), Some(7), Some(7)),
+                (Some(7), Some(5), Some(2), Some(7)),
+                (Some(2), Some(7), Some(5), Some(7)),
+                (Some(5), Some(5), Some(5), Some(5)),
+                (
+                    Some(u64::MAX),
+                    Some(u64::MAX),
+                    Some(u64::MAX),
+                    Some(u64::MAX),
+                ),
             ] {
                 let mut receipt = serde_json::json!({});
                 receipt[field] = serde_json::json!({});
@@ -1282,13 +1294,17 @@ mod tests {
                 if let Some(value) = written {
                     receipt[field]["cache_write_tokens"] = serde_json::json!(value);
                 }
+                if let Some(value) = nested {
+                    receipt[field]["cache_creation_input_tokens"] = serde_json::json!(value);
+                }
                 let decoded = usage(protocol, &receipt).unwrap();
                 assert_eq!(decoded.cache_creation_input_tokens, expected, "{receipt}");
                 assert_eq!(decoded.cache_creation_details, None);
             }
             let mut receipt = serde_json::json!({});
             receipt[field] = serde_json::json!({
-                "cached_creation_tokens":null,"cache_write_tokens":null
+                "cached_creation_tokens":null,"cache_write_tokens":null,
+                "cache_creation_input_tokens":null
             });
             assert_eq!(
                 usage(protocol, &receipt)
@@ -1300,6 +1316,46 @@ mod tests {
     }
 
     #[test]
+    fn nested_cache_creation_alias_preserves_inclusive_input_and_cache_bounds() {
+        for (protocol, input, output, field) in [
+            (
+                UpstreamProtocol::Chat,
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+            ),
+            (
+                UpstreamProtocol::Responses,
+                "input_tokens",
+                "output_tokens",
+                "input_tokens_details",
+            ),
+        ] {
+            let mut receipt = serde_json::json!({});
+            receipt[input] = serde_json::json!(100);
+            receipt[output] = serde_json::json!(5);
+            receipt[field] = serde_json::json!({
+                "cached_tokens":20,"cache_write_tokens":10,
+                "cache_creation_input_tokens":30
+            });
+            let decoded = usage(protocol, &receipt).unwrap();
+            assert_eq!(decoded.input_tokens, Some(100), "{receipt}");
+            assert_eq!(decoded.output_tokens, Some(5), "{receipt}");
+            assert_eq!(decoded.cached_input_tokens, Some(20), "{receipt}");
+            assert_eq!(decoded.cache_creation_input_tokens, Some(30), "{receipt}");
+
+            receipt["cache_creation_input_tokens"] = serde_json::json!(20);
+            assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+            receipt
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_creation_input_tokens");
+            receipt[field]["cached_tokens"] = serde_json::json!(71);
+            assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+        }
+    }
+
+    #[test]
     fn openai_cache_creation_aliases_must_match_canonical_and_ttl_totals() {
         for (protocol, field) in [
             (UpstreamProtocol::Chat, "prompt_tokens_details"),
@@ -1307,7 +1363,8 @@ mod tests {
         ] {
             let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
             receipt[field] = serde_json::json!({
-                "cached_creation_tokens":2,"cache_write_tokens":5
+                "cached_creation_tokens":2,"cache_write_tokens":3,
+                "cache_creation_input_tokens":5
             });
             assert_eq!(
                 usage(protocol, &receipt)
@@ -1352,7 +1409,11 @@ mod tests {
             (UpstreamProtocol::Chat, "prompt_tokens_details"),
             (UpstreamProtocol::Responses, "input_tokens_details"),
         ] {
-            for alias in ["cached_creation_tokens", "cache_write_tokens"] {
+            for alias in [
+                "cached_creation_tokens",
+                "cache_write_tokens",
+                "cache_creation_input_tokens",
+            ] {
                 for invalid in [
                     serde_json::json!(-1),
                     serde_json::json!(1.0),
@@ -1364,7 +1425,8 @@ mod tests {
                 ] {
                     let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
                     receipt[field] = serde_json::json!({
-                        "cached_creation_tokens":5,"cache_write_tokens":5
+                        "cached_creation_tokens":5,"cache_write_tokens":5,
+                        "cache_creation_input_tokens":5
                     });
                     receipt[field][alias] = invalid;
                     assert!(usage(protocol, &receipt).is_err(), "{receipt}");

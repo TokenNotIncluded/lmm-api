@@ -889,7 +889,7 @@ impl Request {
             return Err(RelayError::Unsupported("Anthropic temperature exceeds one"));
         }
         let (system, source) = self.split_system()?;
-        let mut messages = Vec::new();
+        let mut messages: Vec<(Role, Vec<Value>)> = Vec::new();
         for m in source {
             let mut content = Vec::new();
             for b in &m.content {
@@ -901,8 +901,25 @@ impl Request {
                 InputBlock::ToolResult { id, content } => json!({"type":"tool_result","tool_use_id":id,"content":content}),
             });
             }
-            messages.push(json!({"role":if m.role == Role::Assistant {"assistant"} else {"user"},"content":content}));
+            let role = if m.role == Role::Assistant {
+                Role::Assistant
+            } else {
+                Role::User
+            };
+            if let Some((last_role, last_content)) = messages.last_mut()
+                && *last_role == role
+            {
+                last_content.extend(content);
+            } else {
+                messages.push((role, content));
+            }
         }
+        let messages = messages
+            .into_iter()
+            .map(|(role, content)| {
+                json!({"role":if role == Role::Assistant {"assistant"} else {"user"},"content":content})
+            })
+            .collect::<Vec<_>>();
         let mut v = json!({"model":model,"system":system,"messages":messages,"stream":self.stream,"max_tokens":self.max_output_tokens});
         if !self.tools.is_empty() {
             v["tools"] = json!(
