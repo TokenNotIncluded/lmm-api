@@ -231,9 +231,17 @@ def source_observation(receipt: dict) -> dict:
     value = receipt.get("started_utc")
     require(isinstance(value, str), "source_capture_start_missing")
     try:
-        instant = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", value):
+            instant = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        else:
+            require(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+                                 r"(?:\.[0-9]{1,6})?(?:Z|\+00:00)", value) is not None,
+                    "source_capture_start_invalid")
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         raise MappingError("source_capture_start_invalid") from None
+    # Keep exact capture precision in ISO evidence; owner payloads use the
+    # conservative whole-second floor, including for pre-epoch observations.
     delta = instant - datetime(1970, 1, 1, tzinfo=timezone.utc)
     return {"observed_at": delta.days * 86400 + delta.seconds,
             "capture_window_started_at_iso": instant.isoformat(), "basis": "frozen_dump_capture_started_utc",
@@ -266,7 +274,7 @@ def build_opening_payloads(plan: dict, *, migration_id: str, observation: dict,
         raise MappingError("source_observation_invalid") from None
     require(instant.tzinfo is not None and instant.utcoffset().total_seconds() == 0, "source_observation_not_utc")
     delta = instant - datetime(1970, 1, 1, tzinfo=timezone.utc)
-    require(instant.microsecond == 0 and delta.days * 86400 + delta.seconds == observed_at,
+    require(delta.days * 86400 + delta.seconds == observed_at,
             "source_observation_epoch_iso_mismatch")
     require(reservation_reconciliation.get("source_archive_sha256") == source_hash and
             reservation_reconciliation.get("mapping_sha256") == mapping_hash,
@@ -828,7 +836,7 @@ def build_full_financial_manifest(plan: dict, tables: dict[str, list[dict]], ide
         require(observed.tzinfo is not None and observed.utcoffset().total_seconds() == 0,
                 "full_manifest_observation_invalid")
         delta = observed - datetime(1970, 1, 1, tzinfo=timezone.utc)
-        require(delta.microseconds == 0 and delta.days * 86400 + delta.seconds == source_observation["observed_at"],
+        require(delta.days * 86400 + delta.seconds == source_observation["observed_at"],
                 "full_manifest_observation_invalid")
     except (KeyError, TypeError, ValueError):
         raise MappingError("full_manifest_observation_invalid") from None
