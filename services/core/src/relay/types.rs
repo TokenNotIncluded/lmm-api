@@ -143,6 +143,10 @@ pub struct Limits {
     /// Only connect failures, before an HTTP request is sent, may be retried.
     pub connect_retries: u8,
     pub retry_backoff: Duration,
+    /// Anthropic Messages streaming keepalive. The first SSE comment waits one
+    /// full interval, so a response that starts sooner is left unchanged.
+    /// Other client protocols do not emit these comments.
+    pub ping_interval: Duration,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -166,6 +170,7 @@ impl Default for Limits {
             hook_timeout: Duration::from_secs(10),
             connect_retries: 0,
             retry_backoff: Duration::from_millis(200),
+            ping_interval: Duration::from_secs(10),
         }
     }
 }
@@ -191,9 +196,11 @@ impl Limits {
             self.total_timeout,
             self.hook_timeout,
             self.retry_backoff,
+            self.ping_interval,
         ];
         if sizes.contains(&0)
             || times.iter().any(Duration::is_zero)
+            || self.ping_interval < Duration::from_millis(1)
             || self.max_output_tokens == 0
             || self.max_in_flight > 4096
             || self.queue_chunks > 1024

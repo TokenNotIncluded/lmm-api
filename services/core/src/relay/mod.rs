@@ -6,6 +6,7 @@ mod decode;
 mod encode;
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
+mod keepalive;
 mod native;
 pub(crate) mod native_anthropic;
 pub(crate) mod native_gemini;
@@ -334,7 +335,8 @@ struct Worker {
     context: RequestContext,
     gate: Gate,
     sender: mpsc::Sender<Result<Bytes, RelayError>>,
-    head: Option<oneshot::Sender<Result<ResponseHead, RelayError>>>,
+    head: Arc<Mutex<Option<oneshot::Sender<Result<ResponseHead, RelayError>>>>>,
+    keepalive: Option<keepalive::KeepAlive>,
     done: oneshot::Sender<Completion>,
     encoder: Encoder,
     reservation: Option<Reservation>,
@@ -375,7 +377,8 @@ impl Worker {
             context,
             gate: Gate { cancel, deadline },
             sender,
-            head: Some(head),
+            head: Arc::new(Mutex::new(Some(head))),
+            keepalive: None,
             done,
             encoder,
             reservation: None,
@@ -386,18 +389,93 @@ impl Worker {
         }
     }
     fn send_head(&mut self) -> Result<(), RelayError> {
-        if let Some(head) = self.head.take() {
+        let content_type = if self.request.stream {
+            keepalive::STREAM_CONTENT_TYPE
+        } else {
+            "application/json"
+        };
+        let mut guard = self
+            .head
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(head) = guard.take() {
             head.send(Ok(ResponseHead {
                 status: 200,
-                content_type: if self.request.stream {
-                    "text/event-stream; charset=utf-8"
-                } else {
-                    "application/json"
-                },
+                content_type,
             }))
             .map_err(|_| RelayError::Cancelled)?;
         }
         Ok(())
+    }
+    fn arm_anthropic_keepalive(&mut self) {
+        if self.request.stream && self.request.client == ClientProtocol::Anthropic {
+            self.keepalive = Some(keepalive::KeepAlive::spawn(
+                self.inner.limits.ping_interval,
+                self.inner.limits.write_timeout,
+                self.inner.limits.chunk_bytes,
+                self.gate.cancel.clone(),
+                Arc::clone(&self.head),
+                self.sender.clone(),
+            ));
+        }
+    }
+    async fn stop_keepalive(&mut self) -> Result<(), RelayError> {
+        let Some(keepalive) = self.keepalive.take() else {
+            return Ok(());
+        };
+        let done = keepalive.finish().await;
+        self.report.emitted_bytes = self.report.emitted_bytes.saturating_add(done.emitted_bytes);
+        match done.error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+    /// Wait for the next upstream chunk. Anthropic streams emit an SSE comment
+    /// when the upstream stays idle, without extending the read deadline and
+    /// without cancelling the in-flight read.
+    async fn next_anthropic_chunk(
+        &mut self,
+        response: &mut reqwest::Response,
+    ) -> Result<Option<Bytes>, RelayError> {
+        let read_deadline = Instant::now() + self.inner.limits.read_timeout;
+        let mut next_ping = Instant::now() + self.inner.limits.ping_interval;
+        let chunk = response.chunk();
+        tokio::pin!(chunk);
+        loop {
+            let end = self.gate.deadline.min(read_deadline);
+            enum Wake {
+                Cancel,
+                Deadline,
+                Chunk(Result<Option<Bytes>, RelayError>),
+                Ping,
+            }
+            let wake = tokio::select! {
+                biased;
+                _ = self.gate.cancel.cancelled() => Wake::Cancel,
+                _ = tokio::time::sleep_until(end) => Wake::Deadline,
+                result = &mut chunk => Wake::Chunk(
+                    result.map_err(|_| RelayError::UpstreamConnection),
+                ),
+                _ = tokio::time::sleep_until(next_ping) => Wake::Ping,
+            };
+            match wake {
+                Wake::Cancel => return Err(RelayError::Cancelled),
+                Wake::Deadline => {
+                    return Err(RelayError::Timeout(
+                        if Instant::now() >= self.gate.deadline {
+                            Phase::Total
+                        } else {
+                            Phase::Read
+                        },
+                    ));
+                }
+                Wake::Chunk(result) => return result,
+                Wake::Ping => {
+                    self.write(keepalive::FRAME).await?;
+                    next_ping = Instant::now() + self.inner.limits.ping_interval;
+                }
+            }
+        }
     }
     async fn write(&mut self, bytes: &[u8]) -> Result<(), RelayError> {
         for chunk in bytes.chunks(self.inner.limits.chunk_bytes) {
@@ -589,6 +667,9 @@ impl Worker {
         }
     }
     async fn execute(&mut self) -> Result<(), RelayError> {
+        // Cover routing, reservation and connect retries. Business writes join
+        // this task first so a comment cannot race the response head or a frame.
+        self.arm_anthropic_keepalive();
         let route = self
             .gate
             .run(
@@ -663,18 +744,22 @@ impl Worker {
             route.cache_creation_mode,
         );
         if self.request.stream {
+            self.stop_keepalive().await?;
             self.send_head()?;
             let mut parser = sse::Parser::new(self.inner.limits.event_bytes);
             'read: loop {
-                let next = self
-                    .gate
-                    .run(self.inner.limits.read_timeout, Phase::Read, async {
-                        response
-                            .chunk()
-                            .await
-                            .map_err(|_| RelayError::UpstreamConnection)
-                    })
-                    .await?;
+                let next = if self.request.client == ClientProtocol::Anthropic {
+                    self.next_anthropic_chunk(&mut response).await?
+                } else {
+                    self.gate
+                        .run(self.inner.limits.read_timeout, Phase::Read, async {
+                            response
+                                .chunk()
+                                .await
+                                .map_err(|_| RelayError::UpstreamConnection)
+                        })
+                        .await?
+                };
                 let Some(chunk) = next else {
                     parser.finish()?;
                     self.events(decoder.eof()?).await?;
@@ -725,6 +810,11 @@ impl Worker {
     }
     async fn run(mut self) {
         let mut error = self.execute().await.err();
+        if let Err(stop_error) = self.stop_keepalive().await
+            && error.is_none()
+        {
+            error = Some(stop_error);
+        }
         self.report.usage = self.encoder.usage();
         self.report.finish_reason = self.encoder.finish_reason();
         self.report.outcome = match &error {
@@ -765,7 +855,12 @@ impl Worker {
             }
         }
         if let Some(e) = &error {
-            if let Some(head) = self.head.take() {
+            let pending = self
+                .head
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(head) = pending {
                 let _ = head.send(Err(e.clone()));
             } else if !self.sender.is_closed() {
                 let packet = if self.request.stream {
