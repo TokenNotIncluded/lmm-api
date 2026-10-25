@@ -28,6 +28,66 @@ fn frame(decoder: &mut Decoder, v: Value) -> Result<Vec<Event>, RelayError> {
         data: v.to_string(),
     })
 }
+fn chat_request(body: Value) -> Request {
+    Request::parse(
+        ClientProtocol::Chat,
+        &serde_json::to_vec(&body).unwrap(),
+        &Limits::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn chat_gemini_image_config_preserves_top_level_and_bounded_google_override() {
+    let cases = [
+        (
+            json!({"imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}}),
+            json!({"imageSize":"4K","aspectRatio":"16:9"}),
+        ),
+        (
+            json!({"imageConfig":{"imageSize":"1K"},"extra_body":{"google":{"image_config":{"image_size":"4K"}}}}),
+            json!({"imageSize":"4K"}),
+        ),
+        (
+            json!({"imageConfig":{"imageSize":"4K"},"extra_body":{"google":{"image_config":{}}}}),
+            json!({"imageSize":"4K"}),
+        ),
+    ];
+    for (fields, expected) in cases {
+        let mut body = fields;
+        body["model"] = json!("gemini-3.1-flash-image-preview");
+        body["messages"] = json!([{"role":"user","content":"draw"}]);
+        let upstream = chat_request(body)
+            .upstream_to(UpstreamProtocol::Gemini, "image-model")
+            .unwrap();
+        assert_eq!(upstream["generationConfig"]["imageConfig"], expected);
+        assert!(upstream.get("imageConfig").is_none());
+    }
+}
+
+#[test]
+fn chat_image_config_rejects_unknown_fields_and_non_gemini_routes() {
+    let mut invalid = json!({"model":"image-model","messages":[{"role":"user","content":"draw"}]});
+    invalid["imageConfig"] = json!({"unknown":"value"});
+    assert!(matches!(
+        Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&invalid).unwrap(),
+            &Limits::default(),
+        ),
+        Err(RelayError::Unsupported(_))
+    ));
+
+    let request = chat_request(json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"4K"}
+    }));
+    assert!(matches!(
+        request.upstream_to(UpstreamProtocol::Chat, "chat-model"),
+        Err(RelayError::Unsupported(_))
+    ));
+}
 
 #[test]
 fn responses_cache_lifetime_is_bounded_and_not_silently_lost_in_conversion() {
