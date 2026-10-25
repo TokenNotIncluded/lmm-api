@@ -477,3 +477,201 @@ fn invalid_usage_does_not_partially_replace_the_last_valid_snapshot() {
     );
     assert_eq!(current, before);
 }
+
+#[test]
+fn anthropic_merges_adjacent_assistant_tool_history_in_order() {
+    let body = json!({
+        "model": "alias",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "first",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "first_tool", "arguments": "{}"}
+                }]
+            },
+            {
+                "role": "assistant",
+                "content": "second",
+                "tool_calls": [{
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "second_tool", "arguments": "{}"}
+                }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "first result"
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "content": "second result"
+            }
+        ]
+    });
+    let body = match serde_json::to_vec(&body) {
+        Ok(body) => body,
+        Err(error) => panic!("test request serializes: {error}"),
+    };
+    let request = match Request::parse(ClientProtocol::Chat, &body, &Limits::default()) {
+        Ok(request) => request,
+        Err(error) => panic!("test request parses: {error}"),
+    };
+    let route = match Route::new(
+        "anthropic".into(),
+        UpstreamProtocol::Anthropic,
+        "https://example.test/messages",
+        "claude".into(),
+        "test-only",
+        1,
+    ) {
+        Ok(route) => route,
+        Err(error) => panic!("test route is valid: {error}"),
+    };
+    let payload = match request.upstream(&route) {
+        Ok(payload) => payload,
+        Err(error) => panic!("test request converts: {error}"),
+    };
+    let messages = payload["messages"].as_array();
+    assert_eq!(messages.map(Vec::len), Some(2));
+    assert_eq!(
+        messages
+            .and_then(|messages| messages.first())
+            .and_then(|message| message["role"].as_str()),
+        Some("assistant")
+    );
+    let content = messages
+        .and_then(|messages| messages.first())
+        .and_then(|message| message["content"].as_array());
+    assert_eq!(content.map(Vec::len), Some(4));
+    assert_eq!(
+        content
+            .and_then(|content| content.first())
+            .and_then(|item| item["text"].as_str()),
+        Some("first")
+    );
+    assert_eq!(
+        content
+            .and_then(|content| content.get(1))
+            .and_then(|item| item["id"].as_str()),
+        Some("call_1")
+    );
+    assert_eq!(
+        content
+            .and_then(|content| content.get(2))
+            .and_then(|item| item["text"].as_str()),
+        Some("second")
+    );
+    assert_eq!(
+        content
+            .and_then(|content| content.get(3))
+            .and_then(|item| item["id"].as_str()),
+        Some("call_2")
+    );
+    let tool_results = messages
+        .and_then(|messages| messages.get(1))
+        .and_then(|message| message["content"].as_array());
+    assert_eq!(
+        messages
+            .and_then(|messages| messages.get(1))
+            .and_then(|message| message["role"].as_str()),
+        Some("user")
+    );
+    assert_eq!(tool_results.map(Vec::len), Some(2));
+    assert_eq!(
+        tool_results
+            .and_then(|items| items.first())
+            .and_then(|item| item["tool_use_id"].as_str()),
+        Some("call_1")
+    );
+    assert_eq!(
+        tool_results
+            .and_then(|items| items.get(1))
+            .and_then(|item| item["tool_use_id"].as_str()),
+        Some("call_2")
+    );
+}
+
+#[test]
+fn anthropic_merging_preserves_system_and_empty_role_boundaries() {
+    let body = json!({"model":"alias","messages":[
+        {"role":"system","content":"first instruction"},
+        {"role":"developer","content":"second instruction"},
+        {"role":"user","content":"first"},
+        {"role":"user","content":"second"},
+        {"role":"assistant","content":null},
+        {"role":"user","content":"third"}
+    ]});
+    let request = Request::parse(
+        ClientProtocol::Chat,
+        &serde_json::to_vec(&body).expect("system and role-boundary fixture serializes"),
+        &Limits::default(),
+    )
+    .expect("system and role-boundary fixture parses");
+    let payload = request
+        .upstream_to(UpstreamProtocol::Anthropic, "claude")
+        .expect("system and role-boundary fixture converts");
+    assert_eq!(
+        payload["system"],
+        json!([
+            {"type":"text","text":"first instruction"},
+            {"type":"text","text":"second instruction"}
+        ])
+    );
+    assert_eq!(
+        payload["messages"],
+        json!([
+            {"role":"user","content":[{"type":"text","text":"first"},{"type":"text","text":"second"}]},
+            {"role":"assistant","content":[]},
+            {"role":"user","content":[{"type":"text","text":"third"}]}
+        ])
+    );
+    for role in ["system", "developer"] {
+        let body = json!({"model":"alias","messages":[
+            {"role":"assistant","content":null},
+            {"role":role,"content":"late instruction"}
+        ]});
+        let request = Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&body).expect("late system fixture serializes"),
+            &Limits::default(),
+        )
+        .expect("late system fixture parses");
+        assert!(matches!(
+            request.upstream_to(UpstreamProtocol::Anthropic, "claude"),
+            Err(RelayError::Unsupported(_))
+        ));
+    }
+}
+
+#[test]
+fn anthropic_merging_preserves_signed_thinking_and_empty_same_role_messages() {
+    let body = json!({"model":"alias","messages":[
+        {"role":"assistant","content":null},
+        {"role":"assistant","reasoning_content":"first thought","provider_metadata":{"protocol":"anthropic","signature":"first_signature"},"content":"first answer"},
+        {"role":"assistant","content":[]},
+        {"role":"assistant","reasoning_content":"second thought","provider_metadata":{"protocol":"anthropic","signature":"second_signature"},"content":"second answer"}
+    ]});
+    let request = Request::parse(
+        ClientProtocol::Chat,
+        &serde_json::to_vec(&body).expect("signed thinking fixture serializes"),
+        &Limits::default(),
+    )
+    .expect("signed thinking fixture parses");
+    let payload = request
+        .upstream_to(UpstreamProtocol::Anthropic, "claude")
+        .expect("signed thinking fixture converts");
+    assert_eq!(
+        payload["messages"],
+        json!([{"role":"assistant","content":[
+            {"type":"thinking","thinking":"first thought","signature":"first_signature"},
+            {"type":"text","text":"first answer"},
+            {"type":"thinking","thinking":"second thought","signature":"second_signature"},
+            {"type":"text","text":"second answer"}
+        ]}])
+    );
+}
