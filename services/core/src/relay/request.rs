@@ -90,6 +90,8 @@ pub struct Request {
     pub reasoning_effort: Option<String>,
     /// Bounded Responses cache controls; never evidence of actual billed writes.
     pub prompt_cache_options: Option<Value>,
+    /// Bounded Chat image controls, only emitted on a Gemini route.
+    image_config: Option<Value>,
     pub(crate) include_usage: bool,
 }
 
@@ -163,6 +165,57 @@ fn number(v: Option<&Value>, max: f64) -> Result<Option<f64>, RelayError> {
         })
         .transpose()
 }
+fn image_config_value(v: &Value) -> Result<String, RelayError> {
+    let value = string(v)?;
+    if value.is_empty()
+        || value.len() > 32
+        || value
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+    {
+        return Err(RelayError::Invalid("invalid Gemini image config value"));
+    }
+    Ok(value)
+}
+fn image_config(v: Option<&Value>, snake_case: bool) -> Result<Option<Value>, RelayError> {
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let (size_key, ratio_key) = if snake_case {
+        ("image_size", "aspect_ratio")
+    } else {
+        ("imageSize", "aspectRatio")
+    };
+    keys(v, &[size_key, ratio_key])?;
+    let mut out = Map::new();
+    if let Some(value) = v.get(size_key) {
+        out.insert("imageSize".into(), json!(image_config_value(value)?));
+    }
+    if let Some(value) = v.get(ratio_key) {
+        out.insert("aspectRatio".into(), json!(image_config_value(value)?));
+    }
+    Ok(Some(Value::Object(out)))
+}
+fn chat_image_config(v: &Value) -> Result<Option<Value>, RelayError> {
+    let top_level = image_config(v.get("imageConfig"), false)?;
+    let Some(extra_body) = v.get("extra_body").filter(|v| !v.is_null()) else {
+        return Ok(top_level);
+    };
+    keys(extra_body, &["google"])?;
+    let Some(google) = extra_body.get("google").filter(|v| !v.is_null()) else {
+        return Ok(top_level);
+    };
+    keys(google, &["image_config"])?;
+    let Some(override_config) = image_config(google.get("image_config"), true)? else {
+        return Ok(top_level);
+    };
+    if override_config.as_object().is_some_and(|config| !config.is_empty()) {
+        Ok(Some(override_config))
+    } else {
+        Ok(top_level)
+    }
+}
+
 fn signature(v: Option<&Value>) -> Result<Option<(UpstreamProtocol, String)>, RelayError> {
     let Some(v) = v.filter(|v| !v.is_null()) else {
         return Ok(None);
@@ -252,7 +305,29 @@ impl Request {
                 .0,
         );
         match client {
-            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
+            ClientProtocol::Chat => keys(
+                &v,
+                &[
+                    "model",
+                    "messages",
+                    "stream",
+                    "stream_options",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "temperature",
+                    "top_p",
+                    "stop",
+                    "tools",
+                    "tool_choice",
+                    "parallel_tool_calls",
+                    "n",
+                    "reasoning_effort",
+                    "store",
+                    "imageConfig",
+                    "extra_body",
+                ],
+            )?,
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
                 &v,
                 &[
                     "model",
@@ -613,6 +688,11 @@ impl Request {
         if count > 4096 {
             return Err(RelayError::Limit("input block count"));
         }
+        let image_config = if client == ClientProtocol::Chat {
+            chat_image_config(&v)?
+        } else {
+            None
+        };
         let prompt_cache_options = v
             .get("prompt_cache_options")
             .filter(|value| !value.is_null())
@@ -650,6 +730,7 @@ impl Request {
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
             prompt_cache_options,
+            image_config,
         })
     }
 
@@ -695,6 +776,11 @@ impl Request {
                     ));
                 }
             }
+        }
+        if self.image_config.is_some() && protocol != UpstreamProtocol::Gemini {
+            return Err(RelayError::Unsupported(
+                "imageConfig requires a Gemini route",
+            ));
         }
         if matches!(
             protocol,
@@ -974,6 +1060,9 @@ impl Request {
         }
         if !self.stop.is_empty() {
             generation["stopSequences"] = json!(self.stop);
+        }
+        if let Some(image_config) = &self.image_config {
+            generation["imageConfig"] = image_config.clone();
         }
         let mut v = json!({"contents":contents,"generationConfig":generation});
         if !system.is_empty() {
