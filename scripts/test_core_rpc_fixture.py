@@ -433,6 +433,50 @@ class DurableOutputTests(unittest.TestCase):
             self.assertNotEqual(error.exception.code, 0)
             run.assert_not_called()
 
+    def test_cli_forwards_bounded_build_timeout_to_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "timeout-evidence"
+            inputs = {
+                "LICENSE": hashlib.sha256(
+                    (FIXTURE.ROOT / "LICENSE").read_bytes()
+                ).hexdigest()
+            }
+            observed = {}
+
+            def execute(root, projects, context, *, build_timeout_seconds):
+                observed["seconds"] = build_timeout_seconds
+
+            with (
+                mock.patch.object(FIXTURE, "source_inputs", return_value=inputs),
+                mock.patch.object(FIXTURE, "execute", side_effect=execute),
+                mock.patch.object(FIXTURE.FixtureRun, "capture_owned", return_value=[]),
+            ):
+                self.assertEqual(
+                    FIXTURE.main(
+                        [
+                            "--output-root",
+                            str(root),
+                            "--build-timeout-seconds",
+                            "2400",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(observed, {"seconds": 2400})
+
+    def test_cli_rejects_unbounded_build_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(SystemExit) as error:
+                FIXTURE.main(
+                    [
+                        "--output-root",
+                        str(Path(directory) / "timeout-evidence"),
+                        "--build-timeout-seconds",
+                        "3601",
+                    ]
+                )
+            self.assertNotEqual(error.exception.code, 0)
+
     def test_relative_output_is_rejected_without_creating_it(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
@@ -802,7 +846,7 @@ class FailureLifecycleTests(unittest.TestCase):
             }
             canary = "synthetic-error-must-not-be-public"
 
-            def fail(root, projects, context):
+            def fail(root, projects, context, **_kwargs):
                 FIXTURE.private_write(root / "retained-secret", canary)
                 raise RuntimeError(canary)
 
