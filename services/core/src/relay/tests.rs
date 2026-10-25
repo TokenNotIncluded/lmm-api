@@ -477,3 +477,18 @@ fn invalid_usage_does_not_partially_replace_the_last_valid_snapshot() {
     );
     assert_eq!(current, before);
 }
+
+
+#[test]
+fn anthropic_merges_adjacent_assistant_tool_history_in_order() {
+    let body = json!({"model":"alias","messages":[{"role":"assistant","content":"first","tool_calls":[{"id":"call_1","type":"function","function":{"name":"first_tool","arguments":"{}"}}]},{"role":"assistant","content":"second","tool_calls":[{"id":"call_2","type":"function","function":{"name":"second_tool","arguments":"{}"}}]}]});
+    let request = Request::parse(ClientProtocol::Chat, &serde_json::to_vec(&body).unwrap(), &Limits::default()).unwrap();
+    let route = Route::new("anthropic".into(), UpstreamProtocol::Anthropic, "https://example.test/messages", "claude".into(), "test-only", 1).unwrap();
+    let payload = request.upstream(&route).unwrap();
+    let messages = payload["messages"].as_array();
+    assert_eq!(messages.map(Vec::len), Some(1));
+    let content = messages.and_then(|messages| messages.first()).and_then(|message| message["content"].as_array());
+    assert_eq!(content.map(Vec::len), Some(4));
+    assert_eq!(content.and_then(|content| content.get(1)).and_then(|item| item["id"].as_str()), Some("call_1"));
+    assert_eq!(content.and_then(|content| content.get(3)).and_then(|item| item["id"].as_str()), Some("call_2"));
+}
