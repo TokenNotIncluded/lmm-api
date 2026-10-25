@@ -90,8 +90,8 @@ pub struct Request {
     pub reasoning_effort: Option<String>,
     /// Bounded Responses cache controls; never evidence of actual billed writes.
     pub prompt_cache_options: Option<Value>,
-    /// Bounded Chat image controls, only emitted on a Gemini route.
-    image_config: Option<Value>,
+    /// Validated Chat image controls, only emitted on a Gemini route.
+    image_config: Option<ImageConfig>,
     pub(crate) include_usage: bool,
 }
 
@@ -177,22 +177,46 @@ fn image_config_value(v: &Value) -> Result<String, RelayError> {
     }
     Ok(value)
 }
-fn image_config(v: Option<&Value>) -> Result<Option<Value>, RelayError> {
-    let Some(v) = v.filter(|v| !v.is_null()) else {
-        return Ok(None);
-    };
-    keys(v, &["imageSize", "aspectRatio"])?;
-    let mut out = Map::new();
-    if let Some(value) = v.get("imageSize") {
-        out.insert("imageSize".into(), json!(image_config_value(value)?));
-    }
-    if let Some(value) = v.get("aspectRatio") {
-        out.insert("aspectRatio".into(), json!(image_config_value(value)?));
-    }
-    Ok(Some(Value::Object(out)))
+
+#[derive(Clone, Debug)]
+struct ImageConfig {
+    image_size: Option<String>,
+    aspect_ratio: Option<String>,
 }
-fn chat_image_config(v: &Value) -> Result<Option<Value>, RelayError> {
-    image_config(v.get("imageConfig"))
+
+impl ImageConfig {
+    fn parse(v: Option<&Value>) -> Result<Option<Self>, RelayError> {
+        let Some(v) = v.filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        keys(v, &["imageSize", "aspectRatio"])?;
+        let config = Self {
+            image_size: v.get("imageSize").map(image_config_value).transpose()?,
+            aspect_ratio: v
+                .get("aspectRatio")
+                .map(image_config_value)
+                .transpose()?,
+        };
+        if config.image_size.is_none() && config.aspect_ratio.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(config))
+    }
+
+    fn to_gemini_value(&self) -> Value {
+        let mut value = Map::new();
+        if let Some(image_size) = &self.image_size {
+            value.insert("imageSize".into(), json!(image_size));
+        }
+        if let Some(aspect_ratio) = &self.aspect_ratio {
+            value.insert("aspectRatio".into(), json!(aspect_ratio));
+        }
+        Value::Object(value)
+    }
+}
+
+fn chat_image_config(v: &Value) -> Result<Option<ImageConfig>, RelayError> {
+    ImageConfig::parse(v.get("imageConfig"))
 }
 
 fn signature(v: Option<&Value>) -> Result<Option<(UpstreamProtocol, String)>, RelayError> {
@@ -1040,7 +1064,7 @@ impl Request {
             generation["stopSequences"] = json!(self.stop);
         }
         if let Some(image_config) = &self.image_config {
-            generation["imageConfig"] = image_config.clone();
+            generation["imageConfig"] = image_config.to_gemini_value();
         }
         let mut v = json!({"contents":contents,"generationConfig":generation});
         if !system.is_empty() {
