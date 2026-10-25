@@ -873,7 +873,8 @@ def verify_source_files(material: dict) -> None:
         import legacy_escrow_mapping as mapper
         candidate = mapper.build(PLANNER, tables=tables, identity_records=records, plan=material["source_plan"],
             migration_id=material["migration_id"], observed_at=material["observation"]["observed_at"],
-            source_proof=proof, unit_evidence=material["escrow_unit_evidence"])
+            source_proof=proof, unit_evidence=material["escrow_unit_evidence"],
+            post_parent_claim_evidence=material["escrow_candidate"].get("post_parent_claim_evidence"))
         require(digest(candidate) == digest(material["escrow_candidate"]), "escrow_source_mapper_rebuild_mismatch")
 
 
