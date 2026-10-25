@@ -2,8 +2,8 @@
 //! total stream lifetime or a connection-wide read-idle timeout.
 //!
 //! Adapter pattern adapted from the official MIT-licensed examples:
-//! https://github.com/tokio-rs/axum/blob/c5a451d94ba063e026d3b450795abf39744bd1c5/examples/serve-with-hyper/src/main.rs
-//! https://github.com/hyperium/hyper-util/blob/v0.1.21/examples/server_graceful.rs
+//! <https://github.com/tokio-rs/axum/blob/c5a451d94ba063e026d3b450795abf39744bd1c5/examples/serve-with-hyper/src/main.rs>
+//! <https://github.com/hyperium/hyper-util/blob/v0.1.21/examples/server_graceful.rs>
 //! Copyright (c) 2019 axum Contributors; Copyright (c) 2023-2025 Sean McArthur.
 //! HTTP parsing remains Hyper-owned.
 //!

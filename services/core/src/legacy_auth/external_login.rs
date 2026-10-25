@@ -43,17 +43,17 @@ pub(super) fn cookie_value<'a>(
             if part.trim() == name {
                 return Err(IdentityError::Unauthorized);
             }
-            if let Some((key, value)) = part.trim().split_once('=') {
-                if key == name {
-                    if found.is_some()
-                        || value.len() != length
-                        || !value.starts_with(prefix)
-                        || !value[prefix.len()..].bytes().all(|b| b.is_ascii_hexdigit())
-                    {
-                        return Err(IdentityError::Unauthorized);
-                    }
-                    found = Some(value);
+            if let Some((key, value)) = part.trim().split_once('=')
+                && key == name
+            {
+                if found.is_some()
+                    || value.len() != length
+                    || !value.starts_with(prefix)
+                    || !value[prefix.len()..].bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    return Err(IdentityError::Unauthorized);
                 }
+                found = Some(value);
             }
         }
     }
@@ -162,17 +162,17 @@ async fn callback(
     query: Result<Query<Callback>, QueryRejection>,
     provider: ExternalProvider,
 ) -> Response {
-    if let Ok(Query(query)) = &query {
-        if query.external_mfa.as_deref() == Some("1") {
-            if query.code.is_some()
-                || query.state.is_some()
-                || query.error.is_some()
-                || query.iss.is_some()
-            {
-                return auth_failure(IdentityError::Invalid.into());
-            }
-            return pending_mfa(&state, &headers).await;
+    if let Ok(Query(query)) = &query
+        && query.external_mfa.as_deref() == Some("1")
+    {
+        if query.code.is_some()
+            || query.state.is_some()
+            || query.error.is_some()
+            || query.iss.is_some()
+        {
+            return auth_failure(IdentityError::Invalid.into());
         }
+        return pending_mfa(&state, &headers).await;
     }
     let direct_browser = headers
         .get(header::ACCEPT)

@@ -156,13 +156,13 @@ fn cookie(h: &HeaderMap) -> Result<&str> {
     let mut found = None;
     for v in h.get_all(header::COOKIE) {
         for item in v.to_str().map_err(|_| Error::Forbidden)?.split(';') {
-            if let Some((k, v)) = item.trim().split_once('=') {
-                if k == "new_api_refresh" {
-                    if found.is_some() || v.is_empty() {
-                        return Err(Error::Forbidden);
-                    }
-                    found = Some(v)
+            if let Some((k, v)) = item.trim().split_once('=')
+                && k == "new_api_refresh"
+            {
+                if found.is_some() || v.is_empty() {
+                    return Err(Error::Forbidden);
                 }
+                found = Some(v)
             }
         }
     }

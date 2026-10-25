@@ -419,8 +419,8 @@ fn projection(live: &[String]) -> Result<(Vec<String>, Vec<String>), UpgradeErro
                     || s(7) != "O"
                     || row[8] != Value::Bool(false)
                     || row[9] != Value::Bool(false)
-                    || s(10) != ""
-                    || s(11) != ""
+                    || !s(10).is_empty()
+                    || !s(11).is_empty()
                     || !row[12].is_null()
                     || !fk.insert((s(2).to_owned(), s(3).to_owned(), s(5).to_owned()))
                 {

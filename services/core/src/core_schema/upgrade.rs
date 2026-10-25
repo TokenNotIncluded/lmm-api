@@ -662,18 +662,18 @@ fn without_additions(
         let row: Vec<serde_json::Value> =
             serde_json::from_str(text).map_err(|_| UpgradeError::Storage)?;
         let field = |n: usize| row.get(n).and_then(|v| v.as_str()).unwrap_or("");
-        if field(0) == "constraint" && field(1) == "core_meta" {
-            if let Some((index, (_, expected))) = UPGRADE_NOT_NULL
+        if field(0) == "constraint"
+            && field(1) == "core_meta"
+            && let Some((index, (_, expected))) = UPGRADE_NOT_NULL
                 .iter()
                 .enumerate()
                 .find(|(_, (name, _))| *name == field(2))
-            {
-                if row.len() != 4 || field(3) != *expected || seen_not_null[index] {
-                    return Err(reject("UPGRADE_DB_METADATA_NOT_NULL_CONSTRAINT_INVALID"));
-                }
-                seen_not_null[index] = true;
-                continue;
+        {
+            if row.len() != 4 || field(3) != *expected || seen_not_null[index] {
+                return Err(reject("UPGRADE_DB_METADATA_NOT_NULL_CONSTRAINT_INVALID"));
             }
+            seen_not_null[index] = true;
+            continue;
         }
         if field(1) == "core_trust_pricing" {
             continue;
@@ -708,8 +708,8 @@ fn without_additions(
                 || field(7) != "O"
                 || row.get(8) != Some(&serde_json::Value::Bool(false))
                 || row.get(9) != Some(&serde_json::Value::Bool(false))
-                || field(10) != ""
-                || field(11) != ""
+                || !field(10).is_empty()
+                || !field(11).is_empty()
                 || row.get(12) != Some(&serde_json::Value::Null)
             {
                 return Err(reject("UPGRADE_DB_UNEXPECTED_OLD_TABLE_TRIGGER"));

@@ -172,10 +172,8 @@ fn structured(v: &Value, nullable: bool) -> Result<(), RelayError> {
                     walk(v, depth + 1)?;
                 }
             }
-            Value::Number(n) => {
-                if !n.as_f64().is_some_and(f64::is_finite) {
-                    return Err(RelayError::Invalid("nonfinite System One number"));
-                }
+            Value::Number(n) if !n.as_f64().is_some_and(f64::is_finite) => {
+                return Err(RelayError::Invalid("nonfinite System One number"));
             }
             _ => {}
         }

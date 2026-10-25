@@ -421,16 +421,18 @@ fn credential_forms(raw: &[u8]) -> Zeroizing<Vec<Vec<u8>>> {
         out.push(trimmed.to_vec());
     }
     for engine in [&STANDARD, &STANDARD_NO_PAD, &URL_SAFE, &URL_SAFE_NO_PAD] {
-        if let Ok(decoded) = engine.decode(trimmed) {
-            if !decoded.is_empty() {
-                out.push(decoded);
-            }
+        if let Ok(decoded) = engine.decode(trimmed)
+            && !decoded.is_empty()
+        {
+            out.push(decoded);
         }
         out.push(engine.encode(trimmed).into_bytes());
     }
-    if trimmed.len() % 2 == 0 && trimmed.iter().all(u8::is_ascii_hexdigit) {
+    if trimmed.len().is_multiple_of(2) && trimmed.iter().all(u8::is_ascii_hexdigit) {
         let decoded: Vec<u8> = trimmed
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| {
                 let d = |v: u8| {
                     if v.is_ascii_digit() {
@@ -518,7 +520,7 @@ fn decode_signature(text: &str) -> Result<[u8; 32]> {
         return Err(ReceiptError::Denied);
     }
     let mut out = [0u8; 32];
-    for (i, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (i, pair) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let digit = |b: u8| match b {
             b'0'..=b'9' => Some(b - b'0'),
             b'a'..=b'f' => Some(b - b'a' + 10),
