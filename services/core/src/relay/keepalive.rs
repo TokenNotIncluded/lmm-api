@@ -27,6 +27,11 @@ use tokio::{
 pub(super) const FRAME: &[u8] = b": PING\n\n";
 pub(super) const STREAM_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8";
 
+/// Downstream response head. The keepalive task and the worker race to take it;
+/// the first sender commits the HTTP status.
+pub(super) type ResponseHeadSlot =
+    Arc<Mutex<Option<oneshot::Sender<Result<ResponseHead, RelayError>>>>>;
+
 pub(super) struct Done {
     pub error: Option<RelayError>,
     pub emitted_bytes: usize,
@@ -52,7 +57,7 @@ impl KeepAlive {
         write_timeout: Duration,
         chunk_bytes: usize,
         cancel: Cancellation,
-        head: Arc<Mutex<Option<oneshot::Sender<Result<ResponseHead, RelayError>>>>>,
+        head: ResponseHeadSlot,
         sender: mpsc::Sender<Result<Bytes, RelayError>>,
     ) -> Self {
         let (stop, mut stopped) = watch::channel(false);
