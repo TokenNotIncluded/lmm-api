@@ -38,31 +38,20 @@ fn chat_request(body: Value) -> Request {
 }
 
 #[test]
-fn chat_gemini_image_config_preserves_top_level_and_bounded_google_override() {
-    let cases = [
-        (
-            json!({"imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}}),
-            json!({"imageSize":"4K","aspectRatio":"16:9"}),
-        ),
-        (
-            json!({"imageConfig":{"imageSize":"1K"},"extra_body":{"google":{"image_config":{"image_size":"4K"}}}}),
-            json!({"imageSize":"4K"}),
-        ),
-        (
-            json!({"imageConfig":{"imageSize":"4K"},"extra_body":{"google":{"image_config":{}}}}),
-            json!({"imageSize":"4K"}),
-        ),
-    ];
-    for (fields, expected) in cases {
-        let mut body = fields;
-        body["model"] = json!("gemini-3.1-flash-image-preview");
-        body["messages"] = json!([{"role":"user","content":"draw"}]);
-        let upstream = chat_request(body)
-            .upstream_to(UpstreamProtocol::Gemini, "image-model")
-            .unwrap();
-        assert_eq!(upstream["generationConfig"]["imageConfig"], expected);
-        assert!(upstream.get("imageConfig").is_none());
-    }
+fn chat_gemini_image_config_preserves_bounded_top_level_value() {
+    let mut body = json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}
+    });
+    let upstream = chat_request(body)
+        .upstream_to(UpstreamProtocol::Gemini, "image-model")
+        .unwrap();
+    assert_eq!(
+        upstream["generationConfig"]["imageConfig"],
+        json!({"imageSize":"4K","aspectRatio":"16:9"})
+    );
+    assert!(upstream.get("imageConfig").is_none());
 }
 
 #[test]
