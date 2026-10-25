@@ -39,7 +39,7 @@ fn chat_request(body: Value) -> Request {
 
 #[test]
 fn chat_gemini_image_config_preserves_bounded_top_level_value() {
-    let mut body = json!({
+    let body = json!({
         "model":"gemini-3.1-flash-image-preview",
         "messages":[{"role":"user","content":"draw"}],
         "imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}
