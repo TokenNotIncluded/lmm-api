@@ -140,10 +140,9 @@ async fn handle(
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<usize>().ok())
+        && length > compression::MAX_BODY
     {
-        if length > compression::MAX_BODY {
-            return public_error(RelayError::Limit("System One body"));
-        }
+        return public_error(RelayError::Limit("System One body"));
     }
     let raw = match tokio::time::timeout(
         Duration::from_secs(5),

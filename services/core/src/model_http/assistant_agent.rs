@@ -116,7 +116,7 @@ impl ModelGateway {
         .await
         .map_err(|_| RelayError::SettlementPending)??;
         let (answer, assistant_message) = parse_answer(&value, &prepared.allowed_names)
-            .unwrap_or_else(|| (AgentAnswer::Refused, Value::Null));
+            .unwrap_or((AgentAnswer::Refused, Value::Null));
         Ok(AgentObservation {
             answer,
             assistant_message,

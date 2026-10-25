@@ -110,13 +110,11 @@ fn source_columns(
     }
 }
 async fn row(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<PgRow> {
-    Ok(
-        sqlx::query("SELECT * FROM core_tool_market.credit_calls WHERE id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?
-            .ok_or(Error::Missing)?,
-    )
+    sqlx::query("SELECT * FROM core_tool_market.credit_calls WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(Error::Missing)
 }
 async fn save(
     tx: &mut Transaction<'_, Postgres>,
@@ -730,16 +728,15 @@ impl CreditStore {
             _ if out.held_quota > 0 => return Err(Error::Forbidden),
             _ => r.usage.as_ref().map(|u| &u.quantities),
         };
-        if let Some(u) = &r.usage {
-            if u.call_id != out.call_id
+        if let Some(u) = &r.usage
+            && (u.call_id != out.call_id
                 || u.tool_id != out.tool_id
                 || u.version_id != out.version_id
                 || u.input_digest != out.input_digest
                 || u.pricing_digest != out.pricing_digest
-                || u.result_digest != r.result_digest
-            {
-                return Err(Error::Invalid);
-            }
+                || u.result_digest != r.result_digest)
+        {
+            return Err(Error::Invalid);
         }
         let economic = credits::economics(&snap.quote.price, quantities, snap.fee_bps)?;
         if economic.held != out.held_quota {

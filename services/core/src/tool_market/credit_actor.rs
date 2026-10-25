@@ -123,7 +123,7 @@ pub async fn authenticate(
     secret: &str,
     action: MarketAction,
 ) -> Result<MarketActor> {
-    authenticate_connection(&mut **tx, profile, secret, action).await
+    authenticate_connection(tx, profile, secret, action).await
 }
 pub async fn authenticate_connection(
     tx: &mut PgConnection,
@@ -134,10 +134,8 @@ pub async fn authenticate_connection(
     let now = sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
         .fetch_one(&mut *tx)
         .await?;
-    let actor = if secret.starts_with("lmm_market_") {
-        if secret.len() != 54
-            || URL_SAFE_NO_PAD.decode(&secret[11..]).map(|b| b.len()).ok() != Some(32)
-        {
+    let actor = if let Some(encoded) = secret.strip_prefix("lmm_market_") {
+        if secret.len() != 54 || URL_SAFE_NO_PAD.decode(encoded).map(|b| b.len()).ok() != Some(32) {
             return Err(Error::Unauthorized);
         }
         let r=sqlx::query("SELECT t.id,t.actor_user_id,t.payer_account_id,t.auth_version,t.request,u.auth_version AS user_version FROM core_tool_market.credit_tokens t JOIN core_identity.users u ON u.id=t.actor_user_id JOIN core_identity.accounts a ON a.id=t.payer_account_id WHERE t.token_hash=$1 AND t.revoked_at=0 AND u.active AND a.active AND u.personal_account_id=t.payer_account_id FOR SHARE OF t,u,a").bind(Sha256::digest(secret.as_bytes()).to_vec()).fetch_optional(&mut *tx).await?.ok_or(Error::Unauthorized)?;

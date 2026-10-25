@@ -539,10 +539,10 @@ impl ImageService {
                 quality: input.quality.clone(),
                 n: input.n,
             };
-            if let Ok(q) = self.prices.quote(&request) {
-                if !matches.contains(&q) {
-                    matches.push(q)
-                }
+            if let Ok(q) = self.prices.quote(&request)
+                && !matches.contains(&q)
+            {
+                matches.push(q)
             }
         }
         if matches.len() != 1 {

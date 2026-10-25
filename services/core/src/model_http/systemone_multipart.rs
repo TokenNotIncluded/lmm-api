@@ -171,16 +171,15 @@ async fn parse_inner(request: HttpRequest<Body>, flags: DangerZone) -> Result<Re
             return Err(RelayError::Invalid("duplicate System One body header"));
         }
     }
-    if let Some(encoding) = request.headers().get(header::CONTENT_ENCODING) {
-        if encoding
+    if let Some(encoding) = request.headers().get(header::CONTENT_ENCODING)
+        && encoding
             .to_str()
             .ok()
             .is_none_or(|encoding| !encoding.eq_ignore_ascii_case("identity"))
-        {
-            return Err(RelayError::Unsupported(
-                "compressed System One multipart body",
-            ));
-        }
+    {
+        return Err(RelayError::Unsupported(
+            "compressed System One multipart body",
+        ));
     }
     if let Some(length) = request.headers().get(header::CONTENT_LENGTH) {
         let length = length

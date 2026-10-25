@@ -140,7 +140,7 @@ fn visibility(raw: Option<&str>) -> Visibility {
     };
     if let Some(object) = v.as_object() {
         Visibility {
-            enabled: object.get("enabled").map_or(true, |v| flag(v, true)),
+            enabled: object.get("enabled").is_none_or(|v| flag(v, true)),
             require_auth: object.get("requireAuth").is_some_and(|v| flag(v, false)),
         }
     } else {

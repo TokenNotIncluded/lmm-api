@@ -296,10 +296,8 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
                         return Err(RelayError::Invalid("duplicate call ID"));
                     }
                 }
-                InputBlock::ToolResult { id, .. } => {
-                    if !calls.contains(id) || !results.insert(id) {
-                        return Err(RelayError::Invalid("orphan or duplicate tool result"));
-                    }
+                InputBlock::ToolResult { id, .. } if !calls.contains(id) || !results.insert(id) => {
+                    return Err(RelayError::Invalid("orphan or duplicate tool result"));
                 }
                 _ => {}
             }
