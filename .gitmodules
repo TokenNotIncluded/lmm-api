@@ -16,3 +16,11 @@
 [submodule "apps/cli"]
 	path = apps/cli
 	url = https://github.com/TokenNotIncluded/lmm.git
+[submodule "packages/zed-lmm-provider"]
+	path = packages/zed-lmm-provider
+	url = https://github.com/TokenNotIncluded/zed-lmm-provider.git
+	branch = main
+[submodule "packages/vscode-lmm-provider"]
+	path = packages/vscode-lmm-provider
+	url = https://github.com/TokenNotIncluded/vscode-lmm-provider.git
+	branch = main
