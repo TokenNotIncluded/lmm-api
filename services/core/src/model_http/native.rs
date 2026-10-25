@@ -17,7 +17,10 @@ pub(super) struct GeminiOperation {
     pub(super) stream: bool,
 }
 
-fn key_headers(mut headers: HeaderMap, client: ClientProtocol) -> Result<HeaderMap, RelayError> {
+pub(super) fn key_headers(
+    mut headers: HeaderMap,
+    client: ClientProtocol,
+) -> Result<HeaderMap, RelayError> {
     let name = match client {
         ClientProtocol::Anthropic => "x-api-key",
         ClientProtocol::Gemini => "x-goog-api-key",
