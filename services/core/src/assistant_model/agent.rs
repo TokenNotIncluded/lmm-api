@@ -177,7 +177,7 @@ async fn verify_bound_proposal(
             .map(|v| v.try_into().map_err(|_| Error::Unavailable))
             .transpose()
     }
-    Ok(FrozenProposal {
+    let proposal = FrozenProposal {
         operation_id: row.try_get("id")?,
         turn_id: row.try_get("turn_id")?,
         tool_name: row.try_get("tool_name")?,
@@ -194,7 +194,9 @@ async fn verify_bound_proposal(
         host_policy: row.try_get("host_policy")?,
         source_web_session_sid: family,
         expires_at_unix: row.try_get("expires_at")?,
-    })
+    };
+    proposal.validate_provenance(extension_mode)?;
+    Ok(proposal)
 }
 
 // Installed only through the explicit agent component in a later batch. Startup
