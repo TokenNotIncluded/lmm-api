@@ -500,6 +500,16 @@ fn anthropic_merges_adjacent_assistant_tool_history_in_order() {
                     "type": "function",
                     "function": {"name": "second_tool", "arguments": "{}"}
                 }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "first result"
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "content": "second result"
             }
         ]
     });
@@ -527,7 +537,7 @@ fn anthropic_merges_adjacent_assistant_tool_history_in_order() {
         Err(error) => panic!("test request converts: {error}"),
     };
     let messages = payload["messages"].as_array();
-    assert_eq!(messages.map(Vec::len), Some(1));
+    assert_eq!(messages.map(Vec::len), Some(2));
     assert_eq!(
         messages
             .and_then(|messages| messages.first())
@@ -560,6 +570,28 @@ fn anthropic_merges_adjacent_assistant_tool_history_in_order() {
         content
             .and_then(|content| content.get(3))
             .and_then(|item| item["id"].as_str()),
+        Some("call_2")
+    );
+    let tool_results = messages
+        .and_then(|messages| messages.get(1))
+        .and_then(|message| message["content"].as_array());
+    assert_eq!(
+        messages
+            .and_then(|messages| messages.get(1))
+            .and_then(|message| message["role"].as_str()),
+        Some("user")
+    );
+    assert_eq!(tool_results.map(Vec::len), Some(2));
+    assert_eq!(
+        tool_results
+            .and_then(|items| items.first())
+            .and_then(|item| item["tool_use_id"].as_str()),
+        Some("call_1")
+    );
+    assert_eq!(
+        tool_results
+            .and_then(|items| items.get(1))
+            .and_then(|item| item["tool_use_id"].as_str()),
         Some("call_2")
     );
 }
