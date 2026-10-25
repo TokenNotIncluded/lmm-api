@@ -52,6 +52,15 @@ fn chat_gemini_image_config_preserves_bounded_top_level_value() {
         json!({"imageSize":"4K","aspectRatio":"16:9"})
     );
     assert!(upstream.get("imageConfig").is_none());
+
+    let empty = chat_request(json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{}
+    }))
+    .upstream_to(UpstreamProtocol::Gemini, "image-model")
+    .unwrap();
+    assert!(empty["generationConfig"].get("imageConfig").is_none());
 }
 
 #[test]
