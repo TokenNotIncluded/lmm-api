@@ -92,8 +92,7 @@ impl FrozenProposal {
         };
         if self.domain() != expected_domain
             || !self.host_policy().is_object()
-            || (self.resource_schema_sha256().is_some()
-                != self.resource_price_sha256().is_some())
+            || (self.resource_schema_sha256().is_some() != self.resource_price_sha256().is_some())
         {
             return Err(Error::Unavailable);
         }
