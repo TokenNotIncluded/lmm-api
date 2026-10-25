@@ -53,7 +53,11 @@ concurrency:
 jobs:
   protocol:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # The formal Core image build is a bounded acceptance step. On a cold
+    # runner it can spend more than 30 minutes compiling lmm-core after all
+    # source checks have passed; keep the job finite while allowing that
+    # observed resource-bound case to finish and report its real result.
+    timeout-minutes: 60
     env:
       GOWORK: "off"
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
@@ -186,7 +190,7 @@ jobs:
             echo "RPC evidence root must be absent before the fixture creates it" >&2
             exit 1
           fi
-          python3 -B scripts/test-core-rpc-docker.py --output-root "$evidence" 2>&1 | tee "$RUNNER_TEMP/core-rpc-docker.log"
+          python3 -B scripts/test-core-rpc-docker.py --output-root "$evidence" --build-timeout-seconds 2400 2>&1 | tee "$RUNNER_TEMP/core-rpc-docker.log"
       - name: Stage readable core RPC evidence
         if: ${{ always() }}
         run: |

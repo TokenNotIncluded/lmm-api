@@ -823,7 +823,15 @@ def main(argv=None):
     global ACTIVE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument(
+        "--build-timeout-seconds",
+        type=int,
+        default=1800,
+        help="bounded timeout for each formal Docker image build (default: 1800)",
+    )
     args = parser.parse_args(argv)
+    if not 600 <= args.build_timeout_seconds <= 3600:
+        parser.error("--build-timeout-seconds must be between 600 and 3600")
     root = prepare_output_root(args.output_root)
     suffix = secrets.token_hex(12)
     projects = {
@@ -841,7 +849,12 @@ def main(argv=None):
         inputs = source_inputs()
         context = FixtureRun(root, projects, suffix, inputs)
         ACTIVE = context
-        execute(root, projects, context)
+        execute(
+            root,
+            projects,
+            context,
+            build_timeout_seconds=args.build_timeout_seconds,
+        )
         success = True
     except BaseException as failure:
         error = failure
@@ -913,7 +926,7 @@ def main(argv=None):
     return 0 if success else 1
 
 
-def execute(temp, projects, context):
+def execute(temp, projects, context, *, build_timeout_seconds=1800):
     password, runtime_password, rpc_token, ext_token = (
         secrets.token_hex(32) for _ in range(4)
     )
@@ -1024,7 +1037,13 @@ def execute(temp, projects, context):
             str(temp / (group + ".json")),
             *args,
             data=data,
-            timeout=1800 if "build" in args else 180 if "--wait" in args else 60,
+            timeout=(
+                build_timeout_seconds
+                if "build" in args
+                else 180
+                if "--wait" in args
+                else 60
+            ),
         )
 
     def psql(sql, *variables):
