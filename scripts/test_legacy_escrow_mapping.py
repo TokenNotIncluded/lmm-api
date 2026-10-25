@@ -93,8 +93,181 @@ def with_dispute(*, challenge=2, status="open"):
     return data(parent, tables)
 
 
+def post_parent_data():
+    """Five/eight historical shape plus the ninth, freshly accepted right."""
+    args = five_eight()
+    parent = args["tables"]["wallet_credit_rebases"][0]["plan"]
+    created = parent["snapshot_at"] + 10
+    args["tables"][B.BOUNTY_TABLES[1]].append(fixtures.make_source(
+        B.BOUNTY_TABLES[1], 999, project_id=10, participant_user_id=3,
+        status="accepted", reward_quota=10, created_at=created,
+        accepted_at=created, updated_at=created, github_handle="synthetic-contributor",
+        issue_url="", pull_request_url="", submission_note="", review_note="",
+        encrypted_review_message="", contributor_rating_score=0,
+        contributor_rating_comment="", contributor_rated_at=0,
+        owner_rating_score=0, owner_rating_comment="", owner_rated_at=0,
+        owner_rating_overturned=False))
+    args = data(parent, args["tables"])
+    args["observed_at"] = created + 10
+    args["identity_records"].append({"source_user_id": 3, "target_user_id": 10003,
+        "target_personal_account_id": 103})
+    args["plan"]["identity_map_sha256"] = F.digest({1: 101, 2: 102, 3: 103})
+    reseal(args["plan"])
+    return args
+
+
+def refresh_source(args):
+    """Rebind changed synthetic facts without changing the historical parent."""
+    for table, rows in args["tables"].items():
+        item = args["plan"]["source_evidence"][table]
+        item.update(row_count=len(rows), row_hashes=[F.digest(row) for row in rows])
+        if table in B.BOUNTY_TABLES:
+            item["source_records"] = [{"source_primary_key": {"id": row["id"]},
+                "source_export_ordinal": i, "source_row_sha256": F.digest(row)} for i, row in enumerate(rows)]
+        args["source_proof"]["selected_table_counts"][table] = len(rows)
+    reseal(args["plan"])
+
+
+def post_parent_evidence(args):
+    unit = evidence(args)
+    unit["source_application_revision"] = M.POST_PARENT_REVISION
+    request = M.build(F, **args, unit_evidence=unit)["post_parent_claim_evidence_request"]
+    return unit, request
+
+
 # @mark migration.legacy-escrow-map role=test
 class EscrowMappingTests(unittest.TestCase):
+    def test_post_parent_accepted_claim_requires_explicit_bound_source_facts(self):
+        args = post_parent_data(); unit, proof = post_parent_evidence(args)
+        missing = M.build(F, **args, unit_evidence=unit)
+        self.assertIsNone(missing["batch_candidate"])
+        self.assertIn("escrow_post_parent_claim_evidence_required", missing["blockers"])
+        before = copy.deepcopy((args, unit, proof))
+        result = M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=proof)
+        self.assertEqual((args, unit, proof), before)
+        self.assertEqual(result["blockers"], [])
+        self.assertEqual((result["project_count"], result["claim_count"],
+            result["accepted_unpaid_claim_count"], result["historical_rejection_guard_count"]), (5, 12, 9, 3))
+        self.assertEqual(result["lineage"], missing["lineage"])
+        self.assertEqual(result["lineage"]["lineage_status"], "not-proven-exact-parent-after")
+        new = [c for p in result["batch_candidate"]["projects"] for c in p["claims"]
+               if c["source_challenge_id"] == 999][0]
+        self.assertEqual((new["rights_status"], new["payout_units"], new["participant_user_id"]),
+                         ("active_future_reward", 10, 10003))
+        self.assertEqual(new["source_row_sha256"], F.digest(args["tables"][B.BOUNTY_TABLES[1]][-1]))
+        self.assertEqual(result["post_parent_claim_evidence"], proof)
+        self.assertFalse(result["economic_approval_verified"])
+        self.assertNotIn("review_proof_sha256", result["batch_candidate"])
+        budget = proof["project_budgets"][0]
+        project = next(p for p in result["projects"] if p["source_project_id"] == budget["source_project_id"])
+        self.assertEqual(budget["source_integer_owed"], project["source_integer_owed"])
+        self.assertEqual(budget["source_integer_owed"] + budget["source_integer_uncommitted"],
+                         project["source_escrow_quota"])
+        self.assertEqual(result, M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=proof))
+
+    def test_post_parent_source_facts_cannot_prove_an_unknown_unit(self):
+        args = post_parent_data()
+        request = M.build(F, **args)["post_parent_claim_evidence_request"]
+        self.assertIsNone(request["unit_evidence_sha256"])
+        result = M.build(F, **args, post_parent_claim_evidence=request)
+        self.assertIsNone(result["batch_candidate"])
+        self.assertFalse(result["post_parent_claim_evidence_bound"])
+        self.assertIn("escrow_source_unit_evidence_required", result["blockers"])
+        self.assertEqual((result["claim_count"], result["accepted_unpaid_claim_count"]), (12, 9))
+        self.assertTrue(all(c["payout_units"] is None for p in result["projects"] for c in p["candidate"]["claims"]))
+
+    def test_post_parent_evidence_rejects_repeated_weakened_or_changed_facts(self):
+        args = post_parent_data(); unit, proof = post_parent_evidence(args)
+        changes = [(key, "0" * 64) for key in ("source_archive_sha256", "source_export_sha256", "mapping_sha256",
+            "identity_records_sha256", "parent_plan_sha256", "parent_audit_row_sha256", "unit_evidence_sha256",
+            "source_policy_evidence_sha256")]
+        changes += [("format_version", True), ("contract", "timestamps-only"), ("economic_approval_verified", True),
+                    ("source_application_revision", "c" * 40), ("observed_at", args["observed_at"] + 1)]
+        for key, value in changes:
+            bad = copy.deepcopy(proof); bad[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(F.MappingError, "post_parent_claim_evidence_mismatch"):
+                M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=bad)
+        for field in ("source_reward_quota", "source_owner_user_id", "source_participant_user_id", "source_project_id",
+                      "source_challenge_id", "created_at", "source_row_sha256", "source_project_row_sha256", "status"):
+            bad = copy.deepcopy(proof); bad["claims"][0][field] = "tampered"
+            with self.subTest(field=field), self.assertRaisesRegex(F.MappingError, "post_parent_claim_evidence_mismatch"):
+                M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=bad)
+        for field in ("source_integer_owed", "source_integer_uncommitted", "source_escrow_quota",
+                      "complete_project_claim_rows_sha256", "complete_project_dispute_rows_sha256"):
+            bad = copy.deepcopy(proof); bad["project_budgets"][0][field] = 0
+            with self.subTest(field=field), self.assertRaisesRegex(F.MappingError, "post_parent_claim_evidence_mismatch"):
+                M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=bad)
+        for mode in ("duplicate", "omit", "extra"):
+            bad = copy.deepcopy(proof)
+            if mode == "duplicate": bad["claims"].append(copy.deepcopy(bad["claims"][0]))
+            elif mode == "omit": bad["claims"] = []
+            else: bad["approved"] = True
+            with self.subTest(mode=mode), self.assertRaisesRegex(F.MappingError, "post_parent_claim_evidence_mismatch"):
+                M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=bad)
+
+    def test_post_parent_contract_rejects_later_states_timing_rewards_and_negative_values(self):
+        changes = (("status", "submitted"), ("status", "rejected"), ("created_at", 1000000),
+            ("created_at", 1000030), ("accepted_at", 0), ("updated_at", 1000011),
+            ("submitted_at", 1), ("reviewed_at", 1), ("rejected_at", 1), ("tip_quota", 1),
+            ("reward_quota", 11), ("reward_quota", 0), ("owner_rating_score", 1),
+            ("owner_rating_overturned", True), ("pull_request_url", "https://github.com/a/b/pull/1"),
+            ("github_handle", "@synthetic"), ("github_handle", "synthetic "))
+        for field, value in changes:
+            args = post_parent_data(); args["tables"][B.BOUNTY_TABLES[1]][-1][field] = value; refresh_source(args)
+            with self.subTest(field=field, value=value):
+                result = M.build(F, **args, unit_evidence=evidence(args))
+                self.assertIsNone(result["batch_candidate"])
+                self.assertIn("escrow_exact_parent_after_lineage_required", result["blockers"])
+        for field in ("reward_quota", "tip_quota", "accepted_at", "created_at", "updated_at"):
+            args = post_parent_data(); args["tables"][B.BOUNTY_TABLES[1]][-1][field] = -1; refresh_source(args)
+            with self.subTest(negative=field), self.assertRaises(F.MappingError): M.build(F, **args)
+        args = post_parent_data(); args["tables"][B.BOUNTY_TABLES[1]][-1]["participant_user_id"] = 1; refresh_source(args)
+        with self.assertRaisesRegex(F.MappingError, "claim_payer_is_recipient"): M.build(F, **args)
+
+    def test_post_parent_proof_cannot_rebind_changed_source_parent_or_owner(self):
+        original = post_parent_data(); unit, proof = post_parent_evidence(original)
+        for table, index, field, value in ((B.BOUNTY_TABLES[0], 0, "owner_user_id", 3),
+                (B.BOUNTY_TABLES[0], 0, "escrow_quota", 101),
+                (B.BOUNTY_TABLES[1], -1, "participant_user_id", 2),
+                (B.BOUNTY_TABLES[1], -1, "reward_quota", 11)):
+            args = copy.deepcopy(original); args["tables"][table][index][field] = value; refresh_source(args)
+            with self.subTest(field=field), self.assertRaises(F.MappingError):
+                M.build(F, **args, unit_evidence=evidence(args), post_parent_claim_evidence=proof)
+        wrong = copy.deepcopy(unit); wrong["source_application_revision"] = "c" * 40
+        request = M.build(F, **original, unit_evidence=wrong)["post_parent_claim_evidence_request"]
+        with self.assertRaisesRegex(F.MappingError, "post_parent_source_revision_unsupported"):
+            M.build(F, **original, unit_evidence=wrong, post_parent_claim_evidence=request)
+
+    def test_post_parent_overcommitment_and_duplicate_sources_never_produce_batch(self):
+        args = post_parent_data()
+        # A fully source-bound fact attachment still cannot erase existing owed
+        # amounts or spend the same project budget twice.
+        args["tables"][B.BOUNTY_TABLES[1]][0]["reward_quota"] = 100
+        refresh_source(args)
+        unit, proof = post_parent_evidence(args)
+        result = M.build(F, **args, unit_evidence=unit, post_parent_claim_evidence=proof)
+        self.assertIsNone(result["batch_candidate"])
+        self.assertIn("escrow_cannot_cover_unpaid_commitments", result["blockers"])
+        self.assertLess(proof["project_budgets"][0]["source_integer_uncommitted"], 0)
+        args = post_parent_data(); args["tables"][B.BOUNTY_TABLES[1]].append(copy.deepcopy(args["tables"][B.BOUNTY_TABLES[1]][-1]))
+        refresh_source(args)
+        with self.assertRaisesRegex(F.MappingError, "id_duplicate"): M.build(F, **args)
+
+    def test_post_parent_same_participant_retry_and_slot_contracts_stay_distinct(self):
+        args = post_parent_data()
+        created = args["tables"][B.BOUNTY_TABLES[1]][-1]["created_at"]
+        args["tables"][B.BOUNTY_TABLES[1]].append(fixtures.make_source(B.BOUNTY_TABLES[1], 888,
+            project_id=10, participant_user_id=3, status="rejected", reward_quota=10,
+            rejected_at=created - 1, created_at=2))
+        args["tables"][B.BOUNTY_TABLES[2]].append(fixtures.make_source(B.BOUNTY_TABLES[2], 777,
+            project_id=10, challenge_id=888, status="resolved_paid", created_at=created - 1))
+        refresh_source(args)
+        result = M.build(F, **args)
+        # Source retry SQL exempts only resolved_denied here. A resolved_paid
+        # marker does not make a still-rejected row a valid new acceptance.
+        self.assertNotIn("post_parent_claim_evidence_request", result)
+        self.assertIsNone(result["batch_candidate"])
+
     def test_unknown_unit_never_produces_batch_or_approval(self):
         result = M.build(F, **data())
         self.assertIsNone(result["batch_candidate"])

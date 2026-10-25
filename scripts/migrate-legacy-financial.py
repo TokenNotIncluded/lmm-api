@@ -1045,6 +1045,8 @@ def main() -> int:
                         help="Include a frozen historical escrow proposal in source-rights preview; never approves or applies it")
     parser.add_argument("--escrow-unit-evidence", type=Path,
                         help="Optional private independently established unit evidence for the escrow proposal; not import approval")
+    parser.add_argument("--escrow-post-parent-claim-evidence", type=Path,
+                        help="Optional private source-facts attachment for untouched accepted claims created after the parent snapshot; not unit or economic approval")
     opening_modes = parser.add_mutually_exclusive_group()
     opening_modes.add_argument("--opening-preview", action="store_true", help="Prepare only the reviewed-zero opening candidate; never apply other financial families")
     opening_modes.add_argument("--apply-opening", action="store_true", help="Apply one separately approved opening-only batch to a new owned offline target")
@@ -1071,6 +1073,8 @@ def main() -> int:
                 "escrow_candidate_requires_source_rights_preview")
         require(args.escrow_unit_evidence is None or args.escrow_candidate_preview,
                 "escrow_unit_evidence_requires_candidate_preview")
+        require(args.escrow_post_parent_claim_evidence is None or args.escrow_candidate_preview,
+                "escrow_post_parent_claim_evidence_requires_candidate_preview")
         if args.source_rights_preview:
             require(args.reuse_export_proof is not None and not opening_mode and all(value is None for value in
                 (args.target_receipt, args.reservation_evidence, args.reservation_review, args.opening_approval, args.opening_attempt)),
@@ -1153,15 +1157,22 @@ def main() -> int:
             if args.escrow_candidate_preview:
                 import legacy_escrow_mapping
                 unit_evidence, unit_bytes = None, None
+                post_parent_evidence, post_parent_bytes = None, None
                 if args.escrow_unit_evidence is not None:
                     unit_path = IDENTITY.private_backup_path(args.escrow_unit_evidence)
                     unit_bytes = unit_path.read_bytes()
                     unit_evidence = parse_json(unit_bytes.decode("utf-8"))
                     helper.reject_known_key_secrets(financial, unit_evidence, tokens)
+                if args.escrow_post_parent_claim_evidence is not None:
+                    post_path = IDENTITY.private_backup_path(args.escrow_post_parent_claim_evidence)
+                    post_parent_bytes = post_path.read_bytes()
+                    post_parent_evidence = parse_json(post_parent_bytes.decode("utf-8"))
+                    helper.reject_known_key_secrets(financial, post_parent_evidence, tokens)
                 candidate = legacy_escrow_mapping.build(financial, tables=tables,
                     identity_records=identity_records, plan=plan, migration_id=args.migration_id,
                     observed_at=manifest["source_observation"]["observed_at"],
-                    source_proof=proof, unit_evidence=unit_evidence)
+                    source_proof=proof, unit_evidence=unit_evidence,
+                    post_parent_claim_evidence=post_parent_evidence)
                 candidate_text = canonical(candidate) + "\n"
                 artifacts["escrow-candidate.private.json"] = candidate_text
                 manifest.update(escrow_candidate_file_sha256=hashlib.sha256(candidate_text.encode("utf-8")).hexdigest(),
@@ -1171,6 +1182,16 @@ def main() -> int:
                     artifacts["escrow-unit-evidence.private.json"] = unit_bytes.decode("utf-8")
                     manifest.update(escrow_unit_evidence_file_sha256=hashlib.sha256(unit_bytes).hexdigest(),
                                     escrow_unit_evidence_typed_sha256=digest(unit_evidence))
+                post_request = candidate.get("post_parent_claim_evidence_request")
+                if post_request is not None:
+                    post_request_text = canonical(post_request) + "\n"
+                    artifacts["escrow-post-parent-claim-evidence-request.private.json"] = post_request_text
+                    manifest.update(escrow_post_parent_claim_evidence_request_file_sha256=hashlib.sha256(post_request_text.encode("utf-8")).hexdigest(),
+                                    escrow_post_parent_claim_evidence_request_typed_sha256=digest(post_request))
+                if post_parent_bytes is not None:
+                    artifacts["escrow-post-parent-claim-evidence.private.json"] = post_parent_bytes.decode("utf-8")
+                    manifest.update(escrow_post_parent_claim_evidence_file_sha256=hashlib.sha256(post_parent_bytes).hexdigest(),
+                                    escrow_post_parent_claim_evidence_typed_sha256=digest(post_parent_evidence))
             if inventory_bytes is not None:
                 artifacts["target-key-inventory.private.json"] = inventory_bytes.decode("utf-8")
                 inventory_hash = hashlib.sha256(inventory_bytes).hexdigest()
