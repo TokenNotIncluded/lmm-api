@@ -15,6 +15,7 @@ pub mod image_http;
 pub mod image_internal;
 pub mod image_price;
 mod image_provider;
+mod legacy_keys;
 mod native;
 pub mod pricing;
 mod provider_policy;
@@ -95,6 +96,7 @@ pub struct ModelGateway {
     limits: Limits,
     local_streaming: bool,
     honeypot: Option<HoneypotGateway>,
+    legacy_keys: Option<Arc<legacy_keys::Aliases>>,
     catalog_surface: Arc<CatalogSurface>,
     oauth2: Option<crate::identity::grants::LmmIssuer>,
     images: Option<image_execution::ImageService>,
@@ -195,6 +197,7 @@ impl ModelGateway {
             limits,
             local_streaming: false,
             honeypot: None,
+            legacy_keys: None,
             catalog_surface,
             oauth2: None,
             images: None,
@@ -238,6 +241,42 @@ impl ModelGateway {
     pub fn with_honeypot(mut self, honeypot: HoneypotGateway) -> Self {
         self.honeypot = Some(honeypot);
         self
+    }
+
+    /// Load owner-installed wire aliases and their separately pinned credential
+    /// mapping receipt. This does not approve or perform a credential migration.
+    ///
+    /// # Errors
+    /// Rejects mismatched source material, duplicate aliases or invalid mappings.
+    /// Call `verify_legacy_key_aliases` before constructing its HTTP router.
+    pub fn with_legacy_key_aliases(
+        mut self,
+        manifest: &[u8],
+        credential_receipt: &[u8],
+    ) -> Result<Self, RelayError> {
+        if self.legacy_keys.is_some() {
+            return Err(RelayError::Invalid(
+                "duplicate legacy key alias configuration",
+            ));
+        }
+        self.legacy_keys = Some(Arc::new(legacy_keys::Aliases::parse(
+            manifest,
+            credential_receipt,
+        )?));
+        Ok(self)
+    }
+
+    /// Verify immutable alias bindings against the actual target, using only a
+    /// read-only transaction. Unconfigured gateways acquire no connection.
+    ///
+    /// # Errors
+    /// Missing rows, conflicts, target mismatches and database failures prevent
+    /// readiness. Revocation and current authority remain checked per request.
+    pub async fn verify_legacy_key_aliases(&mut self) -> Result<(), RelayError> {
+        if let Some(aliases) = &mut self.legacy_keys {
+            Arc::make_mut(aliases).verify(&self.bridge.pool).await?;
+        }
+        Ok(())
     }
 
     pub fn streaming_enabled(&self) -> bool {
@@ -301,8 +340,16 @@ impl ModelGateway {
             .layer(DefaultBodyLimit::max(self.limits.request_bytes))
             .with_state(self.clone());
         let router = router.merge(systemone::router(self.clone()));
-        if self.images.is_some() {
+        let router = if self.images.is_some() {
             router.merge(image_api::router(self.clone()))
+        } else {
+            router
+        };
+        if self.legacy_keys.is_some() {
+            router.layer(axum::middleware::from_fn_with_state(
+                self.clone(),
+                legacy_keys::normalize,
+            ))
         } else {
             router
         }
@@ -537,13 +584,13 @@ async fn models(
     let peer = peer.ok().map(|peer| peer.0.ip());
     let mut available = BTreeMap::new();
     for group in &groups {
-        let models = match gateway.bridge.routing.catalog(&group) {
+        let models = match gateway.bridge.routing.catalog(group) {
             Ok(models) => models,
             Err(_) => return public_error(RelayError::RouteUnavailable),
         };
         for model in models {
             match gateway
-                .authorize_request(&principal, &secret, &model.name, &group, peer)
+                .authorize_request(&principal, &secret, &model.name, group, peer)
                 .await
             {
                 Ok(_) => {
@@ -557,24 +604,24 @@ async fn models(
             }
         }
     }
-    if principal.key_id().is_some() {
-        if let Some(images) = &gateway.images {
-            // Catalog grants are the same current model/group/IP checks as a send.
-            for group in groups {
-                for model in images.catalog(&group) {
-                    match gateway
-                        .authorize_request(&principal, &secret, &model, &group, peer)
-                        .await
-                    {
-                        Ok(()) => {
-                            available.insert(model, ());
-                        }
-                        Err(IdentityError::Forbidden) => (),
-                        Err(IdentityError::Unauthorized | IdentityError::Invalid) => {
-                            return public_error(RelayError::Unauthorized);
-                        }
-                        Err(_) => return public_error(RelayError::BillingUnavailable),
+    if principal.key_id().is_some()
+        && let Some(images) = &gateway.images
+    {
+        // Catalog grants are the same current model/group/IP checks as a send.
+        for group in groups {
+            for model in images.catalog(&group) {
+                match gateway
+                    .authorize_request(&principal, &secret, &model, &group, peer)
+                    .await
+                {
+                    Ok(()) => {
+                        available.insert(model, ());
                     }
+                    Err(IdentityError::Forbidden) => (),
+                    Err(IdentityError::Unauthorized | IdentityError::Invalid) => {
+                        return public_error(RelayError::Unauthorized);
+                    }
+                    Err(_) => return public_error(RelayError::BillingUnavailable),
                 }
             }
         }

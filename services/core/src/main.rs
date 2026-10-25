@@ -315,7 +315,8 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         // Production never silently opts out of owner-controlled user pricing.
         // Library fixtures may omit the builder; serving this binary may not.
         model_gateway = configured_models.map(|gateway| gateway.with_trust_pricing());
-        if let Some(gateway) = &model_gateway {
+        if let Some(gateway) = &mut model_gateway {
+            gateway.verify_legacy_key_aliases().await?;
             store = store.with_dashboard_routing(gateway.dashboard_routing());
             // Trusted recovery keeps indeterminate upstream holds reserved.
             // A failed recovery prevents listener binding/readiness.
