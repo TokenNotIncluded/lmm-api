@@ -197,23 +197,7 @@ fn image_config(v: Option<&Value>, snake_case: bool) -> Result<Option<Value>, Re
     Ok(Some(Value::Object(out)))
 }
 fn chat_image_config(v: &Value) -> Result<Option<Value>, RelayError> {
-    let top_level = image_config(v.get("imageConfig"), false)?;
-    let Some(extra_body) = v.get("extra_body").filter(|v| !v.is_null()) else {
-        return Ok(top_level);
-    };
-    keys(extra_body, &["google"])?;
-    let Some(google) = extra_body.get("google").filter(|v| !v.is_null()) else {
-        return Ok(top_level);
-    };
-    keys(google, &["image_config"])?;
-    let Some(override_config) = image_config(google.get("image_config"), true)? else {
-        return Ok(top_level);
-    };
-    if override_config.as_object().is_some_and(|config| !config.is_empty()) {
-        Ok(Some(override_config))
-    } else {
-        Ok(top_level)
-    }
+    image_config(v.get("imageConfig"), false)
 }
 
 fn signature(v: Option<&Value>) -> Result<Option<(UpstreamProtocol, String)>, RelayError> {
@@ -324,7 +308,6 @@ impl Request {
                     "reasoning_effort",
                     "store",
                     "imageConfig",
-                    "extra_body",
                 ],
             )?,
             ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
