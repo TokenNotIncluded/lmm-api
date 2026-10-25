@@ -1,6 +1,7 @@
 package webcompat
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -94,7 +95,14 @@ func decodePluginInstall(r *http.Request) (modules.PluginInstallRequest, error) 
 	if r == nil || r.Body == nil {
 		return modules.PluginInstallRequest{}, modules.ErrPluginManifest
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+	// Read one byte beyond the limit so trailing whitespace cannot make an
+	// oversized manifest look like a valid, fully consumed JSON document.
+	const maxManifestBytes = 16 << 10
+	payload, err := io.ReadAll(io.LimitReader(r.Body, maxManifestBytes+1))
+	if err != nil || len(payload) > maxManifestBytes {
+		return modules.PluginInstallRequest{}, modules.ErrPluginManifest
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var request modules.PluginInstallRequest
 	if err := decoder.Decode(&request); err != nil {
@@ -114,8 +122,10 @@ func emptyPluginBody(r *http.Request) bool {
 	if r == nil || r.Body == nil {
 		return true
 	}
-	var extra any
-	return errors.Is(json.NewDecoder(io.LimitReader(r.Body, 1)).Decode(&extra), io.EOF)
+	// A one-byte read is enough to distinguish a truly empty request from
+	// whitespace or any other body. Do not let a truncated body look like EOF.
+	payload, err := io.ReadAll(io.LimitReader(r.Body, 1))
+	return err == nil && len(payload) == 0
 }
 
 func pluginRespond(w http.ResponseWriter, value any, err error) {

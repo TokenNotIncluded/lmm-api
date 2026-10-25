@@ -14,7 +14,7 @@ spec.loader.exec_module(module)
 class AcceptanceTest(unittest.TestCase):
     def setUp(self):
         self.responses = {
-            "/api/status": module.Response(200, "application/json", json.dumps({"success": True, "data": {"version": "0.2.51"}}).encode()),
+            "/api/status": module.Response(200, "application/json", json.dumps({"success": True, "data": {"version": "0.2.51"}}).encode(), {"X-Request-Id": "fixture-request"}),
             "/app.js": module.Response(200, "application/javascript", b"console.log('loaded')"),
             "/app.css": module.Response(200, "text/css", b"body{margin:0}"),
         }
@@ -34,7 +34,7 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(result["pages"], 3)
         self.assertEqual(self.visited.count("/app.js"), 1)
 
-    def test_expected_runtime_identity_and_request_id_are_checked(self):
+    def test_private_release_identity_headers_are_rejected_on_public_status(self):
         self.responses["/api/status"] = module.Response(
             200, "application/json",
             json.dumps({"success": True, "data": {"version": "0.2.51"}}).encode(),
@@ -47,13 +47,8 @@ class AcceptanceTest(unittest.TestCase):
                 "X-Request-Id": "req-123",
             },
         )
-        identity = {"source_commit": "a" * 40, "core_artifact_sha256": "b" * 64,
-                    "extensions_artifact_sha256": "c" * 64,
-                    "schema_fingerprint": "d" * 64, "route_identity": "edge-v2"}
-        self.assertEqual(module.verify(self.fetch, expected_identity=identity)["backend_version"], "0.2.51")
-        identity["route_identity"] = "old-edge"
-        with self.assertRaisesRegex(ValueError, "release identity"):
-            module.verify(self.fetch, expected_identity=identity)
+        with self.assertRaisesRegex(ValueError, "private release identity"):
+            module.verify(self.fetch)
 
     def test_old_backend_is_not_accepted_as_success(self):
         with self.assertRaisesRegex(ValueError, "version mismatch"):

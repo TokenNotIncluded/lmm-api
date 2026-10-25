@@ -4,11 +4,12 @@ Fresh-install extension code for `wip/rust-core-go-extensions`, based on
 `b83723cdac3f148140806b8025cb5360a2f6a26d`. No legacy migration, production
 registration, public protocol change or deployment is included.
 
-The current [host entry point](../../app/run.go) registers only `identity`;
-`store` and `support` are not mounted. The interfaces below describe module
-code awaiting assembly, not an available shop service or completed Rust funds
-integration. [Support](../support/README.md) retains its own storage and authority
-boundary.
+The [host entry point](../../app/run.go) mounts `store` and `support` only when
+they are explicitly selected in the extension configuration; the default
+selection remains identity-only. The interfaces below describe the isolated
+module boundary, not a claim that a running host has selected the module or
+completed Rust funds integration. [Support](../support/README.md) retains its
+own storage and authority boundary.
 
 ## Integration boundary
 
@@ -31,8 +32,12 @@ have no core database credentials, grants, foreign keys or network access.
 The SQL driver belongs to composition; these modules depend only on `database/sql`.
 There is no global database, default database, startup DDL or fallback memory store.
 
-When registered, the host mounts `/extensions/v1/store/*` and removes its service token.
-Mutating/private endpoints require the separate `X-LMM-User-Credential` header.
+When selected, the host mounts `/extensions/v1/store/*` and removes its service
+token. The Web compatibility layer may expose public catalogue reads even when
+the store funds adapter is disabled, but it marks products as paused and
+exposes no payment methods; purchase, payment, refund and settlement paths
+fail closed with `503`. Mutating/private endpoints require the separate
+`X-LMM-User-Credential` header.
 The Rust adapter accepts verified sessions only: the current protobuf has no
 commerce permission scopes for API keys, so all API keys fail closed.
 Personal resources require the matching user. Team management requires owner or

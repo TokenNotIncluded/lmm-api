@@ -260,29 +260,11 @@ async fn public_status_response(State(state): State<Readiness>, headers: HeaderM
     if let Ok(value) = request_id(&headers).parse() {
         response.headers_mut().insert("x-request-id", value);
     }
-    let release_identity = [
-        ("x-release-commit", option_env!("LMM_RELEASE_COMMIT")),
-        (
-            "x-core-artifact-sha256",
-            option_env!("LMM_CORE_ARTIFACT_SHA256"),
-        ),
-        (
-            "x-extensions-artifact-sha256",
-            option_env!("LMM_EXTENSIONS_ARTIFACT_SHA256"),
-        ),
-        (
-            "x-schema-fingerprint",
-            option_env!("LMM_SCHEMA_FINGERPRINT"),
-        ),
-        ("x-route-identity", option_env!("LMM_ROUTE_IDENTITY")),
-    ];
-    if release_identity.iter().all(|(_, value)| value.is_some()) {
-        for (name, value) in release_identity {
-            if let Some(value) = value.and_then(|value| value.parse().ok()) {
-                response.headers_mut().insert(name, value);
-            }
-        }
-    }
+    // Source commits, artifact digests, schema fingerprints and route
+    // identities are private cutover evidence. Never expose them on this
+    // public product-status endpoint, even when a release was built with the
+    // corresponding environment variables. The operator preflight binds those
+    // values from the candidate manifest and runtime readback instead.
     response
 }
 
@@ -467,17 +449,17 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             );
             assert_eq!(response.headers()["x-request-id"].len(), 32);
-            if [
-                option_env!("LMM_RELEASE_COMMIT"),
-                option_env!("LMM_CORE_ARTIFACT_SHA256"),
-                option_env!("LMM_EXTENSIONS_ARTIFACT_SHA256"),
-                option_env!("LMM_SCHEMA_FINGERPRINT"),
-                option_env!("LMM_ROUTE_IDENTITY"),
-            ]
-            .iter()
-            .any(Option::is_none)
-            {
-                assert!(response.headers().get("x-release-commit").is_none());
+            for header in [
+                "x-release-commit",
+                "x-core-artifact-sha256",
+                "x-extensions-artifact-sha256",
+                "x-schema-fingerprint",
+                "x-route-identity",
+            ] {
+                assert!(
+                    response.headers().get(header).is_none(),
+                    "public status leaked {header}"
+                );
             }
             let bytes = axum::body::to_bytes(response.into_body(), 65536)
                 .await

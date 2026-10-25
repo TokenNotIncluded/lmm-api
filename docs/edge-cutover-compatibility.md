@@ -46,10 +46,19 @@ through to the SPA `index.html`.
 
 When Core `edge_access` is enabled, the loopback proxy request must carry
 exactly one configured `X-LMM-Edge-Proof` and `X-LMM-Edge-Client-IP` header.
-Core strips these before dispatch. The edge must not forward either header to
-Extensions or a provider. Missing, duplicate, or non-loopback proof is a 403;
-therefore a direct health probe without the trusted-edge contract is not a
-cutover failure by itself.
+Core strips both headers before dispatch. The edge must not forward either
+header to Extensions or a provider. Missing, duplicate, or non-loopback proof
+is a 403; therefore a direct health probe without the trusted-edge contract is
+not a cutover failure by itself.
+
+For a header-gated candidate route, the edge consumes the canary header or
+short-lived cookie only while selecting the upstream. It must overwrite the
+client-supplied canary header with an empty value before proxying, keep the
+canary cookie out of the upstream application contract, use `no-store` and an
+appropriate `Vary` value on variant responses, and keep `/internal/*` and
+provenance material off the public listener. A random, expired or replayed
+marker must stay on the legacy route or receive a stable denial; it must never
+silently select the candidate.
 
 ## Extensions public contract
 

@@ -205,8 +205,11 @@ async fn trusted_edge(
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::new(client, 0)));
-    // A provider/Go request must never learn the proof used by Nginx to Core.
+    // A provider/Go request must never learn the edge-only trust material or
+    // the client address asserted by the edge. Both headers are routing
+    // inputs, not downstream application identity.
     request.headers_mut().remove(PROOF_HEADER);
+    request.headers_mut().remove(CLIENT_HEADER);
     next.run(request).await
 }
 fn denied(code: &'static str) -> Response {

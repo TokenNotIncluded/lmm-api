@@ -1277,16 +1277,16 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assertNotIn("extension", name)
         for name in ("main.rs", "http.rs"):
             text = (ROOT / "services/core/src" / name).read_text()
-            # The release identity header legitimately reads the artifact
-            # provenance variable. Any other LMM_EXTENSION token would be a
-            # forbidden Core -> Extensions startup dependency.
+            # Core must not read an Extensions or deployment identity variable
+            # at runtime. Release provenance belongs to the private preflight,
+            # not to a Core -> Extensions startup dependency or public header.
             extension_tokens = set(re.findall(
                 r"(?<![A-Za-z0-9_])LMM_EXTENSION[A-Za-z0-9_]*", text
             ))
             self.assertEqual(
-                extension_tokens - {"LMM_EXTENSIONS_ARTIFACT_SHA256"},
+                extension_tokens,
                 set(),
-                name + ": Core must not depend on an Extensions runtime",
+                name + ": Core must not depend on an Extensions runtime or release env",
             )
 
     def test_compose_projects_are_separate_and_resource_bounded(self):

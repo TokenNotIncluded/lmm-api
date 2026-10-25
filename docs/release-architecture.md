@@ -48,29 +48,22 @@ python3 scripts/build-distribution.py build --component core \
   --platform linux-amd64 --input out/core
 ```
 
-For a candidate that will serve the new runtime, pass the complete identity
-set to the Core build environment:
-
-```sh
-export LMM_RELEASE_COMMIT="$SOURCE_SHA"
-export LMM_CORE_ARTIFACT_SHA256="<verified core archive digest>"
-export LMM_EXTENSIONS_ARTIFACT_SHA256="<verified extensions archive digest>"
-export LMM_SCHEMA_FINGERPRINT="<verified target schema fingerprint>"
-export LMM_ROUTE_IDENTITY="<reviewed edge/upstream route identity>"
-```
+For a candidate that will serve the new runtime, record the complete identity
+set in the private cutover manifest and compare it with package and host
+readback. Do not inject those values into the public Core process merely to
+make a browser response look provenance-aware.
 
 Core emits `X-LMM-API-Version` with the Core package version on every public
 `/api/status` response. The legacy JSON `version` field remains available for
-older clients. Core also emits the five corresponding `X-*` provenance headers
-only when all five build-time values are present. A partial environment emits none. These values must
-come from the same cutover manifest and be compared with the native preflight,
-edge logs and runtime process identity; setting them in a shell is not itself
-deployment proof.
+older clients. Release commit, artifact, schema and route identity values stay
+in the private cutover record and are not exposed as public response headers.
+They must come from the same cutover manifest and be compared with the native
+preflight, edge logs and runtime process identity; setting them in a shell is
+not itself deployment proof.
 
-The read-only public acceptance probe can enforce this contract by passing all
-five `--expected-*` identity arguments. In that mode it also requires a usable
-request ID. Omitting those arguments keeps the probe useful for basic page
-checks, but does not prove runtime provenance.
+The read-only public acceptance probe checks the public version, request ID,
+pages and assets. It also fails if a private release-identity header appears;
+runtime provenance is checked separately from the private preflight record.
 
 示例中的平台必须与实际编译结果一致，版本使用本次选择的预览版本；不要直接
 重复运行并覆盖已有产物。构建器检查程序格式和 CPU 架构，不接受脚本或错误架构。
