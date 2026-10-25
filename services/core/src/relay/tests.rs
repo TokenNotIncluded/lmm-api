@@ -67,8 +67,8 @@ fn chat_image_config_rejects_unknown_fields_and_non_gemini_routes() {
         Err(RelayError::Unsupported(_))
     ));
 
-    for value in ["", " 4K", "4K\n", "x".repeat(33).as_str()] {
-        let mut invalid = json!({
+    for value in ["", " 4K", "4K\n"] {
+        let invalid = json!({
             "model":"image-model",
             "messages":[{"role":"user","content":"draw"}],
             "imageConfig":{"imageSize":value}
@@ -81,8 +81,20 @@ fn chat_image_config_rejects_unknown_fields_and_non_gemini_routes() {
             ),
             Err(RelayError::Invalid(_))
         ));
-        invalid["imageConfig"] = Value::Null;
     }
+    let invalid = json!({
+        "model":"image-model",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"x".repeat(33)}
+    });
+    assert!(matches!(
+        Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&invalid).unwrap(),
+            &Limits::default(),
+        ),
+        Err(RelayError::Invalid(_))
+    ));
 
     let request = chat_request(json!({
         "model":"gemini-3.1-flash-image-preview",
