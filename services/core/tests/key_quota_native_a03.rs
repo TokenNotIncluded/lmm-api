@@ -283,33 +283,66 @@ fn verify_owned_container(container: &str) -> OwnedFixture {
     fixture
 }
 
-async fn wait_for_no_clients(fixture: &OwnedFixture) {
+fn owned_database_name(database: &str) -> &str {
+    assert!(
+        database.len() == 19
+            && database.starts_with("kq_")
+            && database[3..].bytes().all(|b| b.is_ascii_hexdigit()),
+        "owned fixture database name"
+    );
+    database
+}
+
+async fn wait_for_no_clients(fixture: &OwnedFixture, database: &str) {
     // SQLx has closed its sockets, but backend exit can lag pool.close().
-    // Observe a bounded drain; never terminate clients to manufacture exclusivity.
-    for _ in 0..50 {
-        let clients = docker(&[
-            "exec",
-            &fixture.id,
-            "psql",
-            "-X",
-            "--no-password",
-            "-qAt",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-U",
-            "postgres",
-            "-c",
-            "SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()",
-        ]);
-        assert!(clients.status.success());
-        if String::from_utf8(clients.stdout).unwrap().trim() == "0" {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    panic!(
-        "retain owned fixture with active clients after bounded drain: {}",
-        fixture.id
+    // One session has to observe that drain: a fresh psql per poll stays in
+    // pg_stat_activity and the next poll counts it. The offline writer rejects
+    // any other backend in its own database, so that is the only set that
+    // matters. Never terminate clients to manufacture exclusivity.
+    let database = owned_database_name(database);
+    let sql = format!(
+        "DO $$\n\
+         DECLARE\n\
+           remaining integer;\n\
+           detail text;\n\
+         BEGIN\n\
+           FOR step IN 1..50 LOOP\n\
+             SELECT count(*) INTO remaining FROM pg_stat_activity\n\
+              WHERE datname = '{database}' AND pid <> pg_backend_pid();\n\
+             EXIT WHEN remaining = 0;\n\
+             PERFORM pg_sleep(0.1);\n\
+           END LOOP;\n\
+           IF remaining <> 0 THEN\n\
+             SELECT string_agg(pid::text || ' ' || COALESCE(usename, '') || ' ' ||\n\
+                               COALESCE(state, '') || ' ' || COALESCE(application_name, '') || ' ' ||\n\
+                               left(COALESCE(query, ''), 160), ' | ')\n\
+               INTO detail FROM pg_stat_activity\n\
+              WHERE datname = '{database}' AND pid <> pg_backend_pid();\n\
+             RAISE EXCEPTION 'active clients remain: %', COALESCE(detail, '');\n\
+           END IF;\n\
+         END $$;"
+    );
+    let clients = docker(&[
+        "exec",
+        &fixture.id,
+        "psql",
+        "-X",
+        "--no-password",
+        "-qAt",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        "postgres",
+        "-d",
+        "postgres",
+        "-c",
+        &sql,
+    ]);
+    assert!(
+        clients.status.success(),
+        "retain owned fixture with active clients after bounded drain: {} {}",
+        fixture.id,
+        String::from_utf8_lossy(&clients.stderr)
     );
 }
 
@@ -319,9 +352,10 @@ async fn finish_fixture(pool: PgPool) {
         .get_application_name()
         .unwrap()
         .to_string();
+    let database = pool.connect_options().get_database().unwrap().to_string();
     pool.close().await;
     let fixture = verify_owned_container(&container);
-    wait_for_no_clients(&fixture).await;
+    wait_for_no_clients(&fixture, &database).await;
     let result = docker(&["rm", "--force", "--volumes", &fixture.id]);
     assert!(result.status.success(), "owned fixture cleanup failed");
     FIXTURES.get().unwrap().lock().unwrap().remove(&container);
@@ -580,9 +614,10 @@ async fn run_writer_sql(options: &PgConnectOptions, sql: &str) -> Result<String,
 
 async fn apply_writer_sql(pool: PgPool, sql: &str) -> (Result<String, String>, PgPool) {
     let options = (*pool.connect_options()).clone();
+    let database = options.get_database().unwrap().to_string();
     pool.close().await;
     let fixture = verify_owned_container(options.get_application_name().unwrap());
-    wait_for_no_clients(&fixture).await;
+    wait_for_no_clients(&fixture, &database).await;
     let result = run_writer_sql(&options, sql).await;
     let pool = PgPool::connect_with(options).await.unwrap();
     (result, pool)
@@ -1151,7 +1186,9 @@ async fn competing_client_rejected_and_strict_replay() {
         rejected.contains("opening target has another client"),
         "{rejected}"
     );
-    drop(blocker);
+    // Drop would return this backend to the pool after an asynchronous ping.
+    // The exclusive writer needs the competing session to be gone.
+    blocker.close().await.unwrap();
     assert_eq!(
         import_state(&pool).await,
         before,
