@@ -24,6 +24,7 @@ pub(crate) struct AgentPolicy {
     pub market: Option<AssistantMarketPolicy>,
 }
 impl AgentPolicy {
+    #[cfg_attr(not(test), allow(dead_code))] // Called by `AgentService::new`, which tests construct directly.
     fn validate(&self, registry: &AgentRegistry) -> Result<(), Error> {
         self.model.validate()?;
         if !(1..=32).contains(&self.max_rounds)
@@ -70,6 +71,8 @@ impl AgentPolicy {
     }
 }
 /// Reviewed host-only artifact and policy. Never part of an RPC message.
+/// Startup does not load this until the explicit agent component is installed.
+#[allow(dead_code)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentHostConfig {
@@ -208,12 +211,14 @@ fn accepted(row: &PgRow) -> Result<AcceptedResult, Error> {
     })
 }
 impl AgentService {
+    #[allow(dead_code)] // Host loader for the reviewed registry; startup does not call it yet.
     pub(crate) fn from_host(base: AssistantModel, config: AgentHostConfig) -> Result<Self, Error> {
         let artifact = crate::config::private_file(&config.registry_file, 2_097_152)
             .map_err(|_| Error::Unavailable)?;
         let registry = AgentRegistry::from_reviewed(&artifact, &config.registry_sha256)?;
         Self::new(base, config.policy, registry)
     }
+    #[cfg_attr(not(test), allow(dead_code))] // Tests build the service directly; startup uses no agent host yet.
     pub(crate) fn new(
         base: AssistantModel,
         policy: AgentPolicy,
@@ -229,6 +234,7 @@ impl AgentService {
             registry,
         })
     }
+    #[cfg_attr(not(test), allow(dead_code))] // `with_agent` checks this; that entry is test-only today.
     pub(crate) async fn check_ready(&self) -> Result<(), Error> {
         let mut tx = self.base.pool.begin().await?;
         sqlx::query("SET TRANSACTION READ ONLY")
@@ -572,6 +578,7 @@ impl AgentService {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code))] // `with_agent` publishes these; that entry is test-only today.
     pub(crate) fn extension_features(&self) -> Result<Vec<String>, Error> {
         let mut tuples = Vec::new();
         let mut features = Vec::new();

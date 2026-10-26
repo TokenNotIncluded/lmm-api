@@ -356,6 +356,8 @@ fn price(quote: &ImageQuote) -> Price {
         output_per_million: 0,
     }
 }
+type ImagePricingProjection = (u64, Vec<(String, String, super::pricing::ImageVariant)>);
+
 impl ImageService {
     pub(crate) fn new(
         pool: PgPool,
@@ -436,10 +438,7 @@ impl ImageService {
     /// Safe immutable tariff metadata only; never provider identity or credentials.
     pub(crate) fn pricing_projection(
         &self,
-    ) -> std::result::Result<
-        (u64, Vec<(String, String, super::pricing::ImageVariant)>),
-        super::pricing::PricingError,
-    > {
+    ) -> std::result::Result<ImagePricingProjection, super::pricing::PricingError> {
         let mut counts = BTreeMap::new();
         for rule in &self.prices.rules {
             *counts

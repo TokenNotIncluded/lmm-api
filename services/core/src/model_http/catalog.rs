@@ -142,6 +142,7 @@ impl CatalogSurface {
         Ok(result)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Tests build a surface without provider policy.
     pub(super) fn from_gateway(
         router: Arc<Router>,
         credentials: &BTreeMap<(u64, u64), String>,
@@ -371,6 +372,8 @@ impl CatalogSurface {
     }
 }
 
+// Route, protocol, credentials and provider policy are independent inputs.
+#[allow(clippy::too_many_arguments)]
 fn api_supported(
     route: &ModelRoute,
     name: &str,

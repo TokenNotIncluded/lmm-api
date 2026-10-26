@@ -295,14 +295,19 @@ async fn full_fresh_runtime_check_is_readonly_and_never_serves_or_loads_models(p
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let first = PrivateConfig::new(&role.url, "");
-    let model = first.dir.join("invalid-model.toml");
+    // check-db classifies image authority by parsing this sidecar. It has no
+    // upstreams, credentials or image tariffs, so the read cannot dispatch.
+    let model = first.dir.join("model.toml");
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&model)
         .unwrap();
-    f.write_all(b"do-not-echo-invalid-model-document").unwrap();
+    f.write_all(
+        b"version=1\ncredentials=[]\nkey_groups=[]\ninput_token_ceiling=1024\nlease_seconds=90\ntimeout_seconds=60\nmax_output_tokens=4096\n[routing]\nversion=1\ngroups=[]\nupstreams=[]\nroutes=[]\naliases=[]\n[prices]\nversion=1\nrules=[]\n",
+    )
+    .unwrap();
     drop(f);
     let cfg = PrivateConfig::new(
         &role.url,

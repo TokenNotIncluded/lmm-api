@@ -987,6 +987,9 @@ impl BuiltinKind {
         format!("{}.{}", self.service, self.tool)
     }
 }
+// `_verified` keeps struct literals inside this module. `non_exhaustive` would
+// allow other modules in this crate to construct an actor.
+#[allow(clippy::manual_non_exhaustive)]
 pub struct BuiltinActor {
     pub user_id: i64,
     pub owner_account_id: i64,

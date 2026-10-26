@@ -358,7 +358,12 @@ impl MarketIssuer {
         if allow {
             let family = secret("lmm_mg_");
             let code = secret("lmm_mc_");
-            sqlx::query("INSERT INTO core_market_oauth.families(id,client_id,issuer,resource,user_id,account_id,user_version,scopes,budget_credits,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp()+interval '30 days')").bind(&family).bind(client.try_get::<String,_>("id")?).bind(&self.profile.issuer).bind(&self.profile.resource).bind(actor.user).bind(actor.account).bind(actor.version).bind(requested).bind(budget).execute(&mut *t).await?;
+            // created_at defaults to clock_timestamp(), which advances during
+            // the statement. clock_timestamp()+30 days is then past
+            // created_at+30 days and the family lifetime check fails.
+            // statement_timestamp() is fixed at statement start, so the same
+            // 30-day bound stays inside the check.
+            sqlx::query("INSERT INTO core_market_oauth.families(id,client_id,issuer,resource,user_id,account_id,user_version,scopes,budget_credits,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,statement_timestamp()+interval '30 days')").bind(&family).bind(client.try_get::<String,_>("id")?).bind(&self.profile.issuer).bind(&self.profile.resource).bind(actor.user).bind(actor.account).bind(actor.version).bind(requested).bind(budget).execute(&mut *t).await?;
             sqlx::query("INSERT INTO core_market_oauth.codes(digest,family_id,redirect_uri,challenge,expires_at) VALUES($1,$2,$3,$4,clock_timestamp()+interval '120 seconds')").bind(hash(&code)).bind(family).bind(r.try_get::<String,_>("redirect_uri")?).bind(r.try_get::<String,_>("challenge")?).execute(&mut *t).await?;
             target.query_pairs_mut().append_pair("code", &code);
         } else {

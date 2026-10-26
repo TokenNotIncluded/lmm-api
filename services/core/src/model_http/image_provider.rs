@@ -45,6 +45,8 @@ pub(crate) struct PreparedImageCall {
     request: reqwest::Request,
     secret: String,
     requested_n: u32,
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Tests read the frozen quote; dispatch consumes the request.
     quote: ImageQuote,
     limits: Limits,
     deadline: Instant,
@@ -77,6 +79,7 @@ pub(crate) struct ImageMultipartInput {
 }
 
 impl ImageProvider {
+    #[cfg_attr(not(test), allow(dead_code))] // Tests construct a provider; runtime uses the local-http entry.
     pub(crate) fn new(
         upstream_id: u64,
         vendor: &str,
@@ -331,9 +334,11 @@ impl ImageProvider {
 impl PreparedImageCall {
     /// Full frozen identity including billing group, semantic model,
     /// operation and dimensions for the host's durable dispatch marker.
+    #[cfg_attr(not(test), allow(dead_code))] // Tests compare the frozen binding.
     pub(crate) fn binding(&self) -> &ImageQuoteRequest {
         self.quote.binding()
     }
+    #[cfg_attr(not(test), allow(dead_code))] // Tests compare the frozen quote.
     pub(crate) fn quote(&self) -> &ImageQuote {
         &self.quote
     }
@@ -620,6 +625,7 @@ fn image_part(upload: ImageUpload, index: usize) -> Result<Part, RelayError> {
         .mime_str(mime)
         .map_err(|_| RelayError::Invalid("invalid image MIME"))
 }
+#[cfg_attr(not(test), allow(dead_code))] // Tests use the default b64 response format.
 fn edits_form(
     quote: &ImageQuote,
     prompt: &str,

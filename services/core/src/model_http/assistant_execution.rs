@@ -100,6 +100,8 @@ impl ModelGateway {
         }
         Ok(())
     }
+    // Model, group, quote, transport and actor stay separate call inputs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn prepare_assistant(
         &self,
         model: &str,

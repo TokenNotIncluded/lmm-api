@@ -4,6 +4,8 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 /// developer/production database, and removed explicitly after closing children.
 pub struct RuntimeRole {
     pub pool: PgPool,
+    /// Some importers connect through `pool` and never read the URL.
+    #[allow(dead_code)]
     pub url: String,
     pub name: String,
     owner: PgPool,
@@ -160,6 +162,7 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             owner: owner.clone(),
         }
     }
+    #[allow(dead_code)] // Importers with only the base grants do not call this.
     pub async fn optional(&self, schema: &str) {
         if schema == "core_market_oauth" {
             sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_market_oauth TO {0}; GRANT SELECT,INSERT ON core_market_oauth.clients,core_market_oauth.requests,core_market_oauth.families,core_market_oauth.codes,core_market_oauth.tokens TO {0}; GRANT UPDATE(revoked_at) ON core_market_oauth.clients,core_market_oauth.families TO {0}; GRANT UPDATE(consumed_at) ON core_market_oauth.requests,core_market_oauth.codes,core_market_oauth.tokens TO {0}; GRANT EXECUTE ON FUNCTION core_market_oauth.scope_set(text[]) TO {0}",self.name)).execute(&self.owner).await.unwrap();
