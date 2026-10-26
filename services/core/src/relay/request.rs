@@ -66,6 +66,9 @@ pub struct FunctionTool {
     pub description: Option<String>,
     pub parameters: Value,
     pub strict: Option<bool>,
+    /// Compact JSON for `parameters`, using the client's object-key order when
+    /// that text still parses as the validated value.
+    pub(crate) ordered_parameters: String,
 }
 #[derive(Clone, Debug)]
 pub enum ToolChoice {
@@ -372,6 +375,9 @@ impl Request {
             serde_json::to_vec(&fields).map_err(|_| RelayError::Invalid("invalid request body"))?;
         let mut request = Self::parse(client, &bytes, limits)?;
         request.compatibility = compatibility;
+        // The compatibility parser re-encodes fields; capture only after its
+        // original duplicate/depth checks, from the original ordered schemas.
+        request.capture_ordered_schemas(client, body);
         Ok(request)
     }
 
@@ -539,11 +545,14 @@ impl Request {
                 if !parameters.is_object() {
                     return Err(RelayError::Invalid("function parameters must be an object"));
                 }
+                let ordered_parameters = serde_json::to_string(&parameters)
+                    .map_err(|_| RelayError::Invalid("function schema encoding failed"))?;
                 tools.push(FunctionTool {
                     name,
                     parameters,
                     description: f.get("description").map(string).transpose()?,
                     strict: boolean(f.get("strict"))?,
+                    ordered_parameters,
                 });
             }
         }
@@ -810,7 +819,7 @@ impl Request {
                 Ok(options.clone())
             })
             .transpose()?;
-        Ok(Self {
+        let mut request = Self {
             client,
             model,
             stream,
@@ -828,7 +837,73 @@ impl Request {
             image_config,
             continuation_token: None,
             compatibility: Map::new(),
-        })
+        };
+        request.capture_ordered_schemas(client, body);
+        Ok(request)
+    }
+
+    fn capture_ordered_schemas(&mut self, client: ClientProtocol, body: &[u8]) {
+        let captured = match client {
+            ClientProtocol::Chat => super::schema_order::chat_schemas(body),
+            ClientProtocol::Responses => super::schema_order::responses_schemas(body),
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => None,
+        };
+        if let Some(captured) = captured {
+            self.assign_ordered_schemas(&captured);
+        }
+    }
+
+    pub(crate) fn assign_ordered_schemas(
+        &mut self,
+        captured: &[Option<super::schema_order::RawSchema>],
+    ) {
+        if captured.len() != self.tools.len() {
+            return;
+        }
+        for (tool, item) in self.tools.iter_mut().zip(captured) {
+            let Some(item) = item else { continue };
+            let ordered = match item {
+                super::schema_order::RawSchema::Json(raw) => {
+                    super::schema_order::ordered_json_matching(raw, &tool.parameters)
+                }
+                super::schema_order::RawSchema::GeminiOpenApi(raw) => {
+                    super::schema_order::ordered_gemini_schema(raw, &tool.parameters)
+                }
+            };
+            if let Some(text) = ordered {
+                tool.ordered_parameters = text;
+            }
+        }
+    }
+
+    /// Encode only after applying the immutable selected-route payload policy.
+    pub(crate) fn upstream_body(&self, route: &Route) -> Result<Vec<u8>, RelayError> {
+        let payload = self.upstream(route)?;
+        self.ordered_payload_body(&payload, route.protocol)
+    }
+
+    /// Strict protocol/model encoding for the isolated uncharged transport.
+    /// It cannot authorize deferred compatibility fields or accept a Route.
+    pub(crate) fn upstream_body_to(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+    ) -> Result<Vec<u8>, RelayError> {
+        let payload = self.upstream_to(protocol, model)?;
+        self.ordered_payload_body(&payload, protocol)
+    }
+
+    fn ordered_payload_body(
+        &self,
+        payload: &Value,
+        protocol: UpstreamProtocol,
+    ) -> Result<Vec<u8>, RelayError> {
+        let schemas: Vec<String> = self
+            .tools
+            .iter()
+            .map(|tool| tool.ordered_parameters.clone())
+            .collect();
+        super::schema_order::encode_ordered_schemas(payload, protocol, &schemas)
     }
 
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {

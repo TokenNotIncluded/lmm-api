@@ -12,6 +12,7 @@ pub(crate) mod native_anthropic;
 pub(crate) mod native_gemini;
 pub(crate) mod provider_network;
 mod request;
+mod schema_order;
 mod sse;
 #[cfg(test)]
 mod tests;
@@ -680,9 +681,7 @@ impl Worker {
             .await?;
         self.report.route_id = Some(route.id.clone());
         self.report.price_version = Some(route.price_version);
-        let payload = self.request.upstream(&route)?;
-        let body = serde_json::to_vec(&payload)
-            .map_err(|_| RelayError::Invalid("request encoding failed"))?;
+        let body = self.request.upstream_body(&route)?;
         if body.len() > self.inner.limits.request_bytes {
             return Err(RelayError::Limit("encoded request"));
         }
@@ -893,3 +892,6 @@ impl Worker {
         });
     }
 }
+
+#[cfg(test)]
+mod independent_966_schema_tests;
