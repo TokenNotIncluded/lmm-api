@@ -119,12 +119,11 @@ async fn preset_status_and_start_fail_closed_without_exact_browser_installation(
         .0,
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(
-        request(&app, "GET", "/api/oauth/google", None, Value::Null)
-            .await
-            .0,
-        StatusCode::METHOD_NOT_ALLOWED
-    );
+    // GET is the legacy callback. Missing code and state is unauthorized and creates no login.
+    let (status, body) = request(&app, "GET", "/api/oauth/google", None, Value::Null).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["success"], false);
+    assert_eq!(body["code"], "AUTH_UNAUTHORIZED");
     let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM core_identity.users),(SELECT count(*) FROM core_identity.credentials),(SELECT count(*) FROM core_identity.oauth_flows)").fetch_one(&pool).await.unwrap();
     assert_eq!(counts, (0, 0, 0));
 }

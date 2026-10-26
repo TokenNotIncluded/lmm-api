@@ -541,8 +541,20 @@ async fn independent_process_settlement_retry_without_redispatch(pool: PgPool) {
     assert_eq!(journal_count, 3); // Opening credit, reservation and capture only.
     assert_eq!(command_count, 2); // Failed attempts left no durable settle commands.
     assert_eq!(
-        output_checkpoint_count, 0,
-        "non-streaming output is not an SSE checkpoint"
+        output_checkpoint_count, 1,
+        "non-streaming terminal keeps one recovery checkpoint"
+    );
+    let checkpoint: (i64, bool) = sqlx::query_as(
+        "SELECT packet_bytes, terminal_observed FROM core_model.output_checkpoints WHERE request_id=$1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        checkpoint,
+        (0, true),
+        "non-streaming recovery checkpoint must not carry an SSE body"
     );
     assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
     provider_auth_is_private(&provider, 1);

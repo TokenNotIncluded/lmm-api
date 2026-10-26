@@ -34,6 +34,8 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 
+// Some importers only call `fixture` and never start the loopback provider.
+#[allow(dead_code)]
 pub(super) struct Provider {
     pub(super) endpoint: String,
     pub(super) hits: Arc<AtomicUsize>,
@@ -56,6 +58,7 @@ impl Drop for Provider {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Only the loopback provider constructs this state.
 struct ProviderState {
     hits: Arc<AtomicUsize>,
     auth: Arc<Mutex<Vec<String>>>,
@@ -67,12 +70,14 @@ struct ProviderState {
     stream_finished: Arc<AtomicUsize>,
 }
 // Observe producer exit independently from HTTP response body closure.
+#[allow(dead_code)] // Dropped by the loopback stream task.
 struct ProducerFinished(Arc<AtomicUsize>);
 impl Drop for ProducerFinished {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
+#[allow(dead_code)] // Used by the loopback stream body.
 struct ObservedStream {
     inner: ReceiverStream<Result<Bytes, std::io::Error>>,
     closed: Arc<AtomicUsize>,
@@ -99,6 +104,7 @@ impl Drop for ObservedStream {
         self.closed.fetch_add(1, Ordering::SeqCst);
     }
 }
+#[allow(dead_code)] // Route handler for importers that start the provider.
 async fn provider(
     State(state): State<ProviderState>,
     headers: axum::http::HeaderMap,
@@ -204,6 +210,7 @@ async fn provider(
     Json(value).into_response()
 }
 impl Provider {
+    #[allow(dead_code)] // Importers that only seed the database do not start it.
     pub(super) async fn start(usage: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/custom/v1", listener.local_addr().unwrap());

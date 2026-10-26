@@ -955,9 +955,12 @@ WITH catalog_path AS MATERIALIZED (
             .collect()
     }
     lmm_core::core_schema::init(&pool).await.unwrap();
-    // Fresh fourteen-component schema with canonical model paging and only this index removed.
-    // core_schema::index_tests independently constructs and pins this exact catalog.
-    const PRIOR: &str = "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54";
+    // Current schema with only the usage index removed. The lib test
+    // current_schema_index_predecessor_upgrade_changes_only_verified_index_and_two_receipts
+    // prints this catalog SHA256. The previous fourteen-component receipt is retired below.
+    const PRIOR: &str = "d238d1e8e7733ba63d28be1c98ce654087edaa5dc2b2b8c16b2498f939134f74";
+    const RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR: &str =
+        "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54";
     const RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR: &str =
         "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd";
     const RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR: &str =
@@ -1091,6 +1094,12 @@ WITH catalog_path AS MATERIALIZED (
             RETIRED_ELEVEN_COMPONENT_PRIOR,
         ),
         (RETIRED_ELEVEN_COMPONENT_PRIOR, PRIOR),
+        (PRIOR, RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR),
+        (
+            RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR,
+            RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR,
+        ),
+        (RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR, PRIOR),
     ] {
         sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode($1,'hex') WHERE singleton")
             .bind(saved).execute(&pool).await.unwrap();

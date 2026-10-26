@@ -356,6 +356,166 @@ fn gemini_plain_text_signatures_survive_both_client_formats_and_output_modes() {
         }
     }
 }
+
+fn gemini_client(stream: bool) -> Request {
+    let mut request = super::native_gemini::parse(
+        "gemini-test",
+        stream,
+        br#"{"contents":[{"parts":[{"text":"hello"}]}]}"#,
+        &Limits::default(),
+    )
+    .unwrap();
+    request.client = ClientProtocol::Gemini;
+    request.stream = stream;
+    request
+}
+
+fn render_gemini(client: ClientProtocol, stream: bool, events: Vec<Event>) -> String {
+    let request = if client == ClientProtocol::Gemini {
+        gemini_client(stream)
+    } else {
+        input(client, stream)
+    };
+    let mut encoder = Encoder::new(&request, "long_decode", &Limits::default());
+    let mut bytes = Vec::new();
+    for event in events {
+        for packet in encoder.consume(event).unwrap() {
+            bytes.extend(packet);
+        }
+    }
+    for packet in encoder.terminal().unwrap() {
+        bytes.extend(packet);
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
+fn json_packets(stream: bool, body: &str) -> Vec<Value> {
+    if stream {
+        body.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|data| *data != "[DONE]")
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect()
+    } else {
+        vec![serde_json::from_str(body).unwrap()]
+    }
+}
+
+fn gemini_upstream(reason: &str, token: Option<&str>) -> Value {
+    let mut candidate = json!({
+        "index": 0,
+        "content": {"role": "model", "parts": [{"text": "partial"}]},
+        "finishReason": reason
+    });
+    if let Some(token) = token {
+        candidate["continuationToken"] = json!(token);
+    }
+    json!({
+        "responseId": "g_1",
+        "candidates": [candidate],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 4}
+    })
+}
+
+fn decode_gemini(stream: bool, frames: &[Value]) -> Vec<Event> {
+    let mut decoder = Decoder::new(UpstreamProtocol::Gemini, &Limits::default());
+    if stream {
+        let mut events = Vec::new();
+        for frame_value in frames {
+            events.extend(frame(&mut decoder, frame_value.clone()).unwrap());
+        }
+        events.extend(decoder.eof().unwrap());
+        events
+    } else {
+        decoder.json(&frames[0]).unwrap()
+    }
+}
+
+#[test]
+fn gemini_long_decode_keeps_continuation_token_and_maps_finish_reasons() {
+    let token = "CiQ4ZmQ3-token";
+    let source = gemini_upstream("CONTINUATION", Some(token));
+    for stream in [false, true] {
+        let frames = if stream {
+            vec![
+                json!({"responseId":"g_1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}),
+                json!({"responseId":"g_1","candidates":[{"index":0,"finishReason":"CONTINUATION","continuationToken":token}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4}}),
+            ]
+        } else {
+            vec![source.clone()]
+        };
+        let events = decode_gemini(stream, &frames);
+        let native = render_gemini(ClientProtocol::Gemini, stream, events.clone());
+        let native_packets = json_packets(stream, &native);
+        let terminal = native_packets
+            .iter()
+            .rev()
+            .find(|packet| packet["candidates"][0].get("finishReason").is_some())
+            .unwrap();
+        assert_eq!(terminal["candidates"][0]["finishReason"], "CONTINUATION");
+        assert_eq!(terminal["candidates"][0]["continuationToken"], token);
+        assert!(native_packets.iter().any(|packet| {
+            packet["candidates"][0]["content"]["parts"]
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| part["text"] == "partial"))
+        }));
+        if stream {
+            assert!(native_packets.iter().any(|packet| {
+                packet["candidates"][0].get("finishReason").is_none()
+                    && packet["candidates"][0].get("continuationToken").is_none()
+                    && packet["candidates"][0]["content"]["parts"][0]["text"] == "partial"
+            }));
+        }
+        let chat = render_gemini(ClientProtocol::Chat, stream, events);
+        let finish = json_packets(stream, &chat)
+            .into_iter()
+            .rev()
+            .find_map(|packet| {
+                packet["choices"][0]["finish_reason"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .unwrap();
+        assert_eq!(finish, "length");
+        assert!(!chat.contains("continuationToken"));
+        assert!(!chat.contains("CONTINUATION"));
+    }
+
+    for token in [None, Some("")] {
+        let events = decode_gemini(false, &[gemini_upstream("CONTINUATION", token)]);
+        let native = render_gemini(ClientProtocol::Gemini, false, events);
+        let body: Value = serde_json::from_str(&native).unwrap();
+        assert_eq!(body["candidates"][0]["finishReason"], "CONTINUATION");
+        assert!(body["candidates"][0].get("continuationToken").is_none());
+        assert!(!native.contains("continuationToken"));
+    }
+
+    let safety = decode_gemini(false, &[gemini_upstream("SAFETY", None)]);
+    let chat = render_gemini(ClientProtocol::Chat, false, safety.clone());
+    let chat_body: Value = serde_json::from_str(&chat).unwrap();
+    assert_eq!(chat_body["choices"][0]["finish_reason"], "content_filter");
+    let native = render_gemini(ClientProtocol::Gemini, false, safety);
+    let native_body: Value = serde_json::from_str(&native).unwrap();
+    assert_eq!(native_body["candidates"][0]["finishReason"], "SAFETY");
+    assert!(
+        native_body["candidates"][0]
+            .get("continuationToken")
+            .is_none()
+    );
+
+    let limited = decode_gemini(false, &[gemini_upstream("MAX_TOKENS", None)]);
+    let chat = render_gemini(ClientProtocol::Chat, false, limited.clone());
+    let chat_body: Value = serde_json::from_str(&chat).unwrap();
+    assert_eq!(chat_body["choices"][0]["finish_reason"], "length");
+    let native = render_gemini(ClientProtocol::Gemini, false, limited);
+    let native_body: Value = serde_json::from_str(&native).unwrap();
+    assert_eq!(native_body["candidates"][0]["finishReason"], "MAX_TOKENS");
+    assert!(
+        native_body["candidates"][0]
+            .get("continuationToken")
+            .is_none()
+    );
+}
 #[test]
 fn annotated_responses_fail_instead_of_losing_citations() {
     let part = json!({"type":"output_text","text":"answer","annotations":[{"type":"url_citation","url":"https://example.test/"}]});

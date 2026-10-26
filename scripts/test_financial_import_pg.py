@@ -229,7 +229,15 @@ class PostgreSQLTests(unittest.TestCase):
                  "REVOKE CONNECT ON DATABASE " + db + " FROM PUBLIC;"
                  "GRANT CONNECT ON DATABASE " + db + " TO " + self.installer_role + ";", admin=True)
         type(self).db = db
+        self.addCleanup(self.drop_test_database, db)
         self.sql("GRANT EXECUTE ON FUNCTION pg_control_system() TO " + self.owner_role + ";", admin=True)
+
+    def drop_test_database(self, db):
+        if not db.startswith("a03_") or len(db) != 36 or not db[4:].isalnum():
+            raise AssertionError("refusing to drop an unowned database")
+        type(self).db = "postgres"
+        self.sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='" + db
+                 + "' AND pid<>pg_backend_pid(); DROP DATABASE " + db + ";", admin=True)
 
     def install_fresh_core(self):
         self.sql(reviewed_fixture_ddl(F.IDENTITY.current_contract()))

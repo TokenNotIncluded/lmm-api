@@ -33,12 +33,16 @@ pub(crate) enum AgentAnswer {
 }
 pub(crate) struct AgentObservation {
     pub answer: AgentAnswer,
+    /// Provider message from the same parse as `answer`. Workers branch on `answer`.
+    #[allow(dead_code)]
     pub assistant_message: Value,
     pub response_json: Vec<u8>,
     pub response_sha256: [u8; 32],
     pub usage: crate::billing::charging::Usage,
 }
 impl ModelGateway {
+    // Model, group, quote, transport and actor stay separate call inputs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn prepare_agent(
         &self,
         model: &str,

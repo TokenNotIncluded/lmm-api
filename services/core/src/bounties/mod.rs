@@ -610,6 +610,8 @@ fn evidence(url: &str, repo: &str, kind: &str) -> bool {
                 .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
         })
 }
+// Connection, command, actor, secret and mutable project fields stay separate.
+#[allow(clippy::too_many_arguments)]
 async fn transition(
     c: &mut PgConnection,
     cmd: &Command,

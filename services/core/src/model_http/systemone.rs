@@ -256,6 +256,8 @@ impl Drop for Active {
         }
     }
 }
+// Gateway, principal, secret, groups, peer, request and permit stay separate.
+#[allow(clippy::too_many_arguments)]
 async fn execute(
     gateway: ModelGateway,
     principal: ModelIdentity,

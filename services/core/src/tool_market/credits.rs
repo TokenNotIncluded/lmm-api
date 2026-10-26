@@ -245,7 +245,10 @@ mod tests {
             rate_quota: MAX_CREDITS,
             max_quantity: 2,
         };
-        assert_eq!(rules_quota(&[r.clone()], None), Err(Error::Invalid));
+        assert_eq!(
+            rules_quota(std::slice::from_ref(&r), None),
+            Err(Error::Invalid)
+        );
         assert_eq!(
             rules_quota(&[r.clone(), r.clone()], None),
             Err(Error::Invalid)

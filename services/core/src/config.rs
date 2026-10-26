@@ -2829,6 +2829,35 @@ fn read_database_url(inline: Option<String>, file: Option<PathBuf>) -> io::Resul
     Ok(Some(value))
 }
 
+/// Explicit optional HumanGrant assembly with the exact configured Web origin.
+pub async fn humangrant(
+    pool: sqlx::PgPool,
+) -> io::Result<Option<(axum::Router, Arc<crate::humangrant::HumanGrantEngine>)>> {
+    let enabled = match setting("LMM_CORE_HUMANGRANT_ENABLED").as_deref() {
+        Ok("true") => true,
+        Ok("false") | Err(_) => false,
+        _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
+    };
+    if !enabled {
+        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
+            return Err(invalid_config(
+                "HumanGrant SMTP requires HumanGrant enabled",
+            ));
+        }
+        return Ok(None);
+    }
+    let origin = setting("LMM_CORE_WEB_ORIGIN")
+        .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
+    let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
+    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
+        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
+            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
+            .transpose()?;
+    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
+        .await
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2903,9 +2932,11 @@ mod tests {
             file.write_all(contents.as_bytes()).unwrap();
         }
         for path in [&proof, &reused] {
-            let error = checked_edge_access_config(Some(proof.clone()), &[path.clone()])
-                .err()
-                .unwrap();
+            let token = path.to_path_buf();
+            let error =
+                checked_edge_access_config(Some(proof.clone()), std::slice::from_ref(&token))
+                    .err()
+                    .unwrap();
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert_eq!(
                 error.to_string(),
@@ -3964,33 +3995,4 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
                 .contains("do-not-log-this-secret")
         );
     }
-}
-
-/// Explicit optional HumanGrant assembly with the exact configured Web origin.
-pub async fn humangrant(
-    pool: sqlx::PgPool,
-) -> io::Result<Option<(axum::Router, Arc<crate::humangrant::HumanGrantEngine>)>> {
-    let enabled = match setting("LMM_CORE_HUMANGRANT_ENABLED").as_deref() {
-        Ok("true") => true,
-        Ok("false") | Err(_) => false,
-        _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
-    };
-    if !enabled {
-        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
-            return Err(invalid_config(
-                "HumanGrant SMTP requires HumanGrant enabled",
-            ));
-        }
-        return Ok(None);
-    }
-    let origin = setting("LMM_CORE_WEB_ORIGIN")
-        .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
-    let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
-    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
-        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
-            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
-            .transpose()?;
-    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
-        .await
-        .map(Some)
 }

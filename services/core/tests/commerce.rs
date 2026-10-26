@@ -572,20 +572,22 @@ async fn model_and_commerce_on_distinct_wallets_cannot_exceed_shared_user_cap(po
         }
         panic!("bounded model retry exhausted")
     });
+    // Same observation budget as the assembled-billing shared-cap race.
+    // Forty 2ms polls expire while the writers are still authenticating.
     let mut waiting = false;
-    for _ in 0..40 {
+    for _ in 0..200 {
         let n:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT core_billing.post_ledger%'").fetch_one(&pool).await.unwrap();
         if n == 2 {
             waiting = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    blocker.commit().await.unwrap();
     assert!(
         waiting,
         "independent-wallet writers must both pass their shared budget predicate before wallet release"
     );
+    blocker.commit().await.unwrap();
     let commerce = commerce_task.await.unwrap().unwrap();
     let model = model_task.await.unwrap();
     let accepted = usize::from(commerce.outcome == "succeeded") + usize::from(model.is_ok());

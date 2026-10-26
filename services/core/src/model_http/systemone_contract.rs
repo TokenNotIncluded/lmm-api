@@ -26,13 +26,14 @@ pub(crate) enum ImageFormat {
     Jpeg,
 }
 #[derive(Clone)]
+#[cfg_attr(not(test), allow(dead_code))] // Tests inspect part ownership; runtime keeps bytes on `wire`/`uploads`.
 pub(crate) enum AssetSource {
-    Inline { bytes: Vec<u8> },
+    Inline,
     Part(String),
 }
 #[derive(Clone)]
+#[cfg_attr(not(test), allow(dead_code))] // Tests inspect the stored source after format checks.
 pub(crate) struct Asset {
-    pub format: Option<ImageFormat>,
     pub source: AssetSource,
 }
 #[derive(Clone)]
@@ -45,6 +46,8 @@ pub(crate) struct Upload {
 pub(crate) struct Request {
     wire: Value,
     flags: DangerZone,
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Tests read assets; runtime serves `uploads` and `wire`.
     assets: BTreeMap<String, Asset>,
     uploads: Vec<Upload>,
 }
@@ -440,19 +443,13 @@ impl Request {
                     }
                     image_bytes(&bytes, declared)?;
                     let size = bytes.len();
-                    (AssetSource::Inline { bytes }, size)
+                    (AssetSource::Inline, size)
                 };
                 image_total = image_total
                     .checked_add(size)
                     .filter(|n| *n <= BODY)
                     .ok_or(RelayError::Limit("System One all image bytes"))?;
-                assets.insert(
-                    reference.clone(),
-                    Asset {
-                        format: declared,
-                        source,
-                    },
-                );
+                assets.insert(reference.clone(), Asset { source });
             }
         }
         if box_question && assets.is_empty() {
@@ -502,6 +499,7 @@ impl Request {
     pub(crate) fn wire(&self) -> &Value {
         &self.wire
     }
+    #[cfg_attr(not(test), allow(dead_code))] // Tests read assets; runtime serves `uploads` and `wire`.
     pub(crate) fn assets(&self) -> &BTreeMap<String, Asset> {
         &self.assets
     }

@@ -304,12 +304,15 @@ struct EligibilityUser {
     source_facts_sha256: String,
 }
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
 enum EligibilityBasis {
-    SourceConsoleActivation,
-    SourceExplicitOverride,
-    SourceAdminRole,
-    SourcePaidProjection,
+    #[serde(rename = "source_console_activation")]
+    ConsoleActivation,
+    #[serde(rename = "source_explicit_override")]
+    ExplicitOverride,
+    #[serde(rename = "source_admin_role")]
+    AdminRole,
+    #[serde(rename = "source_paid_projection")]
+    PaidProjection,
 }
 impl Eligibility {
     fn allows(&self, user: i64) -> bool {

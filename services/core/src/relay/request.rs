@@ -91,6 +91,9 @@ pub struct Request {
     /// Bounded Responses cache controls; never evidence of actual billed writes.
     pub prompt_cache_options: Option<Value>,
     pub(crate) include_usage: bool,
+    /// Gemini Long Decode token. Present only when the native request sent a
+    /// non-empty `continuationToken`. Other protocols cannot replay it.
+    pub(crate) continuation_token: Option<String>,
 }
 
 fn object(v: &Value) -> Result<&Map<String, Value>, RelayError> {
@@ -650,6 +653,7 @@ impl Request {
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
             prompt_cache_options,
+            continuation_token: None,
         })
     }
 
@@ -667,6 +671,11 @@ impl Request {
         if self.prompt_cache_options.is_some() && protocol != UpstreamProtocol::Responses {
             return Err(RelayError::Unsupported(
                 "cache lifetime controls require a Responses route",
+            ));
+        }
+        if self.continuation_token.is_some() && protocol != UpstreamProtocol::Gemini {
+            return Err(RelayError::Unsupported(
+                "Gemini continuation tokens require a Gemini route",
             ));
         }
         for m in &self.messages {
@@ -993,6 +1002,9 @@ impl Request {
             generation["stopSequences"] = json!(self.stop);
         }
         let mut v = json!({"contents":contents,"generationConfig":generation});
+        if let Some(token) = &self.continuation_token {
+            v["continuationToken"] = json!(token);
+        }
         if !system.is_empty() {
             v["systemInstruction"] = json!({"parts":system.iter().map(|v| json!({"text":v["text"]})).collect::<Vec<_>>()});
         }
