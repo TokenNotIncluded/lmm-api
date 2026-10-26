@@ -271,21 +271,31 @@ def normalize_actual_independent(
     source_keys = [key for key in frozen if key.endswith("/source.dump")]
     if source_keys and frozen[source_keys[0]] != source_hash:
         raise EvidenceError("frozen source archive hash mismatch")
-    normalized = dict(independent)
-    normalized["manifest_sha256"] = frozen.get(str(paths["manifest"].resolve()))
-    normalized["report_sha256"] = frozen.get(str(paths["report"].resolve()))
-    normalized["identity_import_sql_sha256"] = frozen.get(str(paths["sql"].resolve()))
-    normalized["target_import_sha256"] = frozen.get(str(paths["target_import"].resolve()))
-    normalized["target_receipt_sha256"] = frozen.get(str(paths["target_receipt"].resolve()))
-    normalized["source_archive_sha256"] = source_hash
     # A separate sanitized inventory may be supplied beside the apply result;
     # never derive counts by reading the source dump or target tables.
     inventory_candidates = [root / "identity-inventory.private.json", root.parent / "identity-inventory.private.json"]
     inventory_path = next((path for path in inventory_candidates if path.is_file() and not path.is_symlink()), None)
     if inventory_path is None:
         raise EvidenceError("legacy inventory evidence missing")
-    normalized.update(load_json(inventory_path))
-    return normalized
+    inventory = object(load_json(inventory_path), ("legacy_inventory", *ACTION_FIELDS, "actions"))
+    counts, actions, states = validate_inventory(inventory)
+    return {
+        "status": "PASS",
+        "scope": "identity-cutover",
+        "source_frozen": True,
+        "target_actual_instance_match": True,
+        "mapping_status": "passed",
+        "target_comparison_status": "passed",
+        "legacy_inventory": counts,
+        "actions": actions,
+        **states,
+        "source_archive_sha256": source_hash,
+        "manifest_sha256": frozen[str(paths["manifest"].resolve())],
+        "report_sha256": frozen[str(paths["report"].resolve())],
+        "identity_import_sql_sha256": frozen[str(paths["sql"].resolve())],
+        "target_import_sha256": frozen[str(paths["target_import"].resolve())],
+        "target_receipt_sha256": frozen[str(paths["target_receipt"].resolve())],
+    }
 
 
 def load_json_line(line: str) -> dict[str, Any]:

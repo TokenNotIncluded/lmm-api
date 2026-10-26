@@ -1,7 +1,7 @@
 //! MFA-only authenticated encryption and RFC 6238 verification.
 //!
 //! TOTP is provided by the pinned, MIT-licensed `totp-rs` 6.0.0 implementation:
-//! https://github.com/constantoine/totp-rs/tree/5a4851bd849b970d0731d59e95dd5c271c6529b8
+//! <https://github.com/constantoine/totp-rs/tree/5a4851bd849b970d0731d59e95dd5c271c6529b8>
 //! The caller owns database time, replay prevention and plaintext lifetime.
 use crate::identity::IdentityError;
 use aes_gcm::{

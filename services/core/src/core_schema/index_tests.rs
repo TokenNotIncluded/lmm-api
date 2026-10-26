@@ -64,6 +64,66 @@ const PRE_HISTORY_COMPONENTS: &[(&str, &str)] = &[
 ];
 const PRE_MODEL_PAGING_HISTORY: &str =
     include_str!("../../tests/core_schema/history_pre_model_paging.sql");
+const POST_MODEL_PAGING_MODEL: &str =
+    include_str!("../../tests/core_schema/model_gateway_after_paging.sql");
+const HISTORICAL_IDENTITY_RECEIPT: &str =
+    include_str!("../../tests/core_schema/identity_receipt_pre_history.rs");
+const HISTORICAL_OAUTH_RECEIPT: &str =
+    include_str!("../../tests/core_schema/oauth_receipt_pre_history.rs");
+const HISTORICAL_CONTRACT: &str =
+    include_str!("../../tests/core_schema/installer_contract_pre_history.sql");
+const HISTORICAL_CATALOG: &str = include_str!("../../tests/core_schema/catalog_pre_history.sql");
+// Both frozen historical identity writers record version 4; OAuth records 1.
+const HISTORICAL_IDENTITY_VERSION: i32 = 4;
+const HISTORICAL_OAUTH_VERSION: i32 = 1;
+
+fn historical_oauth_catalog() -> &'static str {
+    HISTORICAL_OAUTH_RECEIPT
+        .split_once("const CATALOG: &str = r#\"")
+        .unwrap()
+        .1
+        .split_once("\"#;")
+        .unwrap()
+        .0
+}
+
+fn assert_historical_receipt_sources(frozen: &serde_json::Value) {
+    assert_eq!(frozen["identity_version"], HISTORICAL_IDENTITY_VERSION);
+    assert_eq!(frozen["oauth_receipt_version"], HISTORICAL_OAUTH_VERSION);
+    assert!(HISTORICAL_IDENTITY_RECEIPT.contains("const VERSION: i32 = 4;"));
+    assert_eq!(
+        frozen["catalog_fingerprint_encoding"],
+        "sha256-u64be-byte-length-prefixed-utf8-v1"
+    );
+    assert_eq!(
+        frozen["oauth_catalog_query_sha256"],
+        format!(
+            "{:x}",
+            Sha256::digest(historical_oauth_catalog().as_bytes())
+        )
+    );
+    for (field, bytes) in [
+        (
+            "installer_contract_sql_sha256",
+            HISTORICAL_CONTRACT.as_bytes(),
+        ),
+        ("catalog_query_sha256", HISTORICAL_CATALOG.as_bytes()),
+        (
+            "identity_receipt_source_sha256",
+            HISTORICAL_IDENTITY_RECEIPT.as_bytes(),
+        ),
+        (
+            "oauth_receipt_source_sha256",
+            HISTORICAL_OAUTH_RECEIPT.as_bytes(),
+        ),
+    ] {
+        assert_eq!(
+            frozen[field],
+            format!("{:x}", Sha256::digest(bytes)),
+            "{field}"
+        );
+    }
+}
 
 fn legacy_components() -> Vec<(&'static str, &'static str)> {
     let frozen: serde_json::Value = serde_json::from_str(include_str!(
@@ -75,44 +135,7 @@ fn legacy_components() -> Vec<(&'static str, &'static str)> {
         "a436ad4a73cb640babce61fe5e9fc85aead610c1"
     );
     assert_eq!(frozen["fixture_kind"], "pre-history-13-index-predecessor");
-    assert_eq!(frozen["oauth_receipt_version"], 1);
-    assert_eq!(
-        frozen["catalog_fingerprint_encoding"],
-        "sha256-u64be-byte-length-prefixed-utf8-v1"
-    );
-    let oauth_query = include_str!("../identity/grants.rs")
-        .split_once("const CATALOG: &str = r#\"")
-        .unwrap()
-        .1
-        .split_once("\"#;")
-        .unwrap()
-        .0;
-    assert_eq!(
-        frozen["oauth_catalog_query_sha256"],
-        format!("{:x}", Sha256::digest(oauth_query.as_bytes()))
-    );
-    for (field, bytes) in [
-        ("installer_contract_sql_sha256", CONTRACT.as_bytes()),
-        ("catalog_query_sha256", CATALOG.as_bytes()),
-        (
-            "identity_receipt_source_sha256",
-            include_bytes!("../identity/schema.rs").as_slice(),
-        ),
-        (
-            "oauth_receipt_source_sha256",
-            include_bytes!("../identity/grants.rs").as_slice(),
-        ),
-    ] {
-        assert_eq!(
-            frozen[field],
-            format!("{:x}", Sha256::digest(bytes)),
-            "{field}"
-        );
-    }
-    assert_eq!(
-        IdentityStore::compiled_schema_contract().0,
-        frozen["identity_version"].as_i64().unwrap() as i32
-    );
+    assert_historical_receipt_sources(&frozen);
     let components = frozen["components"].as_array().unwrap();
     assert_eq!(components.len(), 13);
     let mut names = std::collections::BTreeSet::new();
@@ -149,6 +172,7 @@ fn pre_model_paging_components() -> Vec<(&'static str, &'static str)> {
         frozen["fixture_kind"],
         "pre-model-paging-14-index-predecessor"
     );
+    assert_historical_receipt_sources(&frozen);
     let mut components = legacy_components();
     components.push(("history", PRE_MODEL_PAGING_HISTORY));
     let expected = frozen["components"].as_array().unwrap();
@@ -165,7 +189,35 @@ fn pre_model_paging_components() -> Vec<(&'static str, &'static str)> {
 }
 
 async fn prior(pool: &PgPool) -> [u8; 32] {
-    prior_components(pool, COMPONENTS).await
+    init(pool).await.unwrap();
+    remove_usage_index(pool).await
+}
+
+async fn remove_usage_index(pool: &PgPool) -> [u8; 32] {
+    let mut tx = pool.begin().await.unwrap();
+    check_usage_index(&mut tx).await.unwrap();
+    sqlx::query("DROP INDEX core_charging.ledger_commands_request_operation")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let changed = sqlx::query(
+        "UPDATE core_meta.component_contract SET fingerprint=$1 WHERE name='charging-ledger'",
+    )
+    .bind(PRIOR_CHARGING_LEDGER.to_vec())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(changed.rows_affected(), 1);
+    let hash = catalog(&mut tx).await.unwrap();
+    let changed =
+        sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=$1 WHERE singleton")
+            .bind(&hash)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(changed.rows_affected(), 1);
+    tx.commit().await.unwrap();
+    hash.try_into().unwrap()
 }
 
 async fn prior_components(pool: &PgPool, components: &[(&str, &str)]) -> [u8; 32] {
@@ -186,11 +238,26 @@ async fn prior_components(pool: &PgPool, components: &[(&str, &str)]) -> [u8; 32
         sqlx::raw_sql(&source).execute(&mut *tx).await.unwrap();
         // Receipt tables are created below, after all component sources.
     }
-    sqlx::raw_sql(CONTRACT).execute(&mut *tx).await.unwrap();
-    IdentityStore::record_schema_contract(&mut tx)
+    sqlx::raw_sql(HISTORICAL_CONTRACT)
+        .execute(&mut *tx)
         .await
         .unwrap();
-    crate::identity::grants::record_schema_contract(&mut tx)
+    let source = |name| components.iter().find(|(n, _)| *n == name).unwrap().1;
+    sqlx::query("INSERT INTO core_meta.schema_contract(version,fingerprint) VALUES ($1,$2)")
+        .bind(HISTORICAL_IDENTITY_VERSION)
+        .bind(Sha256::digest(source("identity").as_bytes()).to_vec())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let oauth_definitions: Vec<String> = sqlx::query_scalar(historical_oauth_catalog())
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_oauth.contract(version,ddl_fingerprint,catalog_fingerprint) VALUES ($1,$2,$3)")
+        .bind(HISTORICAL_OAUTH_VERSION)
+        .bind(Sha256::digest(source("oauth-grants").as_bytes()).to_vec())
+        .bind(fingerprint(&oauth_definitions))
+        .execute(&mut *tx)
         .await
         .unwrap();
     for (name, source) in components {
@@ -206,7 +273,11 @@ async fn prior_components(pool: &PgPool, components: &[(&str, &str)]) -> [u8; 32
             .await
             .unwrap();
     }
-    let hash = catalog(&mut tx).await.unwrap();
+    let definitions: Vec<String> = sqlx::query_scalar(HISTORICAL_CATALOG)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    let hash = fingerprint(&definitions);
     sqlx::query("INSERT INTO core_meta.runtime_contract(catalog_fingerprint) VALUES ($1)")
         .bind(&hash)
         .execute(&mut *tx)
@@ -229,6 +300,179 @@ async fn snapshot(pool: &PgPool) -> Vec<String> {
             serde_json::to_string(&(kind, table, rows)).unwrap()
         })
         .collect()
+}
+
+async fn receipts(pool: &PgPool) -> std::collections::BTreeMap<String, Vec<serde_json::Value>> {
+    database_snapshot::snapshot(pool)
+        .await
+        .into_iter()
+        .filter(|(table, _)| table.starts_with("r:core_meta.") || table == "r:core_oauth.contract")
+        .map(|(table, rows)| {
+            (
+                table,
+                rows.into_iter()
+                    .map(|row| serde_json::from_str(&row).unwrap())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn reviewed_routing_predecessor() -> &'static str {
+    // Exact b45bfc532 Git input, independent of the fresh-install SQL.
+    let original = include_str!("../../tests/core_schema/routing_before_payload_policy.sql");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(original)),
+        "d8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e"
+    );
+    const OLD_COLUMN: &str =
+        "    payload text NOT NULL CHECK (payload IN ('passthrough', 'adapt')),\n";
+    const POLICY_COLUMN: &str = "    -- Preserve the complete selected-target policy. Old string variants keep their
+    -- wire shape; the opt-in object permits only the five explicit boolean flags.
+    payload jsonb NOT NULL CHECK (
+        payload IN ('\"passthrough\"'::jsonb, '\"adapt\"'::jsonb) OR
+        CASE WHEN jsonb_typeof(payload) = 'object'
+            AND payload ? 'legacy_openai' AND payload - 'legacy_openai' = '{}'::jsonb
+            AND jsonb_typeof(payload->'legacy_openai') = 'object' THEN
+            (payload->'legacy_openai') - ARRAY[
+                'allow_service_tier', 'allow_inference_geo', 'allow_speed',
+                'allow_safety_identifier', 'allow_include_obfuscation'
+            ] = '{}'::jsonb
+            AND coalesce(payload->'legacy_openai'->'allow_service_tier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_inference_geo', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_speed', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_safety_identifier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_include_obfuscation', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+        ELSE false END
+    ),\n";
+    const OLD_PROJECTION: &str = "            t->>'payload', (t->>'timeout_ms')::integer";
+    const NEW_PROJECTION: &str = "            t->'payload', (t->>'timeout_ms')::integer";
+    assert_eq!(original.matches(OLD_COLUMN).count(), 1);
+    assert_eq!(original.matches(OLD_PROJECTION).count(), 1);
+    let reviewed =
+        original
+            .replacen(OLD_COLUMN, POLICY_COLUMN, 1)
+            .replacen(OLD_PROJECTION, NEW_PROJECTION, 1);
+    assert_eq!(
+        COMPONENTS
+            .iter()
+            .find(|(name, _)| *name == "routing")
+            .unwrap()
+            .1,
+        reviewed,
+        "current routing changes exactly the selected policy column and its JSON projection"
+    );
+    original
+}
+
+#[test]
+fn current_routing_delta_extends_exact_independent_pre_policy_bytes() {
+    reviewed_routing_predecessor();
+}
+
+async fn assert_current_installation_extends_reviewed_catalog(pool: &PgPool, installed: &[String]) {
+    // a7e1105d3 only appends pending-liability objects to 0b4f40996's ledger.
+    // Pin both original Git inputs instead of approving a newly observed hash.
+    let ledger = COMPONENTS
+        .iter()
+        .find(|(name, _)| *name == "ledger")
+        .unwrap()
+        .1;
+    let marker = "\n-- Historical provider orders that were still unresolved at the source\n";
+    assert_eq!(ledger.matches(marker).count(), 1);
+    let (baseline, addition) = ledger.split_once(marker).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(baseline)),
+        "1edf84beaebc03ddc45b52da7f266980b5873905f116e031ef21efbf5fbebe7f",
+        "0b4f40996 ledger blob 75f2da806477b9bfd70c608825a50cdc6e848fb3"
+    );
+    let mut hash = Sha256::new();
+    hash.update(marker);
+    hash.update(addition);
+    assert_eq!(
+        format!("{:x}", hash.finalize()),
+        "a9edae2dd0b0b279459bdc0d5c121bc7c9c1657acdd5851e56ccbc6c33b3a007",
+        "the exact 142-line a7e1105d3 append"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(ledger)),
+        "ce973f6fee25904d4fcdc87895ec49e6c53e10c9fb3508df4d7d72ace16df77f",
+        "a7e1105d3 ledger blob 759a2ca17fe682a5e4bba3a1c62e4d006bcc0ff7"
+    );
+    let before_receipts = receipts(pool).await;
+    let before_permissions = permissions(&mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    // This disposable SQLx database is projected only inside a rolled-back
+    // transaction. RESTRICT refuses any unreviewed dependency; PostgreSQL
+    // removes the new objects' own indexes, constraints and FK triggers.
+    sqlx::raw_sql(
+        "DROP FUNCTION core_billing.import_legacy_pending_liability(JSONB) RESTRICT;
+         DROP TABLE core_billing.legacy_pending_liability_receipts RESTRICT;
+         DROP TABLE core_billing.legacy_pending_liabilities RESTRICT;",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    // Restore only the independently sourced pre-policy column constraint/type
+    // and publication function. This is a test projection, never upgrade SQL.
+    let original_routing = reviewed_routing_predecessor();
+    let old_column = original_routing
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("payload text NOT NULL CHECK (")
+        })
+        .unwrap()
+        .trim()
+        .strip_prefix("payload text NOT NULL ")
+        .unwrap()
+        .strip_suffix(',')
+        .unwrap();
+    let prefix = "CREATE FUNCTION routing_publish_config(";
+    assert_eq!(original_routing.matches(prefix).count(), 1);
+    let function = original_routing
+        .split_once(prefix)
+        .unwrap()
+        .1
+        .split_once("$$;")
+        .unwrap()
+        .0;
+    sqlx::raw_sql(&format!(
+        "SET LOCAL search_path=public,pg_catalog;
+         ALTER TABLE public.routing_targets DROP CONSTRAINT routing_targets_payload_check;
+         ALTER TABLE public.routing_targets ALTER COLUMN payload TYPE text USING (payload #>> '{{}}');
+         ALTER TABLE public.routing_targets ADD CONSTRAINT routing_targets_payload_check {old_column};
+         CREATE OR REPLACE FUNCTION public.routing_publish_config({function}$$;"
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let baseline_definitions = definitions(&mut tx).await.unwrap();
+    assert_eq!(
+        fingerprint(&baseline_definitions)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        "ca87de9c089ffcdf4c2f738aee2fbf6c94bebe74cf48ac09074d7ca51b36c044",
+        "all definitions outside the exact a7e1105d3 append retain the reviewed 0b4f40996 catalog"
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        definitions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap(),
+        installed,
+        "the projection must leave the complete current catalog unchanged"
+    );
+    assert_eq!(receipts(pool).await, before_receipts);
+    assert_eq!(
+        permissions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap(),
+        before_permissions
+    );
 }
 
 #[sqlx::test(migrations = false)]
@@ -318,6 +562,48 @@ async fn pre_model_paging_fourteen_component_contract_is_refused_without_changes
     );
 }
 
+#[sqlx::test(migrations = false)]
+async fn post_model_paging_fourteen_component_contract_is_refused_without_changes(pool: PgPool) {
+    let mut components = pre_model_paging_components();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(POST_MODEL_PAGING_MODEL)),
+        "3550655d1318c7b33e1877d6eb5b98eb47f045a9c4cfb801d23331fcccb00be4",
+        "f296ce49b model-gateway blob 08537c7fc33afed4e1882f7e93f6be5284d20c17"
+    );
+    components
+        .iter_mut()
+        .find(|(name, _)| *name == "model-gateway")
+        .unwrap()
+        .1 = POST_MODEL_PAGING_MODEL;
+    let approved = prior_components(&pool, &components).await;
+    assert_eq!(
+        approved
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54",
+        "preserve the f296ce49b reviewed catalog as an actual historical fixture"
+    );
+    let before = snapshot(&pool).await;
+    let before_catalog = catalog(&mut pool.acquire().await.unwrap()).await.unwrap();
+    let before_permissions = permissions(&mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    assert!(check(&pool).await.is_err());
+    assert!(install_usage_receipt_index(&pool, approved).await.is_err());
+    assert_eq!(snapshot(&pool).await, before);
+    assert_eq!(
+        catalog(&mut pool.acquire().await.unwrap()).await.unwrap(),
+        before_catalog
+    );
+    assert_eq!(
+        permissions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap(),
+        before_permissions
+    );
+}
+
 async fn unchanged(pool: &PgPool, before: &[String]) {
     assert_eq!(snapshot(pool).await, before);
     let index: bool = sqlx::query_scalar(
@@ -333,15 +619,75 @@ async fn unchanged(pool: &PgPool, before: &[String]) {
 async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_and_two_receipts(
     pool: PgPool,
 ) {
-    let approved = prior(&pool).await;
+    init(&pool).await.unwrap();
+    check(&pool).await.unwrap();
+    let installed = definitions(&mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let installed_receipts = receipts(&pool).await;
+    assert_eq!(
+        installed_receipts["r:core_meta.component_contract"].len(),
+        26
+    );
+    for table in [
+        "r:core_meta.schema_upgrades",
+        "r:core_meta.component_upgrades",
+        "r:core_meta.ledger_revisions",
+    ] {
+        assert!(installed_receipts.contains_key(table), "missing {table}");
+    }
+    assert_current_installation_extends_reviewed_catalog(&pool, &installed).await;
+    let approved = remove_usage_index(&pool).await;
     let prior_hex = approved
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
+    let prior_definitions = definitions(&mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    assert!(prior_definitions.iter().all(|row| installed.contains(row)));
+    let removed: Vec<serde_json::Value> = installed
+        .iter()
+        .filter(|row| !prior_definitions.contains(row))
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect();
     assert_eq!(
-        prior_hex, "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54",
-        "current-schema index-predecessor fixture must match its reviewed canonical catalog"
+        removed.len(),
+        4,
+        "only the complete usage index was removed"
     );
+    for row in &removed {
+        assert_eq!(row[1], "core_charging");
+        assert_eq!(row[2], "ledger_commands_request_operation");
+    }
+    for (kind, count) in [("relation", 1), ("column", 2), ("index", 1)] {
+        assert_eq!(removed.iter().filter(|row| row[0] == kind).count(), count);
+    }
+    let columns: Vec<&str> = removed
+        .iter()
+        .filter(|row| row[0] == "column")
+        .map(|row| row[4].as_str().unwrap())
+        .collect();
+    assert_eq!(columns, ["request_id", "operation_id"]);
+    let mut expected_prior_receipts = installed_receipts.clone();
+    let component = expected_prior_receipts
+        .get_mut("r:core_meta.component_contract")
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["name"] == "charging-ledger")
+        .unwrap();
+    component["fingerprint"] = format!(
+        "\\x{}",
+        PRIOR_CHARGING_LEDGER
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+    .into();
+    expected_prior_receipts
+        .get_mut("r:core_meta.runtime_contract")
+        .unwrap()[0]["catalog_fingerprint"] = format!("\\x{prior_hex}").into();
+    assert_eq!(receipts(&pool).await, expected_prior_receipts);
     println!("prior catalog SHA256={prior_hex}");
     let store = IdentityStore::from_pool(pool.clone());
     store.check_schema().await.unwrap();
@@ -431,6 +777,18 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
     install_usage_receipt_index(&pool, approved).await.unwrap();
     check(&pool).await.unwrap();
     store.check_schema().await.unwrap();
+    assert_eq!(
+        definitions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap(),
+        installed,
+        "the upgraded catalog must equal the complete reviewed fresh installation"
+    );
+    assert_eq!(
+        receipts(&pool).await,
+        installed_receipts,
+        "only the charging-ledger and runtime receipts may change"
+    );
     let financial = |rows: Vec<String>| {
         rows.into_iter()
             .filter(|s| !s.starts_with("[\"component\"") && !s.starts_with("[\"runtime\""))

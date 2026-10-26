@@ -91,6 +91,109 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(checks["escrow_unit_and_candidate_bindings"]["status"], "PASS")
         self.assertEqual(checks["target_and_role_declarations"]["status"], "PASS")
 
+    def test_source_unit_binding_survives_missing_or_invalid_economic_inputs(self):
+        self.fixture.composed_inputs()
+        f = self.fixture
+        names = ("source_review", "inflight_evidence")
+        paths = {name: Path(getattr(f.args, name)) for name in names}
+        originals = {name: path.read_bytes() for name, path in paths.items()}
+        for case in ("missing", "null", "malformed"):
+            try:
+                for name, path in paths.items():
+                    if case == "missing":
+                        setattr(f.args, name, f.input / ("MISSING-" + name))
+                    else:
+                        path.write_text("null\n" if case == "null" else '{"incomplete":')
+                with self.subTest(case=case):
+                    code, report = self.report()
+                    self.assertEqual((code, report["status"]), (1, "OFFLINE_CHECK_BLOCKED"))
+                    checks = report["checks"]
+                    self.assertEqual(checks["source_file_bindings"]["status"], "PASS")
+                    self.assertEqual(checks["escrow_unit_and_candidate_bindings"]["status"], "PASS")
+                    for name in names:
+                        self.assertEqual(checks["input_" + name]["status"], "BLOCKED")
+                    for name in ("economic_review", "inflight_source_evidence", "economic_and_policy_evidence_files"):
+                        self.assertEqual(checks[name]["status"], "BLOCKED")
+            finally:
+                for name, path in paths.items():
+                    setattr(f.args, name, path)
+                    path.write_bytes(originals[name])
+
+    def test_source_unit_binding_still_rejects_bad_candidates_without_economic_inputs(self):
+        self.fixture.composed_inputs()
+        f = self.fixture
+        for name in ("source_review", "inflight_evidence"):
+            setattr(f.args, name, f.input / ("MISSING-" + name))
+        mutations = (("escrow_unit_evidence", {"credits_per_usd": 500001}, "escrow_unit_evidence_policy_invalid"),
+                     ("escrow_unit_evidence", {"source_policy_evidence_sha256": "0" * 64}, "escrow_candidate_binding_mismatch"),
+                     ("escrow_candidate", {"blockers": ["unverified-source"]}, "escrow_candidate_unresolved"),
+                     ("escrow_candidate", {"source_unit_evidence_bound": False}, "escrow_candidate_binding_mismatch"))
+        for name, change, error in mutations:
+            path = Path(getattr(f.args, name))
+            before = path.read_bytes()
+            try:
+                self.update(name, lambda value: value.update(change))
+                with self.subTest(name=name, change=change):
+                    code, report = self.report()
+                    self.assertEqual(code, 1)
+                    self.assertEqual(report["checks"]["escrow_unit_and_candidate_bindings"],
+                                     {"status": "BLOCKED", "error_code": error})
+            finally:
+                path.write_bytes(before)
+
+    def test_source_unit_binding_still_requires_the_frozen_source_file_binding(self):
+        self.fixture.composed_inputs()
+        for name in ("source_review", "inflight_evidence"):
+            setattr(self.fixture.args, name, self.fixture.input / ("MISSING-" + name))
+        raw = self.fixture.input / "source-financial-export.private.jsonl"
+        raw.write_text(raw.read_text() + "PRIVATE-SOURCE-MARKER\n")
+        code, report = self.report()
+        self.assertEqual(code, 1)
+        self.assertEqual(report["checks"]["source_file_bindings"]["error_code"], "source_export_file_mismatch")
+        self.assertEqual(report["checks"]["escrow_unit_and_candidate_bindings"],
+                         {"status": "BLOCKED", "error_code": "readiness_dependency_unavailable"})
+
+    def test_composed_prepare_still_requires_review_and_inflight_files_before_rebuild(self):
+        self.fixture.composed_inputs()
+        f = self.fixture
+        for name in ("source_review", "inflight_evidence"):
+            original = getattr(f.args, name)
+            try:
+                setattr(f.args, name, f.input / ("MISSING-" + name))
+                with self.subTest(name=name), patch.object(F.PLANNER, "reuse_frozen_export",
+                        side_effect=AssertionError("missing authority must precede source rebuild")):
+                    code, output, stdout, stderr = self.invoke(mode="--prepare")
+                self.assertEqual(code, 1)
+                self.assertEqual(stdout, "")
+                self.assertEqual(F.PLANNER.parse_json(stderr)["status"], "REFUSED")
+                self.assertTrue((output / "refusal.private.json").exists())
+                self.assertFalse((output / "material.private.json").exists())
+                self.assertFalse((output / "opening.private.sql").exists())
+            finally:
+                setattr(f.args, name, original)
+
+    def test_source_only_readiness_cannot_replace_apply_approval_or_writer_hash(self):
+        material = self.fixture.composed_inputs()
+        for name in ("source_review", "inflight_evidence"):
+            setattr(self.fixture.args, name, self.fixture.input / ("MISSING-" + name))
+        _, report = self.report()
+        self.assertEqual(report["checks"]["escrow_unit_and_candidate_bindings"]["status"], "PASS")
+        sql = F.build_apply_sql(material)
+        approval = {"format_version": 2, "scope": material["scope"], "decision": "REVIEW_REQUIRED",
+                    "material_sha256": F.digest(material), "sql_sha256": F.sha(sql.encode()),
+                    "source_review_sha256": F.digest(material["source_review"])}
+        target = F.PLANNER.parse_json(Path(self.fixture.args.target_receipt).read_text())
+        with patch.object(F, "run_sql", side_effect=AssertionError("no apply without approval")), \
+             patch.object(F, "verify_source_files", side_effect=AssertionError("approval must be checked first")):
+            with self.assertRaisesRegex(F.Error, "offline_approval_mismatch"):
+                F.execute(material, approval=approval, original_sql=sql,
+                          connection=target["connection"], output=self.fixture.input)
+            changed = copy.deepcopy(material)
+            changed["tool_source_hashes"]["financial_writer_sha256"] = "0" * 64
+            with self.assertRaisesRegex(F.Error, "financial_tool_source_changed"):
+                F.execute(changed, approval=approval, original_sql=sql,
+                          connection=target["connection"], output=self.fixture.input)
+
     def test_unknown_reservations_are_not_replaced_with_zero(self):
         self.fixture.composed_inputs()
         self.update("reservations", lambda value: value["positions"][0].update(reserved_units=None))

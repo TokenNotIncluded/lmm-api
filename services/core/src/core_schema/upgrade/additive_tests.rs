@@ -152,6 +152,8 @@ fn compiled_25_predecessor_and_only_26_delta_match_frozen_bytes() {
     for (entry, (name, ddl)) in components.iter().zip(COMPONENTS.iter().take(25)) {
         let original = if *name == "ledger" {
             include_str!("../../../tests/core_schema/ledger_before_escrow_submit.sql")
+        } else if *name == "routing" {
+            include_str!("../../../tests/core_schema/routing_before_payload_policy.sql")
         } else {
             ddl
         };
@@ -165,6 +167,8 @@ fn compiled_25_predecessor_and_only_26_delta_match_frozen_bytes() {
     for component in &mut producer.components {
         if component.name == "ledger" {
             component.raw_schema_sha256 = super::super::ledger::PRE_LEDGER.into();
+        } else if component.name == "routing" {
+            component.raw_schema_sha256 = PRE_ROUTING.into();
         }
     }
     let mut installer = Sha256::new();
@@ -195,17 +199,20 @@ fn compiled_25_predecessor_and_only_26_delta_match_frozen_bytes() {
 #[test]
 fn additive_request_is_strict_and_binds_every_target_field() {
     let good = request();
+    validate(&good).unwrap();
+    // The older ledger boundary remains independently enforced.
     assert!(matches!(
-        validate(&good),
+        authorize_target(),
         Err(UpgradeError::Rejected(
             "UPGRADE_DB_USE_PRESERVED_26_INSTALLER"
         ))
     ));
     let encoded = serde_json::to_vec(&good).unwrap();
+    UpgradeRequest::read_fields(&encoded[..]).unwrap();
     assert!(matches!(
         UpgradeRequest::read(&encoded[..]),
         Err(UpgradeError::Rejected(
-            "UPGRADE_DB_USE_PRESERVED_26_INSTALLER"
+            "UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"
         ))
     ));
     for field in [
@@ -216,11 +223,11 @@ fn additive_request_is_strict_and_binds_every_target_field() {
     ] {
         let mut unknown = serde_json::to_value(&good).unwrap();
         unknown[field] = json!("untrusted");
-        assert!(UpgradeRequest::read(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
+        assert!(UpgradeRequest::read_fields(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
     }
     let mut unknown = serde_json::to_value(&good).unwrap();
     unknown["roles"]["password"] = json!("not-accepted");
-    assert!(UpgradeRequest::read(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
+    assert!(UpgradeRequest::read_fields(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
     let invalid: &[fn(&mut UpgradeRequest)] = &[
         |r| r.version = 0,
         |r| r.procedure = "core-unreviewed-v1".into(),

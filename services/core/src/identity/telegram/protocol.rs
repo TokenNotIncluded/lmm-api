@@ -1,5 +1,5 @@
 //! Ordinary Telegram Login Widget assertions, not Mini App init data.
-//! https://core.telegram.org/widgets/login-legacy#checking-authorization
+//! <https://core.telegram.org/widgets/login-legacy#checking-authorization>
 //! Cryptographic verification uses the existing MIT OR Apache-2.0 RustCrypto
 //! hmac 0.12.1 / sha2 0.10.9 implementations and their constant-time verifier.
 use crate::identity::IdentityError;

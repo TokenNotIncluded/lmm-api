@@ -158,12 +158,15 @@ impl PricingSurface {
                 t.enabled
                     && t.weight > 0
                     && t.speeds.contains(&Speed::Standard)
-                    && t.payload == PayloadPolicy::Adapt
+                    && t.payload != PayloadPolicy::Passthrough
             }) {
                 let Some(upstream) = upstreams.get(&target.upstream_id).filter(|u| u.enabled)
                 else {
                     continue;
                 };
+                if !target.payload.adapts(upstream.protocol, upstream.protocol) {
+                    continue;
+                }
                 if quote.tiered().is_some_and(|tariff| tariff.revision() == 4)
                     && !matches!(
                         upstream.protocol,

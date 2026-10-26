@@ -296,10 +296,8 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
                         return Err(RelayError::Invalid("duplicate call ID"));
                     }
                 }
-                InputBlock::ToolResult { id, .. } => {
-                    if !calls.contains(id) || !results.insert(id) {
-                        return Err(RelayError::Invalid("orphan or duplicate tool result"));
-                    }
+                InputBlock::ToolResult { id, .. } if !calls.contains(id) || !results.insert(id) => {
+                    return Err(RelayError::Invalid("orphan or duplicate tool result"));
                 }
                 _ => {}
             }
@@ -590,6 +588,16 @@ impl NativeEncoder {
                     return Err(RelayError::Limit("output tokens"));
                 }
             }
+            Event::ContinuationToken(token) => {
+                // Anthropic has no continuation field. The finish maps to max_tokens.
+                if !self.started
+                    || token.is_empty()
+                    || token.len() > self.limits.event_bytes
+                    || token.chars().any(char::is_control)
+                {
+                    return Err(RelayError::Protocol("invalid Gemini continuation token"));
+                }
+            }
             Event::StopSequence(sequence) => {
                 if self.stop_sequence.is_some()
                     || self.finish.is_some()
@@ -650,7 +658,7 @@ impl NativeEncoder {
         let reason = match self.finish {
             Some(FinishReason::Stop) if self.stop_sequence.is_some() => "stop_sequence",
             Some(FinishReason::Stop) => "end_turn",
-            Some(FinishReason::Length) => "max_tokens",
+            Some(FinishReason::Length | FinishReason::Continuation) => "max_tokens",
             Some(FinishReason::ToolCalls) => "tool_use",
             _ => return Err(RelayError::Protocol("missing finish")),
         };
@@ -791,9 +799,8 @@ mod tests {
                 .is_err()
             );
         }
-        for extra in [json!({"thinking":{"type":"enabled","budget_tokens":1024}})] {
-            assert!(parse(&request(extra), &Limits::default()).is_err());
-        }
+        let extra = json!({"thinking":{"type":"enabled","budget_tokens":1024}});
+        assert!(parse(&request(extra), &Limits::default()).is_err());
         assert!(parse(&request(json!({"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan","content":"x"}]}]})),&Limits::default()).is_err());
     }
     #[test]
@@ -961,8 +968,10 @@ mod tests {
     }
     #[test]
     fn native_anthropic_output_bounds_and_invalid_tool_json_fail() {
-        let mut limits = Limits::default();
-        limits.output_bytes = 200;
+        let limits = Limits {
+            output_bytes: 200,
+            ..Limits::default()
+        };
         let mut e = NativeEncoder::new("claude", "req", false, &limits);
         e.consume(&Event::Start("up".into())).unwrap();
         e.consume(&Event::Block {

@@ -77,15 +77,12 @@ async fn native_identity(
     peer: Option<IpAddr>,
 ) -> Result<(ModelIdentity, String, Vec<String>), RelayError> {
     native_headers(headers)?;
-    if let Some(honeypot) = &gateway.honeypot {
-        match honeypot.models(headers, peer).await? {
-            Some(_) => {
-                return Err(RelayError::Unsupported(
-                    "image requests are unavailable for this credential policy",
-                ));
-            }
-            None => (),
-        }
+    if let Some(honeypot) = &gateway.honeypot
+        && honeypot.models(headers, peer).await?.is_some()
+    {
+        return Err(RelayError::Unsupported(
+            "image requests are unavailable for this credential policy",
+        ));
     }
     let (actor, secret, groups) = gateway.authenticate(headers).await?;
     if !matches!(&actor,ModelIdentity::Native(p) if p.credential_kind==CredentialKind::ApiKey) {
@@ -149,10 +146,10 @@ fn finish(mut response: Response, id: Option<&str>) -> Response {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    if let Some(id) = id.filter(|id| valid_operation(id)) {
-        if let Ok(value) = HeaderValue::from_str(id) {
-            response.headers_mut().insert(OPERATION_HEADER, value);
-        }
+    if let Some(id) = id.filter(|id| valid_operation(id))
+        && let Ok(value) = HeaderValue::from_str(id)
+    {
+        response.headers_mut().insert(OPERATION_HEADER, value);
     }
     response
 }

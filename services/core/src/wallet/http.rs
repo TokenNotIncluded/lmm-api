@@ -175,13 +175,13 @@ fn cookie(h: &HeaderMap) -> Result<&str, Error> {
     let mut out = None;
     for h in h.get_all(header::COOKIE) {
         for item in h.to_str().map_err(|_| Error::Unauthorized)?.split(';') {
-            if let Some((name, value)) = item.trim().split_once('=') {
-                if name == "new_api_refresh" {
-                    if out.is_some() || value.is_empty() {
-                        return Err(Error::Unauthorized);
-                    }
-                    out = Some(value)
+            if let Some((name, value)) = item.trim().split_once('=')
+                && name == "new_api_refresh"
+            {
+                if out.is_some() || value.is_empty() {
+                    return Err(Error::Unauthorized);
                 }
+                out = Some(value)
             }
         }
     }

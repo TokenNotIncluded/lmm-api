@@ -32,13 +32,13 @@ impl AgentService {
         };
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(error) = service.run_turn(&session, &turn_id).await {
-                if matches!(
+            if let Err(error) = service.run_turn(&session, &turn_id).await
+                && matches!(
                     error,
                     Error::Forbidden | Error::Unauthorized | Error::NoFunds | Error::Invalid
-                ) {
-                    let _ = service.stop_without_live_model(&session, &turn_id).await;
-                }
+                )
+            {
+                let _ = service.stop_without_live_model(&session, &turn_id).await;
             }
         });
     }

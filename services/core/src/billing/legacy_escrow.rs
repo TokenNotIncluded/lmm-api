@@ -199,6 +199,8 @@ impl From<IdentityError> for Error {
 pub struct LegacyEscrowStore {
     pool: PgPool,
 }
+type LegacyEscrowQueryRow = (Json<serde_json::Value>, Json<Receipt>, i64, i64, i64);
+
 impl LegacyEscrowStore {
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
@@ -251,7 +253,7 @@ impl LegacyEscrowStore {
         }
         let mut tx = self.begin().await?;
         let actor = personal_actor(&mut tx, secret).await?;
-        let row: Option<(Json<serde_json::Value>, Json<Receipt>, i64, i64, i64)> = sqlx::query_as(
+        let row: Option<LegacyEscrowQueryRow> = sqlx::query_as(
             "SELECT o.request,o.result,o.actor_user_id,p.owner_user_id,p.payer_account_id FROM core_billing.legacy_escrow_operations o JOIN core_billing.legacy_escrow_projects p USING(migration_id,source_project_id) WHERE o.migration_id=$1 AND o.source_project_id=$2 AND o.operation_key=$3")
             .bind(&command.migration_id).bind(command.source_project_id).bind(&command.operation_key).fetch_optional(&mut *tx).await?;
         let (Json(request), Json(receipt), operation_actor, owner, payer) =

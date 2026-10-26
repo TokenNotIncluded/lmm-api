@@ -211,10 +211,10 @@ async fn marker(path: &Path, process: &mut shared::Process, timeout: u64) -> Val
             process.0.try_wait().unwrap().is_none(),
             "worker exited before checkpoint; inspect private log"
         );
-        if let Ok(bytes) = fs::read(path) {
-            if let Ok(value) = serde_json::from_slice(&bytes) {
-                return value;
-            }
+        if let Ok(bytes) = fs::read(path)
+            && let Ok(value) = serde_json::from_slice(&bytes)
+        {
+            return value;
         }
         assert!(
             Instant::now() < end,

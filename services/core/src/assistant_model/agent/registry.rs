@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) const FREE_PRICE_VERSION: &str = "builtin-free-v1";
+#[cfg_attr(not(test), allow(dead_code))] // Digested only while loading a reviewed registry.
 const FREE_PRICE: &[u8] =
     br#"{"kind":"free","unit":"credit_500k_usd","version":"builtin-free-v1"}"#;
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -55,11 +56,13 @@ pub(crate) struct AgentRegistry {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(not(test), allow(dead_code))] // Parsed only by `from_reviewed`.
 struct Artifact {
     tools: Vec<Definition>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(not(test), allow(dead_code))] // Parsed only by `from_reviewed`.
 struct Definition {
     name: String,
     description: String,
@@ -84,6 +87,7 @@ pub(super) fn hex32(s: &str) -> Result<[u8; 32], Error> {
     }
     Ok(out)
 }
+#[cfg_attr(not(test), allow(dead_code))] // Checked only by `from_reviewed`.
 fn no_external_refs(value: &Value) -> bool {
     match value {
         Value::Object(map) => map.iter().all(|(key, v)| {
@@ -99,6 +103,7 @@ impl AgentRegistry {
     /// Both artifact and digest come from reviewed private Core host configuration.
     /// The candidate extraction artifact intentionally lacks mandatory bindings,
     /// so it cannot silently install itself as a registry.
+    #[cfg_attr(not(test), allow(dead_code))] // Unit tests load the reviewed artifact; startup does not yet.
     pub(crate) fn from_reviewed(bytes: &[u8], expected_sha256: &str) -> Result<Self, Error> {
         if bytes.len() > 2_097_152 {
             return Err(Error::Invalid);

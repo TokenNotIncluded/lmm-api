@@ -348,9 +348,18 @@ async fn competing_real_holds_cannot_overdraw_and_release_restores_money(pool: P
         let key = key.clone();
         tasks.spawn(async move {
             let spec = request(&format!("concurrent-{index}"), 40);
-            for _ in 0..12 {
+            // Match the gateway's rollback-only retry policy in model_http/billing.rs.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            for attempt in 0..8 {
+                if tokio::time::Instant::now() >= deadline {
+                    return (spec.id, Err(Error::Retry));
+                }
                 match charging.reserve(&key, &spec, &WORKER).await {
-                    Err(Error::Retry) => tokio::task::yield_now().await,
+                    Err(Error::Retry) if attempt < 7 => {
+                        let next =
+                            tokio::time::Instant::now() + Duration::from_millis(10_u64 << attempt);
+                        tokio::time::sleep_until(next.min(deadline)).await;
+                    }
                     outcome => return (spec.id, outcome),
                 }
             }

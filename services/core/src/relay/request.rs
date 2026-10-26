@@ -93,6 +93,11 @@ pub struct Request {
     /// Validated Chat image controls, only emitted on a Gemini route.
     image_config: Option<ImageConfig>,
     pub(crate) include_usage: bool,
+    /// Gemini Long Decode token. Present only when the native request sent a
+    /// non-empty `continuationToken`. Other protocols cannot replay it.
+    pub(crate) continuation_token: Option<String>,
+    /// Untrusted compatibility values awaiting the actual selected route policy.
+    compatibility: Map<String, Value>,
 }
 
 fn object(v: &Value) -> Result<&Map<String, Value>, RelayError> {
@@ -118,12 +123,49 @@ impl<'de> Deserialize<'de> for RequestObject {
                     if !seen.insert(key.to_ascii_lowercase()) {
                         return Err(serde::de::Error::custom("duplicate request key"));
                     }
-                    values.insert(key, map.next_value()?);
+                    let value = if key == "stream_options" {
+                        map.next_value::<StreamOptions>()?.0
+                    } else {
+                        map.next_value()?
+                    };
+                    values.insert(key, value);
                 }
                 Ok(RequestObject(values))
             }
         }
         d.deserialize_map(ObjectVisitor)
+    }
+}
+/// Parse only direct option keys on the existing deserializer so nested values
+/// retain its depth limit. Never restart request parsing inside an option value.
+struct StreamOptions(Value);
+impl<'de> Deserialize<'de> for StreamOptions {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct OptionsVisitor;
+        impl<'de> Visitor<'de> for OptionsVisitor {
+            type Value = StreamOptions;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("null or an unambiguous stream options object")
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StreamOptions(Value::Null))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut seen = BTreeSet::new();
+                let mut values = Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !seen.insert(key.to_ascii_lowercase()) {
+                        return Err(serde::de::Error::custom("duplicate stream option key"));
+                    }
+                    if !matches!(key.as_str(), "include_usage" | "include_obfuscation") {
+                        return Err(serde::de::Error::custom("unsupported stream option key"));
+                    }
+                    values.insert(key, map.next_value::<Value>()?);
+                }
+                Ok(StreamOptions(Value::Object(values)))
+            }
+        }
+        d.deserialize_any(OptionsVisitor)
     }
 }
 fn keys(v: &Value, allowed: &[&str]) -> Result<(), RelayError> {
@@ -279,6 +321,60 @@ fn text_blocks(v: &Value, assistant: bool) -> Result<Vec<InputBlock>, RelayError
 }
 
 impl Request {
+    /// Admit only the five legacy fields provisionally. No policy is authorized
+    /// until `upstream` receives the immutable route selected by the bridge.
+    pub(crate) fn parse_deferred_openai(
+        client: ClientProtocol,
+        body: &[u8],
+        limits: &Limits,
+    ) -> Result<Self, RelayError> {
+        if !matches!(client, ClientProtocol::Chat | ClientProtocol::Responses) {
+            return Self::parse(client, body, limits);
+        }
+        limits.validate()?;
+        if body.len() > limits.request_bytes {
+            return Err(RelayError::Limit("request body"));
+        }
+        let mut fields = serde_json::from_slice::<RequestObject>(body)
+            .map_err(|_| RelayError::Invalid("invalid or ambiguous JSON body"))?
+            .0;
+        let mut compatibility = Map::new();
+        for name in [
+            "service_tier",
+            "inference_geo",
+            "speed",
+            "safety_identifier",
+        ] {
+            if let Some(value) = fields.remove(name) {
+                compatibility.insert(name.into(), value);
+            }
+        }
+        if let Some(options) = fields.get_mut("stream_options").filter(|v| !v.is_null()) {
+            keys(
+                options,
+                if client == ClientProtocol::Chat {
+                    &["include_usage", "include_obfuscation"]
+                } else {
+                    &["include_obfuscation"]
+                },
+            )?;
+            if let Some(value) = options
+                .as_object_mut()
+                .and_then(|o| o.remove("include_obfuscation"))
+            {
+                compatibility.insert("include_obfuscation".into(), value);
+            }
+            if options.as_object().is_some_and(Map::is_empty) {
+                fields.remove("stream_options");
+            }
+        }
+        let bytes =
+            serde_json::to_vec(&fields).map_err(|_| RelayError::Invalid("invalid request body"))?;
+        let mut request = Self::parse(client, &bytes, limits)?;
+        request.compatibility = compatibility;
+        Ok(request)
+    }
+
     pub fn parse(client: ClientProtocol, body: &[u8], limits: &Limits) -> Result<Self, RelayError> {
         limits.validate()?;
         if client == ClientProtocol::Anthropic {
@@ -730,11 +826,86 @@ impl Request {
             reasoning_effort,
             prompt_cache_options,
             image_config,
+            continuation_token: None,
+            compatibility: Map::new(),
         })
     }
 
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {
-        self.upstream_to(route.protocol, &route.model)
+        use crate::routing::PayloadPolicy;
+        let PayloadPolicy::LegacyOpenai {
+            allow_service_tier,
+            allow_inference_geo,
+            allow_speed,
+            allow_safety_identifier,
+            allow_include_obfuscation,
+        } = route.payload_policy
+        else {
+            return self.upstream_to(route.protocol, &route.model);
+        };
+        let same_wire = matches!(
+            (self.client, route.protocol),
+            (ClientProtocol::Chat, UpstreamProtocol::Chat)
+                | (ClientProtocol::Responses, UpstreamProtocol::Responses)
+        );
+        if !same_wire {
+            return Err(RelayError::Unsupported(
+                "legacy OpenAI policy requires the same wire protocol",
+            ));
+        }
+        let mut payload = self.encode_upstream(route.protocol, &route.model)?;
+        for (name, allowed) in [
+            ("service_tier", allow_service_tier),
+            ("inference_geo", allow_inference_geo),
+            ("speed", allow_speed),
+            ("safety_identifier", allow_safety_identifier),
+            ("include_obfuscation", allow_include_obfuscation),
+        ] {
+            let Some(value) = self.compatibility.get(name).filter(|_| allowed) else {
+                continue;
+            };
+            if name == "include_obfuscation" {
+                if !self.stream {
+                    return Err(RelayError::Unsupported("stream options require streaming"));
+                }
+                if !value.is_boolean() {
+                    return Err(RelayError::Invalid("include_obfuscation must be a boolean"));
+                }
+                if payload.get("stream_options").is_none() {
+                    payload["stream_options"] = json!({});
+                }
+                payload["stream_options"][name] = value.clone();
+            } else {
+                // The pinned OpenAI contract permits explicit null for these fields.
+                if value.is_null() && matches!(name, "service_tier" | "safety_identifier") {
+                    payload[name] = Value::Null;
+                    continue;
+                }
+                // Regional/speed values are provider extensions: bound the string
+                // without inventing or translating a provider's enum vocabulary.
+                let limit = if name == "safety_identifier" {
+                    128
+                } else {
+                    256
+                };
+                let text = value
+                    .as_str()
+                    .filter(|s| {
+                        !s.is_empty()
+                            && s.chars().count() <= limit
+                            && !s.chars().any(char::is_control)
+                    })
+                    .ok_or(RelayError::Invalid("invalid legacy OpenAI string field"))?;
+                if name == "service_tier"
+                    && !["auto", "default", "flex", "priority", "scale", "fast"].contains(&text)
+                    && !(route.protocol == UpstreamProtocol::Responses && text == "ultrafast")
+                {
+                    return Err(RelayError::Unsupported("unsupported service tier"));
+                }
+                payload[name] = value.clone();
+            }
+        }
+        Ok(payload)
     }
 
     /// Encode the existing bounded request for a server-owned protocol/model.
@@ -744,9 +915,27 @@ impl Request {
         protocol: UpstreamProtocol,
         model: &str,
     ) -> Result<Value, RelayError> {
+        if !self.compatibility.is_empty() {
+            return Err(RelayError::Unsupported(
+                "legacy fields require an explicit selected route policy",
+            ));
+        }
+        self.encode_upstream(protocol, model)
+    }
+
+    fn encode_upstream(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+    ) -> Result<Value, RelayError> {
         if self.prompt_cache_options.is_some() && protocol != UpstreamProtocol::Responses {
             return Err(RelayError::Unsupported(
                 "cache lifetime controls require a Responses route",
+            ));
+        }
+        if self.continuation_token.is_some() && protocol != UpstreamProtocol::Gemini {
+            return Err(RelayError::Unsupported(
+                "Gemini continuation tokens require a Gemini route",
             ));
         }
         for m in &self.messages {
@@ -974,7 +1163,7 @@ impl Request {
             return Err(RelayError::Unsupported("Anthropic temperature exceeds one"));
         }
         let (system, source) = self.split_system()?;
-        let mut messages = Vec::new();
+        let mut messages: Vec<(Role, Vec<Value>)> = Vec::new();
         for m in source {
             let mut content = Vec::new();
             for b in &m.content {
@@ -986,8 +1175,25 @@ impl Request {
                 InputBlock::ToolResult { id, content } => json!({"type":"tool_result","tool_use_id":id,"content":content}),
             });
             }
-            messages.push(json!({"role":if m.role == Role::Assistant {"assistant"} else {"user"},"content":content}));
+            let role = if m.role == Role::Assistant {
+                Role::Assistant
+            } else {
+                Role::User
+            };
+            if let Some((last_role, last_content)) = messages.last_mut()
+                && *last_role == role
+            {
+                last_content.extend(content);
+            } else {
+                messages.push((role, content));
+            }
         }
+        let messages = messages
+            .into_iter()
+            .map(|(role, content)| {
+                json!({"role":if role == Role::Assistant {"assistant"} else {"user"},"content":content})
+            })
+            .collect::<Vec<_>>();
         let mut v = json!({"model":model,"system":system,"messages":messages,"stream":self.stream,"max_tokens":self.max_output_tokens});
         if !self.tools.is_empty() {
             v["tools"] = json!(
@@ -1064,6 +1270,9 @@ impl Request {
             generation["imageConfig"] = image_config.to_gemini_value();
         }
         let mut v = json!({"contents":contents,"generationConfig":generation});
+        if let Some(token) = &self.continuation_token {
+            v["continuationToken"] = json!(token);
+        }
         if !system.is_empty() {
             v["systemInstruction"] = json!({"parts":system.iter().map(|v| json!({"text":v["text"]})).collect::<Vec<_>>()});
         }
