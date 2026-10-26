@@ -522,6 +522,78 @@ class DriverTests(unittest.TestCase):
                     self.assertEqual(result, {**self.result, "status": "UNKNOWN"})
                     run.assert_called_once()
 
+    def test_transport_exceptions_save_private_evidence_and_remain_unknown(self):
+        cases = [
+            (subprocess.TimeoutExpired("synthetic", 1, output=b"partial stdout\n",
+                                       stderr=b"partial stderr\n"),
+             {"database.stdout.private.txt": "partial stdout\n",
+              "database.stderr.private.txt": "partial stderr\n"}),
+            (OSError("synthetic private failure"), {}),
+        ]
+        for error, streams in cases:
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as root, \
+                 patch.object(F, "verify_source_files"), \
+                 patch.object(F.IDENTITY, "socket_connection", return_value={}), \
+                 patch.object(F.IDENTITY, "psql_options", return_value=""), \
+                 patch.object(F.subprocess, "run", side_effect=error) as run:
+                output = Path(root)
+                self.assertEqual(self.execute(output)["status"], "UNKNOWN")
+                run.assert_called_once()
+                failure = F.PLANNER.parse_json((output / "database.failure.private.json").read_text())
+                self.assertEqual(failure, {"type": type(error).__name__, "message": str(error)})
+                for name, expected in streams.items():
+                    self.assertEqual((output / name).read_text(), expected)
+                for name in (*streams, "database.failure.private.json", "result.private.json",
+                             "attempt.private.json", "executed.private.sql"):
+                    self.assertEqual((output / name).stat().st_mode & 0o777, 0o600)
+                self.assertEqual(F.PLANNER.parse_json((output / "result.private.json").read_text())["status"], "UNKNOWN")
+
+    def test_transport_evidence_writes_are_independent_and_preserve_exception(self):
+        names = ("database.stdout.private.txt", "database.stderr.private.txt",
+                 "database.failure.private.json")
+        for failed in names:
+            for direct in (True, False):
+                with self.subTest(failed=failed, direct=direct), tempfile.TemporaryDirectory() as root, \
+                     patch.object(F, "verify_source_files"), \
+                     patch.object(F.IDENTITY, "socket_connection", return_value={}), \
+                     patch.object(F.IDENTITY, "psql_options", return_value=""):
+                    output = Path(root)
+                    original_write = F.write_private
+                    attempted = []
+                    def write(directory, name, value):
+                        attempted.append(name)
+                        if name == failed:
+                            raise OSError("synthetic storage failure")
+                        return original_write(directory, name, value)
+                    error = subprocess.TimeoutExpired("synthetic", 1, output=b"synthetic stdout",
+                                                       stderr=b"synthetic stderr")
+                    with patch.object(F, "write_private", side_effect=write), \
+                         patch.object(F.subprocess, "run", side_effect=error) as run:
+                        if direct:
+                            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                                F.run_sql(self.connection, "synthetic sql", output, "synthetic")
+                            self.assertIs(caught.exception, error)
+                        else:
+                            self.assertEqual(self.execute(output)["status"], "UNKNOWN")
+                            self.assertEqual(F.PLANNER.parse_json(
+                                (output / "result.private.json").read_text())["status"], "UNKNOWN")
+                        run.assert_called_once()
+                    self.assertEqual([name for name in attempted if name in names], list(names))
+                    for name in names:
+                        self.assertEqual((output / name).exists(), name != failed)
+                        if name != failed:
+                            self.assertEqual((output / name).stat().st_mode & 0o777, 0o600)
+
+    def test_transport_evidence_does_not_swallow_safety_errors(self):
+        error = subprocess.TimeoutExpired("synthetic", 1, output=b"synthetic stdout")
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(F.IDENTITY, "socket_connection", return_value={}), \
+             patch.object(F.IDENTITY, "psql_options", return_value=""), \
+             patch.object(F.subprocess, "run", side_effect=error), \
+             patch.object(F, "write_private", side_effect=F.Error("synthetic safety refusal")):
+            with self.assertRaisesRegex(F.Error, "synthetic safety refusal"):
+                F.run_sql(self.connection, "synthetic sql", Path(root), "synthetic")
+
     def test_resolve_only_uses_matching_original_identity(self):
         attempt = {"operation": "apply", "migration_id": self.material["migration_id"],
             "material_sha256": F.digest(self.material), "sql_sha256": F.sha(self.sql.encode()),

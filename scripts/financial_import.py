@@ -884,8 +884,28 @@ def run_sql(connection: dict, sql: str, output: Path, application_name: str, *, 
     environment.update(IDENTITY.socket_connection(connection))
     environment.update(PGCONNECT_TIMEOUT="5", PGAPPNAME=application_name,
                        PGOPTIONS=IDENTITY.psql_options(connection, readonly=readonly))
-    result = subprocess.run(["psql", "-X", "--no-password", "-qAt", "-v", "ON_ERROR_STOP=1"],
-        input=sql, text=True, capture_output=True, env=environment, timeout=150, check=False)
+    try:
+        result = subprocess.run(["psql", "-X", "--no-password", "-qAt", "-v", "ON_ERROR_STOP=1"],
+            input=sql, text=True, capture_output=True, env=environment, timeout=150, check=False)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        evidence = []
+        if isinstance(error, subprocess.TimeoutExpired):
+            # TimeoutExpired can contain bytes even when text=True was requested.
+            for stream, value in (("stdout", error.stdout), ("stderr", error.stderr)):
+                if value is not None:
+                    if isinstance(value, bytes):
+                        value = value.decode("utf-8", errors="replace")
+                    evidence.append((label + "." + stream + ".private.txt", value))
+        evidence.append((label + ".failure.private.json",
+                         canonical({"type": type(error).__name__, "message": str(error)}) + "\n"))
+        for name, value in evidence:
+            try:
+                write_private(output, name, value)
+            except OSError:
+                # A storage failure must not prevent other evidence writes or
+                # replace the original transport exception. Safety checks still raise.
+                pass
+        raise
     write_private(output, label + ".stderr.private.txt", result.stderr)
     write_private(output, label + ".stdout.private.txt", result.stdout)
     return result.returncode, result.stdout
