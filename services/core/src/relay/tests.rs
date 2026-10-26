@@ -440,6 +440,155 @@ fn frame(decoder: &mut Decoder, v: Value) -> Result<Vec<Event>, RelayError> {
         data: v.to_string(),
     })
 }
+fn chat_request(body: Value) -> Request {
+    Request::parse(
+        ClientProtocol::Chat,
+        &serde_json::to_vec(&body).unwrap(),
+        &Limits::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn chat_gemini_image_config_preserves_bounded_top_level_value() {
+    let body = json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}
+    });
+    let upstream = chat_request(body)
+        .upstream_to(UpstreamProtocol::Gemini, "image-model")
+        .unwrap();
+    assert_eq!(
+        upstream["generationConfig"]["imageConfig"],
+        json!({"imageSize":"4K","aspectRatio":"16:9"})
+    );
+    assert!(upstream.get("imageConfig").is_none());
+
+    let empty = chat_request(json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{}
+    }))
+    .upstream_to(UpstreamProtocol::Gemini, "image-model")
+    .unwrap();
+    assert!(empty["generationConfig"].get("imageConfig").is_none());
+}
+
+#[test]
+fn chat_image_config_rejects_unknown_fields_and_non_gemini_routes() {
+    let mut invalid = json!({"model":"image-model","messages":[{"role":"user","content":"draw"}]});
+    invalid["imageConfig"] = json!({"unknown":"value"});
+    assert!(matches!(
+        Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&invalid).unwrap(),
+            &Limits::default(),
+        ),
+        Err(RelayError::Unsupported(_))
+    ));
+
+    for value in ["", " 4K", "4K\n"] {
+        let invalid = json!({
+            "model":"image-model",
+            "messages":[{"role":"user","content":"draw"}],
+            "imageConfig":{"imageSize":value}
+        });
+        assert!(matches!(
+            Request::parse(
+                ClientProtocol::Chat,
+                &serde_json::to_vec(&invalid).unwrap(),
+                &Limits::default(),
+            ),
+            Err(RelayError::Invalid(_))
+        ));
+    }
+    let invalid = json!({
+        "model":"image-model",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"x".repeat(33)}
+    });
+    assert!(matches!(
+        Request::parse(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(&invalid).unwrap(),
+            &Limits::default(),
+        ),
+        Err(RelayError::Invalid(_))
+    ));
+
+    let request = chat_request(json!({
+        "model":"gemini-3.1-flash-image-preview",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"4K"}
+    }));
+    assert!(matches!(
+        request.upstream_to(UpstreamProtocol::Chat, "chat-model"),
+        Err(RelayError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn deferred_openai_image_config_survives_reencoding_and_selected_route_checks() {
+    let mut body = json!({
+        "model":"image-model",
+        "messages":[{"role":"user","content":"draw"}],
+        "imageConfig":{"imageSize":"4K","aspectRatio":"16:9"}
+    });
+    let parse = |body: &Value| {
+        Request::parse_deferred_openai(
+            ClientProtocol::Chat,
+            &serde_json::to_vec(body).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap()
+    };
+    let request = parse(&body);
+    let gemini = Route::new(
+        "gemini".into(),
+        UpstreamProtocol::Gemini,
+        "https://provider.invalid/v1",
+        "image-model".into(),
+        "synthetic",
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        request.upstream(&gemini).unwrap()["generationConfig"]["imageConfig"],
+        body["imageConfig"]
+    );
+    for protocol in [
+        UpstreamProtocol::Chat,
+        UpstreamProtocol::Responses,
+        UpstreamProtocol::Anthropic,
+    ] {
+        let route = Route::new(
+            "other".into(),
+            protocol,
+            "https://provider.invalid/v1",
+            "real".into(),
+            "synthetic",
+            1,
+        )
+        .unwrap();
+        assert!(matches!(
+            request.upstream(&route),
+            Err(RelayError::Unsupported(_))
+        ));
+    }
+    body["speed"] = json!("fast");
+    let request = parse(&body);
+    for flags in [[false; 5], [true; 5]] {
+        assert!(matches!(
+            request.upstream(&legacy_route(UpstreamProtocol::Chat, flags)),
+            Err(RelayError::Unsupported(_))
+        ));
+    }
+    assert!(matches!(
+        request.upstream(&gemini),
+        Err(RelayError::Unsupported(_))
+    ));
+}
 
 #[test]
 fn responses_cache_lifetime_is_bounded_and_not_silently_lost_in_conversion() {
