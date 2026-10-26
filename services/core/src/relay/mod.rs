@@ -335,7 +335,7 @@ struct Worker {
     context: RequestContext,
     gate: Gate,
     sender: mpsc::Sender<Result<Bytes, RelayError>>,
-    head: Arc<Mutex<Option<oneshot::Sender<Result<ResponseHead, RelayError>>>>>,
+    head: keepalive::ResponseHeadSlot,
     keepalive: Option<keepalive::KeepAlive>,
     done: oneshot::Sender<Completion>,
     encoder: Encoder,
