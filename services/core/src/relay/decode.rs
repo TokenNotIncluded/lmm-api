@@ -116,6 +116,7 @@ fn anthropic_stop_sequence(
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // Re-exported for tests; production passes a cache-creation mode.
 pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     usage_with_cache_creation_mode(protocol, v, None)
 }

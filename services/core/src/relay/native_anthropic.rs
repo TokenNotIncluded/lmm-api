@@ -789,9 +789,8 @@ mod tests {
                 .is_err()
             );
         }
-        for extra in [json!({"thinking":{"type":"enabled","budget_tokens":1024}})] {
-            assert!(parse(&request(extra), &Limits::default()).is_err());
-        }
+        let extra = json!({"thinking":{"type":"enabled","budget_tokens":1024}});
+        assert!(parse(&request(extra), &Limits::default()).is_err());
         assert!(parse(&request(json!({"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan","content":"x"}]}]})),&Limits::default()).is_err());
     }
     #[test]
@@ -959,8 +958,10 @@ mod tests {
     }
     #[test]
     fn native_anthropic_output_bounds_and_invalid_tool_json_fail() {
-        let mut limits = Limits::default();
-        limits.output_bytes = 200;
+        let limits = Limits {
+            output_bytes: 200,
+            ..Limits::default()
+        };
         let mut e = NativeEncoder::new("claude", "req", false, &limits);
         e.consume(&Event::Start("up".into())).unwrap();
         e.consume(&Event::Block {

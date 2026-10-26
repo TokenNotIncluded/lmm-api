@@ -204,6 +204,7 @@ impl PersistedImagePrice {
     pub(crate) fn validate(&self) -> Result<(), ImagePriceError> {
         self.clone().restore().map(|_| ())
     }
+    #[cfg_attr(not(test), allow(dead_code))] // Tests compare this with the discounted settlement.
     pub(crate) fn cost(&self, usage: &ImageUsage) -> Result<i64, ImagePriceError> {
         self.cost_with_discount(usage, None)
     }
@@ -775,15 +776,15 @@ mod tests {
             provider_receipt_sha256: [1; 32],
         };
         assert!(usage.follows(&usage));
-        let mut altered = usage.clone();
+        let mut altered = usage;
         altered.output_images = 3;
         assert!(!altered.follows(&usage));
-        altered = usage.clone();
+        altered = usage;
         altered.provider_receipt_sha256 = [2; 32];
         assert!(!altered.follows(&usage));
         altered.output_images = 0;
         assert!(altered.validate().is_err());
-        altered = usage.clone();
+        altered = usage;
         altered.provider_receipt_sha256 = [0; 32];
         assert!(altered.validate().is_err());
         let c = config();

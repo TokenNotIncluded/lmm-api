@@ -264,16 +264,17 @@ async fn core_read_round_settles_twice_and_uses_actual_stored_context(pool: PgPo
     assert_eq!(done.settled_credits, 98);
     assert_eq!(done.held_credits, 0);
     assert_eq!(p.hits.load(Ordering::SeqCst), 2);
-    let calls = p.requests.lock().unwrap();
-    let second = &calls[1]["messages"];
-    assert!(
-        second
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "call_1")
-    );
-    drop(calls);
+    {
+        let calls = p.requests.lock().unwrap();
+        let second = &calls[1]["messages"];
+        assert!(
+            second
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["role"] == "tool" && m["tool_call_id"] == "call_1")
+        );
+    }
     let replay = agent
         .start(&session, &cv, "turn1", "Read my real account")
         .await

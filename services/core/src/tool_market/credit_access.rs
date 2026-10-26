@@ -191,6 +191,8 @@ impl CreditStore {
         }
         Ok(row)
     }
+    // Actor, operation, kind, target and details are separate ledger columns.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn record<T: Serialize>(
         tx: &mut Transaction<'_, Postgres>,
         actor: i64,
