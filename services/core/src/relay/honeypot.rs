@@ -565,7 +565,9 @@ impl Worker {
         } else {
             None
         };
-        let bytes = self.request.upstream_body(route.protocol, &route.model)?;
+        let bytes = self
+            .request
+            .upstream_body_to(route.protocol, &route.model)?;
         if bytes.len() > self.limits.request_bytes {
             return Err(RelayError::Limit("encoded request"));
         }

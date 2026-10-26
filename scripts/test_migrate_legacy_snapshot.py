@@ -523,7 +523,7 @@ class IdentityContractTests(unittest.TestCase):
             shutil.copytree(MODULE.ROOT / "services/core/src", root / "services/core/src")
             shutil.copytree(MODULE.ROOT / "services/core/schema", root / "services/core/schema")
             for name in ("trust_pricing.sql", "image_trust_extension.sql", "telegram_auth.sql",
-                         "core_upgrade.sql", "component_upgrade.sql", "events.sql"):
+                         "core_upgrade.sql", "component_upgrade.sql", "events.sql", "routing.sql"):
                 path = root / "services/core/schema" / name
                 original = path.read_bytes()
                 with self.subTest(name=name):

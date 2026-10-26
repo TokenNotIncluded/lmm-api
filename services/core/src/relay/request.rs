@@ -1,7 +1,5 @@
 //! Bounded, text/function-call request conversion. Unsupported inputs fail closed.
-#[cfg(test)]
-use super::Route;
-use super::{ClientProtocol, Limits, RelayError, UpstreamProtocol};
+use super::{ClientProtocol, Limits, RelayError, Route, UpstreamProtocol};
 use serde::{
     Deserialize,
     de::{MapAccess, Visitor},
@@ -95,10 +93,14 @@ pub struct Request {
     pub reasoning_effort: Option<String>,
     /// Bounded Responses cache controls; never evidence of actual billed writes.
     pub prompt_cache_options: Option<Value>,
+    /// Validated Chat image controls, only emitted on a Gemini route.
+    image_config: Option<ImageConfig>,
     pub(crate) include_usage: bool,
     /// Gemini Long Decode token. Present only when the native request sent a
     /// non-empty `continuationToken`. Other protocols cannot replay it.
     pub(crate) continuation_token: Option<String>,
+    /// Untrusted compatibility values awaiting the actual selected route policy.
+    compatibility: Map<String, Value>,
 }
 
 fn object(v: &Value) -> Result<&Map<String, Value>, RelayError> {
@@ -124,12 +126,49 @@ impl<'de> Deserialize<'de> for RequestObject {
                     if !seen.insert(key.to_ascii_lowercase()) {
                         return Err(serde::de::Error::custom("duplicate request key"));
                     }
-                    values.insert(key, map.next_value()?);
+                    let value = if key == "stream_options" {
+                        map.next_value::<StreamOptions>()?.0
+                    } else {
+                        map.next_value()?
+                    };
+                    values.insert(key, value);
                 }
                 Ok(RequestObject(values))
             }
         }
         d.deserialize_map(ObjectVisitor)
+    }
+}
+/// Parse only direct option keys on the existing deserializer so nested values
+/// retain its depth limit. Never restart request parsing inside an option value.
+struct StreamOptions(Value);
+impl<'de> Deserialize<'de> for StreamOptions {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct OptionsVisitor;
+        impl<'de> Visitor<'de> for OptionsVisitor {
+            type Value = StreamOptions;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("null or an unambiguous stream options object")
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StreamOptions(Value::Null))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut seen = BTreeSet::new();
+                let mut values = Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !seen.insert(key.to_ascii_lowercase()) {
+                        return Err(serde::de::Error::custom("duplicate stream option key"));
+                    }
+                    if !matches!(key.as_str(), "include_usage" | "include_obfuscation") {
+                        return Err(serde::de::Error::custom("unsupported stream option key"));
+                    }
+                    values.insert(key, map.next_value::<Value>()?);
+                }
+                Ok(StreamOptions(Value::Object(values)))
+            }
+        }
+        d.deserialize_any(OptionsVisitor)
     }
 }
 fn keys(v: &Value, allowed: &[&str]) -> Result<(), RelayError> {
@@ -171,6 +210,57 @@ fn number(v: Option<&Value>, max: f64) -> Result<Option<f64>, RelayError> {
         })
         .transpose()
 }
+fn image_config_value(v: &Value) -> Result<String, RelayError> {
+    let value = string(v)?;
+    if value.is_empty()
+        || value.len() > 32
+        || value
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+    {
+        return Err(RelayError::Invalid("invalid Gemini image config value"));
+    }
+    Ok(value)
+}
+
+#[derive(Clone, Debug)]
+struct ImageConfig {
+    image_size: Option<String>,
+    aspect_ratio: Option<String>,
+}
+
+impl ImageConfig {
+    fn parse(v: Option<&Value>) -> Result<Option<Self>, RelayError> {
+        let Some(v) = v.filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        keys(v, &["imageSize", "aspectRatio"])?;
+        let config = Self {
+            image_size: v.get("imageSize").map(image_config_value).transpose()?,
+            aspect_ratio: v.get("aspectRatio").map(image_config_value).transpose()?,
+        };
+        if config.image_size.is_none() && config.aspect_ratio.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(config))
+    }
+
+    fn to_gemini_value(&self) -> Value {
+        let mut value = Map::new();
+        if let Some(image_size) = &self.image_size {
+            value.insert("imageSize".into(), json!(image_size));
+        }
+        if let Some(aspect_ratio) = &self.aspect_ratio {
+            value.insert("aspectRatio".into(), json!(aspect_ratio));
+        }
+        Value::Object(value)
+    }
+}
+
+fn chat_image_config(v: &Value) -> Result<Option<ImageConfig>, RelayError> {
+    ImageConfig::parse(v.get("imageConfig"))
+}
+
 fn signature(v: Option<&Value>) -> Result<Option<(UpstreamProtocol, String)>, RelayError> {
     let Some(v) = v.filter(|v| !v.is_null()) else {
         return Ok(None);
@@ -234,6 +324,63 @@ fn text_blocks(v: &Value, assistant: bool) -> Result<Vec<InputBlock>, RelayError
 }
 
 impl Request {
+    /// Admit only the five legacy fields provisionally. No policy is authorized
+    /// until `upstream` receives the immutable route selected by the bridge.
+    pub(crate) fn parse_deferred_openai(
+        client: ClientProtocol,
+        body: &[u8],
+        limits: &Limits,
+    ) -> Result<Self, RelayError> {
+        if !matches!(client, ClientProtocol::Chat | ClientProtocol::Responses) {
+            return Self::parse(client, body, limits);
+        }
+        limits.validate()?;
+        if body.len() > limits.request_bytes {
+            return Err(RelayError::Limit("request body"));
+        }
+        let mut fields = serde_json::from_slice::<RequestObject>(body)
+            .map_err(|_| RelayError::Invalid("invalid or ambiguous JSON body"))?
+            .0;
+        let mut compatibility = Map::new();
+        for name in [
+            "service_tier",
+            "inference_geo",
+            "speed",
+            "safety_identifier",
+        ] {
+            if let Some(value) = fields.remove(name) {
+                compatibility.insert(name.into(), value);
+            }
+        }
+        if let Some(options) = fields.get_mut("stream_options").filter(|v| !v.is_null()) {
+            keys(
+                options,
+                if client == ClientProtocol::Chat {
+                    &["include_usage", "include_obfuscation"]
+                } else {
+                    &["include_obfuscation"]
+                },
+            )?;
+            if let Some(value) = options
+                .as_object_mut()
+                .and_then(|o| o.remove("include_obfuscation"))
+            {
+                compatibility.insert("include_obfuscation".into(), value);
+            }
+            if options.as_object().is_some_and(Map::is_empty) {
+                fields.remove("stream_options");
+            }
+        }
+        let bytes =
+            serde_json::to_vec(&fields).map_err(|_| RelayError::Invalid("invalid request body"))?;
+        let mut request = Self::parse(client, &bytes, limits)?;
+        request.compatibility = compatibility;
+        // The compatibility parser re-encodes fields; capture only after its
+        // original duplicate/depth checks, from the original ordered schemas.
+        request.capture_ordered_schemas(client, body);
+        Ok(request)
+    }
+
     pub fn parse(client: ClientProtocol, body: &[u8], limits: &Limits) -> Result<Self, RelayError> {
         limits.validate()?;
         if client == ClientProtocol::Anthropic {
@@ -260,7 +407,28 @@ impl Request {
                 .0,
         );
         match client {
-            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
+            ClientProtocol::Chat => keys(
+                &v,
+                &[
+                    "model",
+                    "messages",
+                    "stream",
+                    "stream_options",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "temperature",
+                    "top_p",
+                    "stop",
+                    "tools",
+                    "tool_choice",
+                    "parallel_tool_calls",
+                    "n",
+                    "reasoning_effort",
+                    "store",
+                    "imageConfig",
+                ],
+            )?,
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
                 &v,
                 &[
                     "model",
@@ -377,8 +545,8 @@ impl Request {
                 if !parameters.is_object() {
                     return Err(RelayError::Invalid("function parameters must be an object"));
                 }
-                let ordered_parameters =
-                    serde_json::to_string(&parameters).unwrap_or_else(|_| "{}".to_owned());
+                let ordered_parameters = serde_json::to_string(&parameters)
+                    .map_err(|_| RelayError::Invalid("function schema encoding failed"))?;
                 tools.push(FunctionTool {
                     name,
                     parameters,
@@ -624,6 +792,11 @@ impl Request {
         if count > 4096 {
             return Err(RelayError::Limit("input block count"));
         }
+        let image_config = if client == ClientProtocol::Chat {
+            chat_image_config(&v)?
+        } else {
+            None
+        };
         let prompt_cache_options = v
             .get("prompt_cache_options")
             .filter(|value| !value.is_null())
@@ -661,17 +834,23 @@ impl Request {
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
             prompt_cache_options,
+            image_config,
             continuation_token: None,
+            compatibility: Map::new(),
         };
+        request.capture_ordered_schemas(client, body);
+        Ok(request)
+    }
+
+    fn capture_ordered_schemas(&mut self, client: ClientProtocol, body: &[u8]) {
         let captured = match client {
             ClientProtocol::Chat => super::schema_order::chat_schemas(body),
             ClientProtocol::Responses => super::schema_order::responses_schemas(body),
             ClientProtocol::Anthropic | ClientProtocol::Gemini => None,
         };
         if let Some(captured) = captured {
-            request.assign_ordered_schemas(&captured);
+            self.assign_ordered_schemas(&captured);
         }
-        Ok(request)
     }
 
     pub(crate) fn assign_ordered_schemas(
@@ -697,30 +876,129 @@ impl Request {
         }
     }
 
-    /// Upstream JSON bytes. Tool schemas keep the client's property order when
-    /// that encoding is semantically identical to the validated value.
-    pub(crate) fn upstream_body(
+    /// Encode only after applying the immutable selected-route payload policy.
+    pub(crate) fn upstream_body(&self, route: &Route) -> Result<Vec<u8>, RelayError> {
+        let payload = self.upstream(route)?;
+        self.ordered_payload_body(&payload, route.protocol)
+    }
+
+    /// Strict protocol/model encoding for the isolated uncharged transport.
+    /// It cannot authorize deferred compatibility fields or accept a Route.
+    pub(crate) fn upstream_body_to(
         &self,
         protocol: UpstreamProtocol,
         model: &str,
     ) -> Result<Vec<u8>, RelayError> {
         let payload = self.upstream_to(protocol, model)?;
+        self.ordered_payload_body(&payload, protocol)
+    }
+
+    fn ordered_payload_body(
+        &self,
+        payload: &Value,
+        protocol: UpstreamProtocol,
+    ) -> Result<Vec<u8>, RelayError> {
         let schemas: Vec<String> = self
             .tools
             .iter()
             .map(|tool| tool.ordered_parameters.clone())
             .collect();
-        super::schema_order::splice_ordered_schemas(&payload, &schemas)
+        super::schema_order::encode_ordered_schemas(payload, protocol, &schemas)
     }
 
-    #[cfg(test)]
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {
-        self.upstream_to(route.protocol, &route.model)
+        use crate::routing::PayloadPolicy;
+        let PayloadPolicy::LegacyOpenai {
+            allow_service_tier,
+            allow_inference_geo,
+            allow_speed,
+            allow_safety_identifier,
+            allow_include_obfuscation,
+        } = route.payload_policy
+        else {
+            return self.upstream_to(route.protocol, &route.model);
+        };
+        let same_wire = matches!(
+            (self.client, route.protocol),
+            (ClientProtocol::Chat, UpstreamProtocol::Chat)
+                | (ClientProtocol::Responses, UpstreamProtocol::Responses)
+        );
+        if !same_wire {
+            return Err(RelayError::Unsupported(
+                "legacy OpenAI policy requires the same wire protocol",
+            ));
+        }
+        let mut payload = self.encode_upstream(route.protocol, &route.model)?;
+        for (name, allowed) in [
+            ("service_tier", allow_service_tier),
+            ("inference_geo", allow_inference_geo),
+            ("speed", allow_speed),
+            ("safety_identifier", allow_safety_identifier),
+            ("include_obfuscation", allow_include_obfuscation),
+        ] {
+            let Some(value) = self.compatibility.get(name).filter(|_| allowed) else {
+                continue;
+            };
+            if name == "include_obfuscation" {
+                if !self.stream {
+                    return Err(RelayError::Unsupported("stream options require streaming"));
+                }
+                if !value.is_boolean() {
+                    return Err(RelayError::Invalid("include_obfuscation must be a boolean"));
+                }
+                if payload.get("stream_options").is_none() {
+                    payload["stream_options"] = json!({});
+                }
+                payload["stream_options"][name] = value.clone();
+            } else {
+                // The pinned OpenAI contract permits explicit null for these fields.
+                if value.is_null() && matches!(name, "service_tier" | "safety_identifier") {
+                    payload[name] = Value::Null;
+                    continue;
+                }
+                // Regional/speed values are provider extensions: bound the string
+                // without inventing or translating a provider's enum vocabulary.
+                let limit = if name == "safety_identifier" {
+                    128
+                } else {
+                    256
+                };
+                let text = value
+                    .as_str()
+                    .filter(|s| {
+                        !s.is_empty()
+                            && s.chars().count() <= limit
+                            && !s.chars().any(char::is_control)
+                    })
+                    .ok_or(RelayError::Invalid("invalid legacy OpenAI string field"))?;
+                if name == "service_tier"
+                    && !["auto", "default", "flex", "priority", "scale", "fast"].contains(&text)
+                    && !(route.protocol == UpstreamProtocol::Responses && text == "ultrafast")
+                {
+                    return Err(RelayError::Unsupported("unsupported service tier"));
+                }
+                payload[name] = value.clone();
+            }
+        }
+        Ok(payload)
     }
 
     /// Encode the existing bounded request for a server-owned protocol/model.
     /// This carries neither routing prices nor spending authority.
     pub(crate) fn upstream_to(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+    ) -> Result<Value, RelayError> {
+        if !self.compatibility.is_empty() {
+            return Err(RelayError::Unsupported(
+                "legacy fields require an explicit selected route policy",
+            ));
+        }
+        self.encode_upstream(protocol, model)
+    }
+
+    fn encode_upstream(
         &self,
         protocol: UpstreamProtocol,
         model: &str,
@@ -761,6 +1039,11 @@ impl Request {
                     ));
                 }
             }
+        }
+        if self.image_config.is_some() && protocol != UpstreamProtocol::Gemini {
+            return Err(RelayError::Unsupported(
+                "imageConfig requires a Gemini route",
+            ));
         }
         if matches!(
             protocol,
@@ -1057,6 +1340,9 @@ impl Request {
         }
         if !self.stop.is_empty() {
             generation["stopSequences"] = json!(self.stop);
+        }
+        if let Some(image_config) = &self.image_config {
+            generation["imageConfig"] = image_config.to_gemini_value();
         }
         let mut v = json!({"contents":contents,"generationConfig":generation});
         if let Some(token) = &self.continuation_token {

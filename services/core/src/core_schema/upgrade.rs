@@ -183,8 +183,27 @@ fn manifest_sha256() -> Result<String, UpgradeError> {
     bytes.push(b'\n');
     Ok(hex(&Sha256::digest(bytes)))
 }
+// The reviewed Core24/25/26 producers all used these exact routing bytes.
+// Reconstruction preserves historical identity; it never authorizes applying
+// that historical procedure to a binary with a different routing target.
+const PRE_ROUTING: &str = "d8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e";
+
+fn authorize_routing_target(ddl: &str) -> Result<(), UpgradeError> {
+    if hex(&Sha256::digest(ddl)) != PRE_ROUTING {
+        return Err(reject("UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"));
+    }
+    Ok(())
+}
+
 impl UpgradeRequest {
     pub fn read(input: impl Read) -> Result<Self, UpgradeError> {
+        let request = Self::read_fields(input)?;
+        request.authorize_target()?;
+        Ok(request)
+    }
+    // Kept separate so strict request tests cannot pass merely because this
+    // binary refuses every historical apply. This parser grants no authority.
+    fn read_fields(input: impl Read) -> Result<Self, UpgradeError> {
         let mut bytes = Vec::new();
         input
             .take(16_385)
@@ -250,8 +269,23 @@ impl UpgradeRequest {
         {
             return Err(reject("UPGRADE_DB_ROLES_INVALID"));
         }
-        compiled_predecessor()?;
         Ok(())
+    }
+    fn authorize_target(&self) -> Result<(), UpgradeError> {
+        self.validate()?;
+        let routing = COMPONENTS
+            .iter()
+            .find(|(name, _)| *name == "routing")
+            .ok_or(UpgradeError::Storage)?
+            .1;
+        authorize_routing_target(routing)?;
+        if self.procedure == ledger::PROCEDURE {
+            ledger::authorize_target()
+        } else if self.procedure == additive::PROCEDURE {
+            additive::authorize_target()
+        } else {
+            compiled_predecessor().map(|_| ())
+        }
     }
     fn digest(&self) -> Result<Vec<u8>, UpgradeError> {
         // serde field order is fixed by the typed request; whitespace/key order is not authority.
@@ -308,7 +342,7 @@ pub async fn upgrade_database(
     url: &str,
     request: UpgradeRequest,
 ) -> Result<UpgradeReport, UpgradeError> {
-    request.validate()?;
+    request.authorize_target()?;
     let mut connection = PgConnection::connect(url).await?;
     let result = if request.procedure == ledger::PROCEDURE {
         ledger::connected(&mut connection, &request).await
@@ -325,6 +359,9 @@ async fn begin_offline_upgrade<'a>(
     c: &'a mut PgConnection,
     r: &UpgradeRequest,
 ) -> Result<(sqlx::Transaction<'a, sqlx::Postgres>, i32, Vec<String>), UpgradeError> {
+    // Every connected engine funnels through this guard before session changes,
+    // locking, receipt resolution or DDL, including internal direct callers.
+    r.authorize_target()?;
     sqlx::raw_sql("SET statement_timeout='15s'; SET lock_timeout='3s'; SET idle_in_transaction_session_timeout='20s'; SET search_path=pg_catalog")
         .execute(&mut *c).await?;
     // This SELECT is outside the SERIALIZABLE transaction. Waiting for another

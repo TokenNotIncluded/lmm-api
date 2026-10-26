@@ -681,7 +681,7 @@ impl Worker {
             .await?;
         self.report.route_id = Some(route.id.clone());
         self.report.price_version = Some(route.price_version);
-        let body = self.request.upstream_body(route.protocol, &route.model)?;
+        let body = self.request.upstream_body(&route)?;
         if body.len() > self.inner.limits.request_bytes {
             return Err(RelayError::Limit("encoded request"));
         }
@@ -892,3 +892,6 @@ impl Worker {
         });
     }
 }
+
+#[cfg(test)]
+mod independent_966_schema_tests;

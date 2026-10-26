@@ -318,6 +318,58 @@ async fn receipts(pool: &PgPool) -> std::collections::BTreeMap<String, Vec<serde
         .collect()
 }
 
+fn reviewed_routing_predecessor() -> &'static str {
+    // Exact b45bfc532 Git input, independent of the fresh-install SQL.
+    let original = include_str!("../../tests/core_schema/routing_before_payload_policy.sql");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(original)),
+        "d8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e"
+    );
+    const OLD_COLUMN: &str =
+        "    payload text NOT NULL CHECK (payload IN ('passthrough', 'adapt')),\n";
+    const POLICY_COLUMN: &str = "    -- Preserve the complete selected-target policy. Old string variants keep their
+    -- wire shape; the opt-in object permits only the five explicit boolean flags.
+    payload jsonb NOT NULL CHECK (
+        payload IN ('\"passthrough\"'::jsonb, '\"adapt\"'::jsonb) OR
+        CASE WHEN jsonb_typeof(payload) = 'object'
+            AND payload ? 'legacy_openai' AND payload - 'legacy_openai' = '{}'::jsonb
+            AND jsonb_typeof(payload->'legacy_openai') = 'object' THEN
+            (payload->'legacy_openai') - ARRAY[
+                'allow_service_tier', 'allow_inference_geo', 'allow_speed',
+                'allow_safety_identifier', 'allow_include_obfuscation'
+            ] = '{}'::jsonb
+            AND coalesce(payload->'legacy_openai'->'allow_service_tier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_inference_geo', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_speed', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_safety_identifier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_include_obfuscation', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+        ELSE false END
+    ),\n";
+    const OLD_PROJECTION: &str = "            t->>'payload', (t->>'timeout_ms')::integer";
+    const NEW_PROJECTION: &str = "            t->'payload', (t->>'timeout_ms')::integer";
+    assert_eq!(original.matches(OLD_COLUMN).count(), 1);
+    assert_eq!(original.matches(OLD_PROJECTION).count(), 1);
+    let reviewed =
+        original
+            .replacen(OLD_COLUMN, POLICY_COLUMN, 1)
+            .replacen(OLD_PROJECTION, NEW_PROJECTION, 1);
+    assert_eq!(
+        COMPONENTS
+            .iter()
+            .find(|(name, _)| *name == "routing")
+            .unwrap()
+            .1,
+        reviewed,
+        "current routing changes exactly the selected policy column and its JSON projection"
+    );
+    original
+}
+
+#[test]
+fn current_routing_delta_extends_exact_independent_pre_policy_bytes() {
+    reviewed_routing_predecessor();
+}
+
 async fn assert_current_installation_extends_reviewed_catalog(pool: &PgPool, installed: &[String]) {
     // a7e1105d3 only appends pending-liability objects to 0b4f40996's ledger.
     // Pin both original Git inputs instead of approving a newly observed hash.
@@ -360,6 +412,40 @@ async fn assert_current_installation_extends_reviewed_catalog(pool: &PgPool, ins
          DROP TABLE core_billing.legacy_pending_liability_receipts RESTRICT;
          DROP TABLE core_billing.legacy_pending_liabilities RESTRICT;",
     )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    // Restore only the independently sourced pre-policy column constraint/type
+    // and publication function. This is a test projection, never upgrade SQL.
+    let original_routing = reviewed_routing_predecessor();
+    let old_column = original_routing
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("payload text NOT NULL CHECK (")
+        })
+        .unwrap()
+        .trim()
+        .strip_prefix("payload text NOT NULL ")
+        .unwrap()
+        .strip_suffix(',')
+        .unwrap();
+    let prefix = "CREATE FUNCTION routing_publish_config(";
+    assert_eq!(original_routing.matches(prefix).count(), 1);
+    let function = original_routing
+        .split_once(prefix)
+        .unwrap()
+        .1
+        .split_once("$$;")
+        .unwrap()
+        .0;
+    sqlx::raw_sql(&format!(
+        "SET LOCAL search_path=public,pg_catalog;
+         ALTER TABLE public.routing_targets DROP CONSTRAINT routing_targets_payload_check;
+         ALTER TABLE public.routing_targets ALTER COLUMN payload TYPE text USING (payload #>> '{{}}');
+         ALTER TABLE public.routing_targets ADD CONSTRAINT routing_targets_payload_check {old_column};
+         CREATE OR REPLACE FUNCTION public.routing_publish_config({function}$$;"
+    ))
     .execute(&mut *tx)
     .await
     .unwrap();
