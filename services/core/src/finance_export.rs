@@ -92,7 +92,8 @@ pub(crate) fn encode(
         }
         ExportFormat::Csv => {
             // RFC 4180 escaping, UTF-8 and CRLF. Text cells cannot become
-            // spreadsheet formulas, including after leading ASCII whitespace.
+            // spreadsheet formulas, including after leading whitespace, BOMs
+            // or control characters. Preserve the original cell text.
             write_csv(
                 &mut out,
                 &[
@@ -147,7 +148,8 @@ fn optional(value: Option<i64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 fn safe_text(value: &str) -> String {
-    let trimmed = value.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed =
+        value.trim_start_matches(|c: char| c.is_whitespace() || c.is_control() || c == '\u{feff}');
     if trimmed.starts_with(['=', '+', '-', '@']) {
         format!("'{value}")
     } else {
@@ -193,5 +195,171 @@ mod tests {
         let mut out = BoundedBytes(vec![0; MAX_EXPORT_BYTES - 1]);
         assert!(out.write_all(b"ab").is_err());
         assert_eq!(out.0.len(), MAX_EXPORT_BYTES - 1);
+    }
+}
+
+#[cfg(test)]
+mod csv_formula_independent_tests {
+    use super::*;
+    use crate::history_read::{HistorySummary, projection::MoneyProjection};
+
+    const TEXT_FIELDS: [&str; 5] = [
+        "username",
+        "token_name",
+        "model_name",
+        "group",
+        "request_id",
+    ];
+    const PREFIXES: [&str; 14] = [
+        "",
+        " ",
+        "\t",
+        "\r",
+        "\n",
+        "\u{0001}",
+        "\u{001f}",
+        "\u{0085}",
+        "\u{009f}",
+        "\u{00a0}",
+        "\u{2003}",
+        "\u{2028}",
+        "\u{feff}",
+        " \u{feff}\u{009f}\u{2003}",
+    ];
+
+    fn snapshot(field: &str, text: &str) -> HistorySnapshot {
+        let mut row = HistoryRow {
+            source_log_id: 17,
+            user_id: 7,
+            token_id: Some(9),
+            created_at: 1_700_000_000,
+            r#type: 3,
+            username: "normal-user".into(),
+            token_name: "normal-token".into(),
+            model_name: "normal-model".into(),
+            quota: Some(-17),
+            prompt_tokens: Some(11),
+            completion_tokens: Some(13),
+            group: "normal-group".into(),
+            request_id: "normal-request".into(),
+            channel: None,
+            upstream_request_id: None,
+            money: MoneyProjection::unknown("not_consumption"),
+        };
+        match field {
+            "username" => row.username = text.into(),
+            "token_name" => row.token_name = text.into(),
+            "model_name" => row.model_name = text.into(),
+            "group" => row.group = text.into(),
+            "request_id" => row.request_id = text.into(),
+            _ => unreachable!("test field is one of TEXT_FIELDS"),
+        }
+        HistorySnapshot {
+            contract: crate::history_read::CONTRACT,
+            snapshot_at: 1_700_000_001,
+            items: vec![row],
+            total: 1,
+            page: 1,
+            page_size: 20,
+            summary: HistorySummary {
+                raw_consumption_quota: "0".into(),
+                invalid_quota_records: 0,
+                unpriced_quota_records: 0,
+                quota_projection_truncated: false,
+                money: MoneyProjection::unknown("not_consumption"),
+            },
+            source: "legacy_log_only",
+        }
+    }
+
+    fn csv(snapshot: HistorySnapshot) -> String {
+        String::from_utf8(encode(snapshot, ExportFormat::Csv).unwrap().bytes).unwrap()
+    }
+
+    #[test]
+    fn formula_markers_after_unicode_bom_and_control_prefixes_are_protected() {
+        for prefix in PREFIXES {
+            for marker in ['=', '+', '-', '@'] {
+                let original = format!("{prefix}{marker}synthetic");
+                assert_eq!(safe_text(&original), format!("'{original}"), "{original:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn all_csv_text_fields_are_protected_while_json_preserves_original_text() {
+        for field in TEXT_FIELDS {
+            for prefix in PREFIXES {
+                for marker in ['=', '+', '-', '@'] {
+                    let original = format!("{prefix}{marker}synthetic");
+                    let document = csv(snapshot(field, &original));
+                    assert!(
+                        document.contains(&format!("\"'{original}\"")),
+                        "{field} was not protected: {original:?}"
+                    );
+                    let json = encode(snapshot(field, &original), ExportFormat::Json).unwrap();
+                    let value: serde_json::Value = serde_json::from_slice(&json.bytes).unwrap();
+                    assert_eq!(value["usage"][0][field], original, "{field}");
+                    assert_eq!(value["complete_financial_export"], false);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_and_already_apostrophe_prefixed_text_remains_unchanged() {
+        for original in [
+            "正常中文",
+            "ordinary",
+            "  ordinary",
+            "\u{00a0}ordinary",
+            "\u{feff}ordinary",
+            "'=synthetic",
+            "'@synthetic",
+            "\u{feff}'=synthetic",
+            "\u{009f}'-synthetic",
+        ] {
+            assert_eq!(safe_text(original), original);
+            for field in TEXT_FIELDS {
+                let document = csv(snapshot(field, original));
+                assert!(
+                    document.contains(&format!("\"{original}\"")),
+                    "{field}, {original:?}"
+                );
+                let json = encode(snapshot(field, original), ExportFormat::Json).unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&json.bytes).unwrap();
+                assert_eq!(value["usage"][0][field], original);
+            }
+        }
+    }
+
+    #[test]
+    fn text_guard_does_not_change_typed_numbers_or_money_availability() {
+        let document = csv(snapshot("username", "\u{feff}=synthetic"));
+        assert!(document.contains(",\"-17\",\"11\",\"13\","));
+        assert!(!document.contains("\"'-17\""));
+        assert!(document.ends_with(",\"\",\"false\",\"not_consumption\"\r\n"));
+        let json = encode(
+            snapshot("username", "\u{feff}=synthetic"),
+            ExportFormat::Json,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&json.bytes).unwrap();
+        assert_eq!(value["usage"][0]["quota"], -17);
+        assert_eq!(value["usage"][0]["prompt_tokens"], 11);
+        assert_eq!(value["usage"][0]["completion_tokens"], 13);
+        assert_eq!(value["usage"][0]["quota_money_available"], false);
+        assert!(value["usage"][0].get("quota_usd").is_none());
+
+        let mut known = snapshot("username", "ordinary");
+        known.items[0].quota = Some(25);
+        known.items[0].r#type = 2;
+        known.items[0].money =
+            crate::history_read::projection::log_money(Some(25), 2, Some(500_000));
+        known.summary.raw_consumption_quota = "25".into();
+        known.summary.money = known.items[0].money.clone();
+        let document = csv(known);
+        assert!(document.contains(",\"25\",\"11\",\"13\","));
+        assert!(document.ends_with(",\"0.00005\",\"true\",\"captured_credits_per_usd\"\r\n"));
     }
 }
