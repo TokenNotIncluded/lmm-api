@@ -258,6 +258,9 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
         &serde_json::to_vec(&canonical).map_err(|_| RelayError::Invalid("request encoding"))?,
         limits,
     )?;
+    if let Some(captured) = super::schema_order::anthropic_schemas(body) {
+        request.assign_ordered_schemas(&captured);
+    }
     let mut messages = Vec::new();
     if let Some(s) = v.get("system") {
         messages.push(Message {
