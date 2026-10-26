@@ -394,10 +394,11 @@ async fn systemone_independent_official_sdk_raw_zstd_multipart_tcp_key_ledger(po
             .all(|v| v.status >= 400 && !v.exposes_answers)
     );
     let expected_png = std::fs::read(&png).unwrap();
-    let images = supplier_state.images.lock().unwrap();
-    assert_eq!(images.len(), 2);
-    assert!(images.iter().all(|v| v == &expected_png));
-    drop(images);
+    {
+        let images = supplier_state.images.lock().unwrap();
+        assert_eq!(images.len(), 2);
+        assert!(images.iter().all(|v| v == &expected_png));
+    }
     let rows:Vec<(String,i64,i64,i64,i64,Value)>=sqlx::query_as("SELECT state,reserved,settled,input_tokens,output_tokens,price FROM core_charging.requests WHERE key_id=$1 ORDER BY state").bind(key_id).fetch_all(&pool).await.unwrap();
     assert_eq!(rows.len(), 7);
     assert_eq!(rows.iter().filter(|r| r.0 == "settled").count(), 6);
@@ -417,7 +418,7 @@ async fn systemone_independent_official_sdk_raw_zstd_multipart_tcp_key_ledger(po
         (balance.available_units, balance.reserved_units),
         (8605, 1377)
     );
-    let quota = key_quota_snapshot(&mut *pool.acquire().await.unwrap(), key_id)
+    let quota = key_quota_snapshot(&mut pool.acquire().await.unwrap(), key_id)
         .await
         .unwrap();
     assert_eq!(quota, (1395, 8605, false));
@@ -632,7 +633,7 @@ async fn systemone_independent_supplier_errors_and_disconnected_caller_never_rep
         (5866, 4131)
     );
     assert_eq!(
-        key_quota_snapshot(&mut *pool.acquire().await.unwrap(), key_id)
+        key_quota_snapshot(&mut pool.acquire().await.unwrap(), key_id)
             .await
             .unwrap(),
         (4134, 5866, false)

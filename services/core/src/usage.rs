@@ -865,42 +865,6 @@ pub(crate) async fn read_oauth_usage(
     )
 }
 
-#[cfg(test)]
-mod index_tests;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn recent_window_is_open_at_sixty_seconds_and_closed_at_now() {
-        let now = 1_700_000_000;
-        assert!(!recent(now - 60, now));
-        assert!(recent(now - 59, now));
-        assert!(recent(now, now));
-        assert!(!recent(now + 1, now));
-    }
-    #[test]
-    fn safe_projection_integers_and_aggregate_overflow_are_rejected() {
-        assert!(safe(JS_SAFE).is_ok());
-        assert!(safe(JS_SAFE + 1).is_err());
-        assert!(safe(-1).is_err());
-        let mut total = JS_SAFE;
-        assert!(add(&mut total, 1).is_err());
-        let mut total = i64::MAX;
-        assert!(add(&mut total, 1).is_err());
-    }
-    #[test]
-    fn exact_usd_and_presentation_only_ids() {
-        assert_eq!(usd(1), "0.000002");
-        assert_eq!(usd(500_000), "1.000000");
-        assert_eq!(usd(i64::MAX), "18446744073709.551614");
-        for id in ["one", "two"] {
-            assert!((1..(1 << 52)).contains(&presentation_id(id)));
-        }
-        assert_eq!(presentation_id("one"), presentation_id("one"));
-    }
-}
-
 /// Assistant projection over the same fully validated native-key/OAuth receipts
 /// as the Web usage views. It exposes aggregates only and fails on malformed,
 /// duplicate or over-dense evidence. Imported history is explicitly separate.
@@ -1024,4 +988,40 @@ pub(crate) async fn assistant_summary_in_transaction(
     Ok(
         json!({"ok":true,"scope":if target==actor.user{"self"}else{"administrator_target"},"target_user_id":target,"days":days,"source":"consume logs","summary":summary,"raw_logs":false,"incomplete_native_requests":pending,"cost_usd_encoding":"decimal_string","coverage":{"native_personal_key_and_oauth":true,"historical_imports":false,"assistant_model_calls":false,"native_requests_validated":count,"breakdown_limit":20}}),
     )
+}
+
+#[cfg(test)]
+mod index_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn recent_window_is_open_at_sixty_seconds_and_closed_at_now() {
+        let now = 1_700_000_000;
+        assert!(!recent(now - 60, now));
+        assert!(recent(now - 59, now));
+        assert!(recent(now, now));
+        assert!(!recent(now + 1, now));
+    }
+    #[test]
+    fn safe_projection_integers_and_aggregate_overflow_are_rejected() {
+        assert!(safe(JS_SAFE).is_ok());
+        assert!(safe(JS_SAFE + 1).is_err());
+        assert!(safe(-1).is_err());
+        let mut total = JS_SAFE;
+        assert!(add(&mut total, 1).is_err());
+        let mut total = i64::MAX;
+        assert!(add(&mut total, 1).is_err());
+    }
+    #[test]
+    fn exact_usd_and_presentation_only_ids() {
+        assert_eq!(usd(1), "0.000002");
+        assert_eq!(usd(500_000), "1.000000");
+        assert_eq!(usd(i64::MAX), "18446744073709.551614");
+        for id in ["one", "two"] {
+            assert!((1..(1 << 52)).contains(&presentation_id(id)));
+        }
+        assert_eq!(presentation_id("one"), presentation_id("one"));
+    }
 }

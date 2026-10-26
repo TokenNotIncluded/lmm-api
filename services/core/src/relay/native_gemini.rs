@@ -150,6 +150,7 @@ pub(crate) fn parse(
             "tools",
             "toolConfig",
             "generationConfig",
+            "continuationToken",
         ],
     )?;
     let mut messages = Vec::new();
@@ -373,7 +374,22 @@ pub(crate) fn parse(
     }
     let bytes = serde_json::to_vec(&canonical)
         .map_err(|_| RelayError::Invalid("Gemini conversion failed"))?;
-    Request::parse(ClientProtocol::Chat, &bytes, limits)
+    let mut request = Request::parse(ClientProtocol::Chat, &bytes, limits)?;
+    request.continuation_token = continuation_token(v.get("continuationToken"), limits)?;
+    Ok(request)
+}
+fn continuation_token(v: Option<&Value>, limits: &Limits) -> Result<Option<String>, RelayError> {
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let token = string(v)?;
+    if token.is_empty() {
+        return Ok(None);
+    }
+    if token.len() > limits.event_bytes || token.chars().any(char::is_control) {
+        return Err(RelayError::Invalid("invalid Gemini continuation token"));
+    }
+    Ok(Some(token.to_owned()))
 }
 
 struct Block {
@@ -390,6 +406,7 @@ pub(crate) struct NativeEncoder {
     blocks: Vec<Block>,
     usage: Usage,
     finish: Option<FinishReason>,
+    continuation_token: Option<String>,
     started: bool,
     done: bool,
     emitted: bool,
@@ -406,6 +423,7 @@ impl NativeEncoder {
             blocks: Vec::new(),
             usage: Usage::default(),
             finish: None,
+            continuation_token: None,
             started: false,
             done: false,
             emitted: false,
@@ -579,6 +597,27 @@ impl NativeEncoder {
                 // response does not expose Anthropic's stop_sequence field.
                 self.account(sequence.len())?;
             }
+            Event::ContinuationToken(token) => {
+                if !self.started
+                    || token.is_empty()
+                    || token.len() > self.limits.event_bytes
+                    || token.chars().any(char::is_control)
+                {
+                    return Err(RelayError::Protocol("invalid Gemini continuation token"));
+                }
+                match &self.continuation_token {
+                    Some(existing) if existing != token => {
+                        return Err(RelayError::Protocol(
+                            "conflicting Gemini continuation token",
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.account(token.len())?;
+                        self.continuation_token = Some(token.clone());
+                    }
+                }
+            }
             Event::Finish(r) => {
                 if !self.started || self.finish.is_some() {
                     return Err(RelayError::Protocol("invalid Gemini finish"));
@@ -660,7 +699,18 @@ impl NativeEncoder {
                 ),
             );
         }
-        let mut response = json!({"responseId":self.id,"modelVersion":self.model,"candidates":[{"index":0,"content":{"role":"model","parts":parts},"finishReason":match finish { FinishReason::Stop | FinishReason::ToolCalls => "STOP", FinishReason::Length => "MAX_TOKENS", FinishReason::ContentFilter => "SAFETY" }}]});
+        let finish_reason = match finish {
+            FinishReason::Stop | FinishReason::ToolCalls => "STOP",
+            FinishReason::Length => "MAX_TOKENS",
+            FinishReason::Continuation => "CONTINUATION",
+            FinishReason::ContentFilter => "SAFETY",
+        };
+        let mut candidate = json!({"index":0,"content":{"role":"model","parts":parts},"finishReason":finish_reason});
+        if let Some(token) = &self.continuation_token {
+            candidate["continuationToken"] = json!(token);
+        }
+        let mut response =
+            json!({"responseId":self.id,"modelVersion":self.model,"candidates":[candidate]});
         if !usage.is_empty() {
             response["usageMetadata"] = Value::Object(usage);
         }
@@ -917,5 +967,37 @@ mod tests {
         assert!(text.starts_with("data: "));
         assert!(text.ends_with("\n\n"));
         assert!(text.contains("UNAUTHENTICATED"));
+    }
+    #[test]
+    fn gemini_request_forwards_continuation_token_and_omits_empty() {
+        let with =
+            br#"{"contents":[{"parts":[{"text":"go"}]}],"continuationToken":"CiQ4ZmQ3-token"}"#;
+        let request = parse("m", true, with, &Limits::default()).unwrap();
+        assert_eq!(
+            request.continuation_token.as_deref(),
+            Some("CiQ4ZmQ3-token")
+        );
+        let upstream = request.upstream_to(UpstreamProtocol::Gemini, "m").unwrap();
+        assert_eq!(upstream["continuationToken"], "CiQ4ZmQ3-token");
+        assert!(request.upstream_to(UpstreamProtocol::Chat, "m").is_err());
+        for body in [
+            br#"{"contents":[{"parts":[{"text":"go"}]}]}"#.as_slice(),
+            br#"{"contents":[{"parts":[{"text":"go"}]}],"continuationToken":""}"#,
+            br#"{"contents":[{"parts":[{"text":"go"}]}],"continuationToken":null}"#,
+        ] {
+            let request = parse("m", false, body, &Limits::default()).unwrap();
+            assert!(request.continuation_token.is_none());
+            let upstream = request.upstream_to(UpstreamProtocol::Gemini, "m").unwrap();
+            assert!(upstream.get("continuationToken").is_none());
+        }
+        assert!(
+            parse(
+                "m",
+                false,
+                br#"{"contents":[{"parts":[{"text":"go"}]}],"continuationToken":1}"#,
+                &Limits::default()
+            )
+            .is_err()
+        );
     }
 }

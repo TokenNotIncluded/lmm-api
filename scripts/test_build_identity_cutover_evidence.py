@@ -172,7 +172,7 @@ class Checks(unittest.TestCase):
         with self.assertRaisesRegex(P.EvidenceError, "identity action coverage incomplete"):
             P.build(root)
 
-    def test_existing_local_layout_is_verified_then_stays_not_run_without_inventory(self):
+    def existing_local_fixture(self, *, include_inventory: bool) -> Path:
         source = self.fixture()
         backup = Path(tempfile.mkdtemp())
         apply = backup / "identity-apply"
@@ -211,7 +211,70 @@ class Checks(unittest.TestCase):
         (independent_dir / "frozen-inputs.private.json").write_text(
             json.dumps(frozen, sort_keys=True) + "\n", encoding="utf-8"
         )
+        if include_inventory:
+            independent = json.loads((source / P.FILES["independent"]).read_text())
+            inventory = {
+                field: independent[field]
+                for field in ("legacy_inventory", *P.ACTION_FIELDS, "actions")
+            }
+            (backup / "identity-inventory.private.json").write_text(
+                json.dumps(inventory, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        return apply
+
+    def test_existing_local_layout_is_verified_then_stays_not_run_without_inventory(self):
+        apply = self.existing_local_fixture(include_inventory=False)
         with self.assertRaisesRegex(P.EvidenceError, "legacy inventory evidence missing"):
+            P.build(apply)
+
+    def test_existing_local_layout_with_inventory_builds_same_identity_contract(self):
+        apply = self.existing_local_fixture(include_inventory=True)
+        self.assertEqual(P.build(apply), P.build(self.fixture()))
+
+    def test_existing_local_inventory_cannot_override_verified_bindings(self):
+        for field in (
+            "source_archive_sha256", "manifest_sha256", "report_sha256",
+            "identity_import_sql_sha256", "target_import_sha256", "target_receipt_sha256",
+            "status", "scope", "source_frozen", "target_actual_instance_match",
+            "mapping_status", "target_comparison_status", "api_key",
+        ):
+            with self.subTest(field=field):
+                apply = self.existing_local_fixture(include_inventory=True)
+                path = apply.parent / "identity-inventory.private.json"
+                inventory = json.loads(path.read_text())
+                inventory[field] = "f" * 64
+                path.write_text(json.dumps(inventory, sort_keys=True) + "\n")
+                with self.assertRaisesRegex(P.EvidenceError, "unexpected or missing JSON field"):
+                    P.build(apply)
+
+    def test_existing_local_layout_with_inventory_still_requires_verified_readback(self):
+        for field in (
+            "status", "archive_and_all_frozen_artifact_hashes_verified",
+            "target_actual_instance_matches_receipt", "source_mapping_recomputed_equal",
+        ):
+            with self.subTest(field=field):
+                apply = self.existing_local_fixture(include_inventory=True)
+                path = apply.parent / P.ACTUAL_INDEPENDENT
+                independent = json.loads(path.read_text())
+                independent[field] = "FAIL" if field == "status" else False
+                path.write_text(json.dumps(independent, sort_keys=True) + "\n")
+                with self.assertRaises(P.EvidenceError):
+                    P.build(apply)
+
+    def test_existing_local_layout_with_inventory_rejects_artifact_drift(self):
+        apply = self.existing_local_fixture(include_inventory=True)
+        path = apply / P.FILES["sql"]
+        path.write_text(path.read_text() + "-- changed\n")
+        with self.assertRaisesRegex(P.EvidenceError, "frozen artifact hash mismatch"):
+            P.build(apply)
+
+    def test_existing_local_inventory_requires_full_action_coverage(self):
+        apply = self.existing_local_fixture(include_inventory=True)
+        path = apply.parent / "identity-inventory.private.json"
+        inventory = json.loads(path.read_text())
+        inventory["rekey_required"] = 0
+        path.write_text(json.dumps(inventory, sort_keys=True) + "\n")
+        with self.assertRaisesRegex(P.EvidenceError, "identity action coverage incomplete"):
             P.build(apply)
 
 

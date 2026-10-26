@@ -157,18 +157,22 @@ impl SmtpMailer {
             from,
         })
     }
-    pub async fn send(&self, job: &MailJob) -> Result<(), ()> {
+    /// Attempts delivery without exposing recipient or SMTP failure details.
+    ///
+    /// # Errors
+    /// Returns `email_delivery_unavailable` when construction or delivery fails.
+    pub async fn send(&self, job: &MailJob) -> Result<(), ProtocolError> {
         let message = Message::builder().from(self.from.clone())
-            .to(mailbox(&job.destination).map_err(|_| ())?)
+            .to(mailbox(&job.destination).map_err(|_| failure(503, "email_delivery_unavailable"))?)
             .message_id(Some(format!("<{}@humangrant.invalid>", job.id)))
             .subject("HumanGrant authorization request")
             .header(ContentType::TEXT_PLAIN)
-            .body(format!("An AI requested your permission to read an account profile.\r\n\r\nOpen this link to inspect the request, sign in, and choose whether to approve:\r\n{}\r\n\r\nThis invitation expires with the request. Ignore it if you did not expect it. Opening it does not approve access.\r\n", job.url)).map_err(|_| ())?;
+            .body(format!("An AI requested your permission to read an account profile.\r\n\r\nOpen this link to inspect the request, sign in, and choose whether to approve:\r\n{}\r\n\r\nThis invitation expires with the request. Ignore it if you did not expect it. Opening it does not approve access.\r\n", job.url)).map_err(|_| failure(503, "email_delivery_unavailable"))?;
         tokio::time::timeout(Duration::from_secs(30), self.transport.send(message))
             .await
-            .map_err(|_| ())?
+            .map_err(|_| failure(503, "email_delivery_unavailable"))?
             .map(|_| ())
-            .map_err(|_| ())
+            .map_err(|_| failure(503, "email_delivery_unavailable"))
     }
 }
 

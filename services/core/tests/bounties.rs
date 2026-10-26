@@ -255,8 +255,7 @@ async fn imported_admin_policy_gate_preserves_escrow_and_complete_admin_can_reso
             let mut connection = pool.acquire().await.unwrap();
             let error = load_complete_policy(&mut connection, id)
                 .await
-                .err()
-                .expect("fixture must be rejected before business mutation");
+                .expect_err("fixture must be rejected before business mutation");
             assert!(matches!(
                 (kind, error),
                 ("missing", PolicyLoadError::Missing)

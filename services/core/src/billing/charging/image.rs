@@ -270,52 +270,6 @@ impl Charging {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn image_operation_identity_is_exact() {
-        assert!(image_id(&format!("image:{}", "a".repeat(64))));
-        for invalid in [
-            "image:a".to_owned(),
-            format!("image:{}", "A".repeat(64)),
-            format!("text:{}", "a".repeat(64)),
-            format!("image:{}", "g".repeat(64)),
-        ] {
-            assert!(!image_id(&invalid));
-        }
-    }
-    #[test]
-    fn image_confirmed_input_digest_is_recursive_and_exact() {
-        let a: Value = serde_json::from_str(r#"{"z":[{"b":2,"a":1}],"a":"x"}"#).unwrap();
-        let b: Value = serde_json::from_str(r#"{"a":"x","z":[{"a":1,"b":2}]}"#).unwrap();
-        assert_eq!(input_digest(&a).unwrap(), input_digest(&b).unwrap());
-        assert_ne!(
-            input_digest(&a).unwrap(),
-            input_digest(&json!({"a":"y","z":[{"a":1,"b":2}]})).unwrap()
-        );
-        assert_ne!(
-            input_digest(&json!({"items":[1, 2]})).unwrap(),
-            input_digest(&json!({"items":[2, 1]})).unwrap()
-        );
-    }
-    #[test]
-    fn image_confirmed_input_digest_matches_market_special_characters() {
-        let input = json!({"prompt":"<scene>&light>\u{2028}line\u{2029}paragraph"});
-        assert_eq!(
-            input_digest(&input).unwrap(),
-            crate::builtins::input_digest(&input).unwrap()
-        );
-        let generic = format!("{:x}", Sha256::digest(serde_json::to_vec(&input).unwrap()));
-        assert_ne!(input_digest(&input).unwrap(), generic);
-        assert_eq!(input_digest(&json!([1, 2])), Err(Error::Invalid));
-        assert_eq!(
-            input_digest(&json!({"prompt":"x".repeat(65536)})),
-            Err(Error::Invalid)
-        );
-    }
-}
-
 impl Charging {
     /// Native API-key image source. Reuses the same current key policy, payer
     /// ordering, subscription entitlement and aggregate budgets as text traffic.
@@ -447,5 +401,51 @@ impl Charging {
         }
         event(c, id, "start", json!({"kind":"image_key_dispatch_claim"})).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn image_operation_identity_is_exact() {
+        assert!(image_id(&format!("image:{}", "a".repeat(64))));
+        for invalid in [
+            "image:a".to_owned(),
+            format!("image:{}", "A".repeat(64)),
+            format!("text:{}", "a".repeat(64)),
+            format!("image:{}", "g".repeat(64)),
+        ] {
+            assert!(!image_id(&invalid));
+        }
+    }
+    #[test]
+    fn image_confirmed_input_digest_is_recursive_and_exact() {
+        let a: Value = serde_json::from_str(r#"{"z":[{"b":2,"a":1}],"a":"x"}"#).unwrap();
+        let b: Value = serde_json::from_str(r#"{"a":"x","z":[{"a":1,"b":2}]}"#).unwrap();
+        assert_eq!(input_digest(&a).unwrap(), input_digest(&b).unwrap());
+        assert_ne!(
+            input_digest(&a).unwrap(),
+            input_digest(&json!({"a":"y","z":[{"a":1,"b":2}]})).unwrap()
+        );
+        assert_ne!(
+            input_digest(&json!({"items":[1, 2]})).unwrap(),
+            input_digest(&json!({"items":[2, 1]})).unwrap()
+        );
+    }
+    #[test]
+    fn image_confirmed_input_digest_matches_market_special_characters() {
+        let input = json!({"prompt":"<scene>&light>\u{2028}line\u{2029}paragraph"});
+        assert_eq!(
+            input_digest(&input).unwrap(),
+            crate::builtins::input_digest(&input).unwrap()
+        );
+        let generic = format!("{:x}", Sha256::digest(serde_json::to_vec(&input).unwrap()));
+        assert_ne!(input_digest(&input).unwrap(), generic);
+        assert_eq!(input_digest(&json!([1, 2])), Err(Error::Invalid));
+        assert_eq!(
+            input_digest(&json!({"prompt":"x".repeat(65536)})),
+            Err(Error::Invalid)
+        );
     }
 }
