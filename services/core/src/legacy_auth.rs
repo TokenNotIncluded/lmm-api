@@ -744,13 +744,13 @@ async fn google_callback(
     peer: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     query: Result<Query<GoogleCallback>, QueryRejection>,
 ) -> Response {
-    if let Ok(Query(query)) = &query {
-        if query.external_mfa.as_deref() == Some("1") {
-            if query.code.is_some() || query.state.is_some() || query.error.is_some() {
-                return auth_failure(IdentityError::Invalid.into());
-            }
-            return external_login::pending_mfa(&state, &headers).await;
+    if let Ok(Query(query)) = &query
+        && query.external_mfa.as_deref() == Some("1")
+    {
+        if query.code.is_some() || query.state.is_some() || query.error.is_some() {
+            return auth_failure(IdentityError::Invalid.into());
         }
+        return external_login::pending_mfa(&state, &headers).await;
     }
     let mfa_binding = match external_login::random_binding() {
         Ok(binding) => binding,

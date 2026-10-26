@@ -244,7 +244,7 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
             F.verify_approval(material, F.read_private(output / "opening.private.sql"), approval)
         self.assertEqual(F.PLANNER.parse_json(F.read_private(output / "source-export-proof.private.json"))["source_queries_this_run"], 0)
 
-    def composed_inputs(self):
+    def composed_inputs(self, *, post_parent=False):
         """Create explicitly synthetic raw source + policy/drain review files."""
         import test_legacy_bounty_basis as bounty
         import test_legacy_escrow_mapping as mapping
@@ -266,6 +266,13 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
         for entry in parent["entity_updates"]:
             self.tables[entry["table"]].append({**entry["source"], **{key: value["after_credit"] for key, value in entry["updates"].items()}})
         self.tables["wallet_credit_rebases"] = [{"migration_id": parent["migration_id"], "plan_sha256": parent["plan_sha256"], "plan": parent}]
+        if post_parent:
+            challenge = mapping.post_parent_data()["tables"][bounty.B.BOUNTY_TABLES[1]][-1]
+            challenge.update(project_id=1, participant_user_id=73)
+            self.tables[bounty.B.BOUNTY_TABLES[1]].append(challenge)
+            for row in self.tables[bounty.B.BOUNTY_TABLES[1]]:
+                for key, value in challenge.items():
+                    row.setdefault(key, "" if type(value) is str else False if type(value) is bool else 0)
         columns = {name: sorted(rows[0]) if rows else (["key", "value"] if name == "options" else ["id"])
                    for name, rows in self.tables.items()}
         column_rows = [{"schema": "public", "table_name": name, "column_name": key}
@@ -308,7 +315,12 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
                     observed_at=self.source["observation"]["observed_at"], source_proof=proof)
         unit = mapping.evidence(args)
         unit["source_policy_evidence_sha256"] = F.sha(b"SYNTHETIC escrow unit review\r\n")
-        candidate = mapper.build(F.PLANNER, **args, unit_evidence=unit)
+        post_facts = None
+        if post_parent:
+            unit["source_application_revision"] = mapper.POST_PARENT_REVISION
+            post_facts = mapper.build(F.PLANNER, **args, unit_evidence=unit)["post_parent_claim_evidence_request"]
+            template["inflight_evidence"]["source_application_revision"] = mapper.POST_PARENT_REVISION
+        candidate = mapper.build(F.PLANNER, **args, unit_evidence=unit, post_parent_claim_evidence=post_facts)
         self.assertEqual(candidate["blockers"], [])
         template["escrow_unit_evidence"] = unit
         template["escrow_candidate"] = candidate
@@ -329,6 +341,43 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
         self.snapshot["state"]["tables"].update({name: {"rows": 0, "sha256": F.sha(b"")}
             for name in (*F.ESCROW_TABLES, "core_billing.legacy_escrow_operations")})
         self.snapshot["state"]["inventory"]["tables"] = sorted(self.snapshot["state"]["tables"])
+        return template
+
+    def test_post_parent_source_attachment_rebuilds_from_private_files_without_sql(self):
+        material = self.composed_inputs(post_parent=True)
+        with patch.object(F, "run_sql") as run, patch.object(F.IDENTITY, "psql") as psql:
+            F.validate_material(material)
+            F.verify_source_files(material)
+            run.assert_not_called()
+            psql.assert_not_called()
+        candidate = material["escrow_candidate"]
+        self.assertTrue(candidate["post_parent_claim_evidence_bound"])
+        self.assertFalse(candidate["economic_approval_verified"])
+        self.assertEqual(candidate["claim_count"], 3)
+        new = next(c for p in material["escrow_batch"]["projects"] for c in p["claims"]
+                   if c["source_challenge_id"] == 999)
+        self.assertEqual((new["participant_user_id"], new["recipient_account_id"], new["payout_units"]), (73, 3, 10))
+
+    def test_post_parent_attachment_missing_or_rewritten_cannot_pass_source_rebuild(self):
+        material = self.composed_inputs(post_parent=True)
+        original = F.PLANNER.parse_json(F.canonical(material))
+        for mode in ("missing", "owner", "budget", "claims"):
+            material = F.PLANNER.parse_json(F.canonical(original))
+            candidate = material["escrow_candidate"]
+            if mode == "missing": candidate.pop("post_parent_claim_evidence")
+            elif mode == "owner": candidate["post_parent_claim_evidence"]["claims"][0]["source_owner_user_id"] = 73
+            elif mode == "budget": candidate["post_parent_claim_evidence"]["project_budgets"][0]["source_integer_owed"] = 0
+            else: candidate["post_parent_claim_evidence"]["claims"] = []
+            reseal_escrow(material)
+            self.write("escrow_candidate", candidate)
+            self.write("source_review", material["source_review"])
+            material["source_files"] = self.files
+            with self.subTest(mode=mode), patch.object(F, "run_sql") as run, \
+                    patch.object(F.IDENTITY, "psql") as psql:
+                with self.assertRaises((F.Error, F.PLANNER.MappingError)):
+                    F.verify_source_files(material)
+                run.assert_not_called()
+                psql.assert_not_called()
 
     def test_composed_prepare_rederives_actual_mapper_and_retains_review_required(self):
         self.composed_inputs()

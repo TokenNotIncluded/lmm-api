@@ -740,6 +740,106 @@ class OpeningPayloadTests(unittest.TestCase):
         self.assertFalse(a["observation"]["exact_financial_snapshot_instant_known"])
         self.assertEqual(a, self.build())
 
+    def test_capture_start_accepts_only_explicit_utc_formats_without_losing_precision(self):
+        captures = (
+            ("20261025T164004Z", "2026-10-25T16:40:04+00:00", 1792946404),
+            ("2026-10-25T16:40:04Z", "2026-10-25T16:40:04+00:00", 1792946404),
+            ("2026-10-25T16:40:04+00:00", "2026-10-25T16:40:04+00:00", 1792946404),
+            ("2026-10-25T16:40:04.749903+00:00", "2026-10-25T16:40:04.749903+00:00", 1792946404),
+            ("2026-10-25T16:40:04.999999Z", "2026-10-25T16:40:04.999999+00:00", 1792946404),
+            ("1969-12-31T23:59:59.999999Z", "1969-12-31T23:59:59.999999+00:00", -1),
+            ("9999-12-31T23:59:59.999999Z", "9999-12-31T23:59:59.999999+00:00", 253402300799),
+        )
+        for capture, iso, epoch in captures:
+            with self.subTest(capture=capture):
+                observation = MODULE.source_observation({"started_utc": capture})
+                self.assertEqual(observation, {"observed_at": epoch,
+                    "capture_window_started_at_iso": iso, "basis": "frozen_dump_capture_started_utc",
+                    "exact_financial_snapshot_instant_known": False,
+                    "must_not_be_used_as_original_payment_or_settlement_time": True})
+                self.assertIs(type(observation["observed_at"]), int)
+
+    def test_capture_start_rejects_naive_non_utc_and_precision_losing_formats(self):
+        for capture in ("2026-10-25T16:40:04", "2026-10-25T16:40:04.749903",
+                        "2026-10-25T16:40:04+08:00", "2026-10-25T16:40:04-00:00",
+                        "2026-10-25T16:40:04+00:00:00", "2026-10-25 16:40:04Z",
+                        "2026-10-25T16:40:04.1234567Z", "2026-10-25T16:40:04,5Z",
+                        "2026-02-30T16:40:04Z", "2026-10-25T16:40:60Z",
+                        "20261025T16404Z", "20261025T164004+00:00", "2026-10-25T16:40:04Z\n"):
+            with self.subTest(capture=capture), self.assertRaises(MODULE.MappingError):
+                MODULE.source_observation({"started_utc": capture})
+
+    def test_opening_retains_capture_microseconds_with_conservative_integer_epoch(self):
+        observation = {**self.observation(), "observed_at": 1792946404,
+                       "capture_window_started_at_iso": "2026-10-25T16:40:04.749903+00:00"}
+        result = self.build(observation=observation)
+        self.assertEqual(result["observation"], observation)
+        self.assertEqual(result["payloads"][0]["observed_at"], 1792946404)
+        self.assertEqual(result["target_writes"], 0)
+        changed = self.build(observation={**observation,
+            "capture_window_started_at_iso": "2026-10-25T16:40:04.749904+00:00"})
+        self.assertNotEqual(result["opening_payloads_sha256"], changed["opening_payloads_sha256"])
+        for epoch in (1792946403, 1792946405):
+            with self.subTest(epoch=epoch), self.assertRaisesRegex(MODULE.MappingError, "source_observation_epoch_iso_mismatch"):
+                self.build(observation={**observation, "observed_at": epoch})
+
+    def test_full_manifest_retains_microseconds_and_binds_them_into_its_hash(self):
+        source = tables()
+        identities = {71: 2}
+        primary_keys = {table: ["id"] if table == "users" else None for table in source}
+        columns = {table: [{"column_name": name} for name in sorted(set().union(*(row.keys() for row in rows)))]
+                   for table, rows in source.items()}
+        plan = MODULE.plan_financial(source, identities, source_sha256="a" * 64,
+                                     primary_keys=primary_keys, column_schema=columns)
+        proof = {"source_archive_sha256": "a" * 64, "source_export_sha256": "b" * 64,
+                 "source_column_coverage_exact": True, "source_row_baseline_exact": True,
+                 "selected_table_counts": {table: len(rows) for table, rows in source.items()},
+                 "source_column_schema": columns, "source_primary_keys": primary_keys}
+        observation = {**self.observation(), "observed_at": 1792946404,
+                       "capture_window_started_at_iso": "2026-10-25T16:40:04.749903+00:00"}
+        build = lambda observed: MODULE.build_full_financial_manifest(plan, source, identities,
+            source_proof=proof, source_observation=observed)
+        result = build(observation)
+        self.assertEqual(result["source_observation"], observation)
+        self.assertFalse(result["historical_unit_conversion_authorized"])
+        self.assertFalse(result["runtime_activation_authorized"])
+        self.assertEqual(result["target_writes"], 0)
+        changed = build({**observation, "capture_window_started_at_iso": "2026-10-25T16:40:04.749904+00:00"})
+        self.assertNotEqual(result["full_manifest_sha256"], changed["full_manifest_sha256"])
+        with self.assertRaisesRegex(MODULE.MappingError, "full_manifest_observation_invalid"):
+            build({**observation, "observed_at": 1792946405})
+
+    def test_source_file_binding_rejects_same_second_microsecond_tampering(self):
+        import financial_import as importer
+        from test_financial_import_files import PrivateFileFixture
+
+        for capture, tampered in (("20261001T000000Z", "2026-10-01T00:00:00.000001+00:00"),
+                                  ("2026-10-25T16:40:04.749903+00:00", "2026-10-25T16:40:04.749904+00:00")):
+            with self.subTest(capture=capture):
+                fixture = type("CaptureFileFixture", (PrivateFileFixture, unittest.TestCase), {})()
+                fixture.setUp()
+                try:
+                    path = Path(fixture.files["source_receipt"]["path"])
+                    source = importer.PLANNER.parse_json(path.read_text())
+                    fixture.write("source_receipt", {**source, "started_utc": capture})
+                    material = copy.deepcopy(fixture.material)
+                    observation = importer.PLANNER.source_observation({"started_utc": capture})
+                    material["observation"] = observation
+                    material["opening"] = importer.PLANNER.build_opening_payloads(material["source_plan"],
+                        migration_id=material["migration_id"], observation=observation,
+                        reservation_reconciliation=fixture.source["reservations"])["payloads"]
+                    importer.verify_source_files(material)
+                    changed = copy.deepcopy(material)
+                    changed["observation"]["capture_window_started_at_iso"] = tampered
+                    with self.assertRaisesRegex(importer.Error, "source_observation_or_reservation_mismatch"):
+                        importer.verify_source_files(changed)
+                    fixture.write("source_receipt", {**source, "started_utc": tampered})
+                    material["source_files"] = copy.deepcopy(fixture.files)
+                    with self.assertRaisesRegex(importer.Error, "source_observation_or_reservation_mismatch"):
+                        importer.verify_source_files(material)
+                finally:
+                    fixture.doCleanups()
+
     def test_missing_bad_or_naive_source_time_is_rejected(self):
         for receipt in ({}, {"started_utc": "not-a-time"}):
             with self.assertRaises(MODULE.MappingError):
@@ -748,8 +848,8 @@ class OpeningPayloadTests(unittest.TestCase):
             with self.subTest(observed_at=observed_at), self.assertRaises(MODULE.MappingError):
                 self.build(observation={**self.observation(), "observed_at": observed_at})
 
-    def test_source_epoch_and_iso_evidence_must_match_exactly(self):
-        for iso in ("2026-10-11T17:43:54+00:00", "2026-10-11T17:43:53.000001+00:00", "2026-10-11T17:43:53+08:00"):
+    def test_source_epoch_and_iso_floor_must_match(self):
+        for iso in ("2026-10-11T17:43:54+00:00", "2026-10-11T17:43:52.999999+00:00", "2026-10-11T17:43:53+08:00"):
             with self.subTest(iso=iso), self.assertRaises(MODULE.MappingError):
                 self.build(observation={**self.observation(), "capture_window_started_at_iso": iso})
 

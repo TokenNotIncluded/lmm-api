@@ -13,111 +13,6 @@ struct Block {
     tool_index: usize,
 }
 
-#[cfg(test)]
-mod cache_creation_tests {
-    use super::*;
-
-    #[test]
-    fn openai_terminals_keep_the_native_thirty_minute_and_twelve_hour_details() {
-        for client in [ClientProtocol::Chat, ClientProtocol::Responses] {
-            for stream in [false, true] {
-                let mut body = match client {
-                    ClientProtocol::Chat => json!({
-                        "model":"m","messages":[{"role":"user","content":"hello"}]
-                    }),
-                    ClientProtocol::Responses => json!({"model":"m","input":"hello"}),
-                    _ => unreachable!(),
-                };
-                body["stream"] = json!(stream);
-                if client == ClientProtocol::Chat && stream {
-                    body["stream_options"] = json!({"include_usage":true});
-                }
-                let limits = Limits::default();
-                let request =
-                    Request::parse(client, &serde_json::to_vec(&body).unwrap(), &limits).unwrap();
-                let mut encoder = Encoder::new(&request, "cache-write-test", &limits);
-                for event in [
-                    Event::Start("up".into()),
-                    Event::Usage(Usage {
-                        input_tokens: Some(10),
-                        output_tokens: Some(0),
-                        cache_creation_input_tokens: Some(3),
-                        openai_cache_write_details: Some(super::super::OpenAiCacheWriteDetails {
-                            ttl_30m_tokens: Some(1),
-                            ttl_12h_tokens: Some(2),
-                        }),
-                        ..Usage::default()
-                    }),
-                    Event::Finish(FinishReason::Stop),
-                    Event::Done,
-                ] {
-                    encoder.consume(event).unwrap();
-                }
-                let bytes = encoder.terminal().unwrap().concat();
-                let wire = std::str::from_utf8(&bytes).unwrap();
-                assert!(wire.contains("\"cache_write_tokens\":3"));
-                assert!(wire.contains("\"ttl_30m_tokens\":1"));
-                assert!(wire.contains("\"ttl_12h_tokens\":2"));
-                assert!(!wire.contains("openai_cache_write_details"));
-            }
-        }
-    }
-
-    #[test]
-    fn openai_terminal_usage_preserves_cache_creation_details() {
-        for client in [ClientProtocol::Chat, ClientProtocol::Responses] {
-            for stream in [false, true] {
-                let mut body = match client {
-                    ClientProtocol::Chat => json!({
-                        "model":"m","messages":[{"role":"user","content":"hello"}]
-                    }),
-                    ClientProtocol::Responses => json!({"model":"m","input":"hello"}),
-                    _ => unreachable!(),
-                };
-                body["stream"] = json!(stream);
-                if client == ClientProtocol::Chat && stream {
-                    body["stream_options"] = json!({"include_usage":true});
-                }
-                let limits = Limits::default();
-                let request =
-                    Request::parse(client, &serde_json::to_vec(&body).unwrap(), &limits).unwrap();
-                let mut encoder = Encoder::new(&request, "cache-test", &limits);
-                for event in [
-                    Event::Start("up".into()),
-                    Event::Block {
-                        index: 0,
-                        kind: BlockKind::Text,
-                    },
-                    Event::Delta {
-                        index: 0,
-                        text: "ok".into(),
-                    },
-                    Event::EndBlock(0),
-                    Event::Usage(Usage {
-                        input_tokens: Some(10),
-                        output_tokens: Some(1),
-                        cache_creation_input_tokens: Some(3),
-                        cache_creation_details: Some(super::super::CacheCreationDetails {
-                            ephemeral_5m_input_tokens: Some(0),
-                            ephemeral_1h_input_tokens: None,
-                        }),
-                        ..Usage::default()
-                    }),
-                    Event::Finish(FinishReason::Stop),
-                    Event::Done,
-                ] {
-                    encoder.consume(event).unwrap();
-                }
-                let terminal = encoder.terminal().unwrap().concat();
-                let wire = std::str::from_utf8(&terminal).unwrap();
-                assert!(
-                    wire.contains("\"cache_creation_details\":{\"ephemeral_5m_input_tokens\":0}")
-                );
-                assert!(!wire.contains("ephemeral_1h_input_tokens"));
-            }
-        }
-    }
-}
 pub(crate) struct Encoder {
     client: ClientProtocol,
     native: Option<super::native::NativeEncoder>,
@@ -253,10 +148,7 @@ impl Encoder {
         let text = if empty { "" } else { &b.text };
         let status = if empty {
             "in_progress"
-        } else if matches!(
-            self.finish,
-            Some(FinishReason::Length | FinishReason::ContentFilter)
-        ) {
+        } else if self.finish.is_some_and(FinishReason::truncates_output) {
             "incomplete"
         } else {
             "completed"
@@ -279,11 +171,7 @@ impl Encoder {
         item
     }
     fn response(&self, initial: bool) -> Value {
-        let incomplete = !initial
-            && matches!(
-                self.finish,
-                Some(FinishReason::Length | FinishReason::ContentFilter)
-            );
+        let incomplete = !initial && self.finish.is_some_and(FinishReason::truncates_output);
         let status = if initial {
             "in_progress"
         } else if incomplete {
@@ -292,7 +180,7 @@ impl Encoder {
             "completed"
         };
         json!({"id":self.id,"object":"response","created_at":self.created,"status":status,"model":self.model,
-            "error":Value::Null,"incomplete_details":if incomplete {json!({"reason":if self.finish == Some(FinishReason::Length) {"max_output_tokens"} else {"content_filter"}})} else {Value::Null},
+            "error":Value::Null,"incomplete_details":if incomplete {json!({"reason":self.finish.map(FinishReason::responses_incomplete_reason)})} else {Value::Null},
             "output":if initial {vec![]} else {(0..self.blocks.len()).map(|i|self.item(i,false)).collect::<Vec<_>>()},
             "usage":if initial {Value::Null} else {self.usage.wire(ClientProtocol::Responses)},"store":false})
     }
@@ -453,6 +341,17 @@ impl Encoder {
                         json!({"content_details":[{"index":index,"type":"signature_delta","protocol":provider,"signature":value}]})
                     };
                     out.push(self.chat_chunk(delta, None)?);
+                }
+            }
+            Event::ContinuationToken(token) => {
+                // Chat and Responses have no Long Decode field. CONTINUATION is
+                // already `finish_reason=length`; do not invent a token key.
+                if !self.started
+                    || token.is_empty()
+                    || token.len() > self.limits.event_bytes
+                    || token.chars().any(char::is_control)
+                {
+                    return Err(RelayError::Protocol("invalid Gemini continuation token"));
                 }
             }
             Event::StopSequence(sequence) => {
@@ -649,10 +548,7 @@ impl Encoder {
                         json!({"output_index":i,"item":self.item(i,false)}),
                     )?);
                 }
-                let kind = if matches!(
-                    self.finish,
-                    Some(FinishReason::Length | FinishReason::ContentFilter)
-                ) {
+                let kind = if self.finish.is_some_and(FinishReason::truncates_output) {
                     "response.incomplete"
                 } else {
                     "response.completed"
@@ -674,6 +570,112 @@ impl Encoder {
                 "error",
                 json!({"code":error.code(),"message":error.to_string(),"param":Value::Null}),
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_creation_tests {
+    use super::*;
+
+    #[test]
+    fn openai_terminals_keep_the_native_thirty_minute_and_twelve_hour_details() {
+        for client in [ClientProtocol::Chat, ClientProtocol::Responses] {
+            for stream in [false, true] {
+                let mut body = match client {
+                    ClientProtocol::Chat => json!({
+                        "model":"m","messages":[{"role":"user","content":"hello"}]
+                    }),
+                    ClientProtocol::Responses => json!({"model":"m","input":"hello"}),
+                    _ => unreachable!(),
+                };
+                body["stream"] = json!(stream);
+                if client == ClientProtocol::Chat && stream {
+                    body["stream_options"] = json!({"include_usage":true});
+                }
+                let limits = Limits::default();
+                let request =
+                    Request::parse(client, &serde_json::to_vec(&body).unwrap(), &limits).unwrap();
+                let mut encoder = Encoder::new(&request, "cache-write-test", &limits);
+                for event in [
+                    Event::Start("up".into()),
+                    Event::Usage(Usage {
+                        input_tokens: Some(10),
+                        output_tokens: Some(0),
+                        cache_creation_input_tokens: Some(3),
+                        openai_cache_write_details: Some(super::super::OpenAiCacheWriteDetails {
+                            ttl_30m_tokens: Some(1),
+                            ttl_12h_tokens: Some(2),
+                        }),
+                        ..Usage::default()
+                    }),
+                    Event::Finish(FinishReason::Stop),
+                    Event::Done,
+                ] {
+                    encoder.consume(event).unwrap();
+                }
+                let bytes = encoder.terminal().unwrap().concat();
+                let wire = std::str::from_utf8(&bytes).unwrap();
+                assert!(wire.contains("\"cache_write_tokens\":3"));
+                assert!(wire.contains("\"ttl_30m_tokens\":1"));
+                assert!(wire.contains("\"ttl_12h_tokens\":2"));
+                assert!(!wire.contains("openai_cache_write_details"));
+            }
+        }
+    }
+
+    #[test]
+    fn openai_terminal_usage_preserves_cache_creation_details() {
+        for client in [ClientProtocol::Chat, ClientProtocol::Responses] {
+            for stream in [false, true] {
+                let mut body = match client {
+                    ClientProtocol::Chat => json!({
+                        "model":"m","messages":[{"role":"user","content":"hello"}]
+                    }),
+                    ClientProtocol::Responses => json!({"model":"m","input":"hello"}),
+                    _ => unreachable!(),
+                };
+                body["stream"] = json!(stream);
+                if client == ClientProtocol::Chat && stream {
+                    body["stream_options"] = json!({"include_usage":true});
+                }
+                let limits = Limits::default();
+                let request =
+                    Request::parse(client, &serde_json::to_vec(&body).unwrap(), &limits).unwrap();
+                let mut encoder = Encoder::new(&request, "cache-test", &limits);
+                for event in [
+                    Event::Start("up".into()),
+                    Event::Block {
+                        index: 0,
+                        kind: BlockKind::Text,
+                    },
+                    Event::Delta {
+                        index: 0,
+                        text: "ok".into(),
+                    },
+                    Event::EndBlock(0),
+                    Event::Usage(Usage {
+                        input_tokens: Some(10),
+                        output_tokens: Some(1),
+                        cache_creation_input_tokens: Some(3),
+                        cache_creation_details: Some(super::super::CacheCreationDetails {
+                            ephemeral_5m_input_tokens: Some(0),
+                            ephemeral_1h_input_tokens: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    Event::Finish(FinishReason::Stop),
+                    Event::Done,
+                ] {
+                    encoder.consume(event).unwrap();
+                }
+                let terminal = encoder.terminal().unwrap().concat();
+                let wire = std::str::from_utf8(&terminal).unwrap();
+                assert!(
+                    wire.contains("\"cache_creation_details\":{\"ephemeral_5m_input_tokens\":0}")
+                );
+                assert!(!wire.contains("ephemeral_1h_input_tokens"));
+            }
         }
     }
 }

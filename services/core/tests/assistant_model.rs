@@ -507,13 +507,14 @@ async fn token_limit_answer_settles_and_core_builds_ordered_context(pool: PgPool
             .state,
         State::Settled
     );
-    let requests = captured.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[1]["messages"],
-        json!([{"role":"user","content":"first"},{"role":"assistant","content":"bounded response"},{"role":"user","content":"second"}])
-    );
-    drop(requests);
+    {
+        let requests = captured.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1]["messages"],
+            json!([{"role":"user","content":"first"},{"role":"assistant","content":"bounded response"},{"role":"user","content":"second"}])
+        );
+    }
     assert_eq!(ledger.balance(account).await.unwrap().reserved_units, 0);
     server.abort();
     let _ = server.await;

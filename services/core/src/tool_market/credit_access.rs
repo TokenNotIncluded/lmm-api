@@ -183,15 +183,16 @@ impl CreditStore {
         req: &T,
     ) -> Result<Option<PgRow>> {
         let row=sqlx::query("SELECT * FROM core_tool_market.credit_access_operations WHERE actor_user_id=$1 AND operation_id=$2").bind(actor).bind(op).fetch_optional(&mut **tx).await?;
-        if let Some(r) = &row {
-            if r.try_get::<String, _>("kind")? != kind
-                || r.try_get::<String, _>("request_hash")? != hash(req)?
-            {
-                return Err(Error::Conflict);
-            }
+        if let Some(r) = &row
+            && (r.try_get::<String, _>("kind")? != kind
+                || r.try_get::<String, _>("request_hash")? != hash(req)?)
+        {
+            return Err(Error::Conflict);
         }
         Ok(row)
     }
+    // Actor, operation, kind, target and details are separate ledger columns.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn record<T: Serialize>(
         tx: &mut Transaction<'_, Postgres>,
         actor: i64,

@@ -143,6 +143,10 @@ pub struct Limits {
     /// Only connect failures, before an HTTP request is sent, may be retried.
     pub connect_retries: u8,
     pub retry_backoff: Duration,
+    /// Anthropic Messages streaming keepalive. The first SSE comment waits one
+    /// full interval, so a response that starts sooner is left unchanged.
+    /// Other client protocols do not emit these comments.
+    pub ping_interval: Duration,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -166,6 +170,7 @@ impl Default for Limits {
             hook_timeout: Duration::from_secs(10),
             connect_retries: 0,
             retry_backoff: Duration::from_millis(200),
+            ping_interval: Duration::from_secs(10),
         }
     }
 }
@@ -191,9 +196,11 @@ impl Limits {
             self.total_timeout,
             self.hook_timeout,
             self.retry_backoff,
+            self.ping_interval,
         ];
         if sizes.contains(&0)
             || times.iter().any(Duration::is_zero)
+            || self.ping_interval < Duration::from_millis(1)
             || self.max_output_tokens == 0
             || self.max_in_flight > 4096
             || self.queue_chunks > 1024
@@ -258,6 +265,7 @@ pub struct Route {
     pub(crate) endpoint: Url,
     pub(crate) credential: HeaderValue,
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
+    pub(crate) payload_policy: crate::routing::PayloadPolicy,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -321,8 +329,15 @@ impl Route {
             credential,
             price_version,
             cache_creation_mode: None,
+            payload_policy: crate::routing::PayloadPolicy::Adapt,
             availability: None,
         })
+    }
+
+    /// Captured only from the actual selected Attempt, never caller JSON.
+    pub(crate) fn with_payload_policy(mut self, policy: crate::routing::PayloadPolicy) -> Self {
+        self.payload_policy = policy;
+        self
     }
 
     /// Captured from the selected frozen Core price, never from provider JSON.
@@ -956,6 +971,9 @@ impl Usage {
 pub enum FinishReason {
     Stop,
     Length,
+    /// Gemini Long Decode hit the provider hop limit and can resume. OpenAI
+    /// clients see `length`; native Gemini keeps `CONTINUATION`.
+    Continuation,
     ToolCalls,
     ContentFilter,
 }
@@ -963,9 +981,25 @@ impl FinishReason {
     pub(crate) fn chat(self) -> &'static str {
         match self {
             Self::Stop => "stop",
-            Self::Length => "length",
+            Self::Length | Self::Continuation => "length",
             Self::ToolCalls => "tool_calls",
             Self::ContentFilter => "content_filter",
+        }
+    }
+
+    pub(crate) fn truncates_output(self) -> bool {
+        matches!(
+            self,
+            Self::Length | Self::Continuation | Self::ContentFilter
+        )
+    }
+
+    /// Responses incomplete_details. Continuation is a length hop, not a filter.
+    pub(crate) fn responses_incomplete_reason(self) -> &'static str {
+        match self {
+            Self::ContentFilter => "content_filter",
+            Self::Length | Self::Continuation => "max_output_tokens",
+            Self::Stop | Self::ToolCalls => "stop",
         }
     }
 }
@@ -996,6 +1030,9 @@ pub(crate) enum Event {
     EndBlock(usize),
     Usage(Usage),
     StopSequence(String),
+    /// Opaque Gemini Long Decode token from `candidates[].continuationToken`.
+    /// Empty values are never emitted, so marshal does not invent the field.
+    ContinuationToken(String),
     Finish(FinishReason),
     Done,
 }

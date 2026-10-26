@@ -144,6 +144,10 @@ pub(super) fn validate(r: &UpgradeRequest) -> Result<(), UpgradeError> {
     {
         return Err(reject("UPGRADE_DB_ROLES_INVALID"));
     }
+    Ok(())
+}
+
+pub(super) fn authorize_target() -> Result<(), UpgradeError> {
     compiled_predecessor()?;
     if COMPONENTS.iter().any(|(name, ddl)| {
         *name == "ledger" && hex(&Sha256::digest(ddl)) != super::ledger::PRE_LEDGER
@@ -171,6 +175,8 @@ fn compiled_predecessor() -> Result<BTreeMap<String, String>, UpgradeError> {
     for component in &mut producer.components {
         if component.name == "ledger" {
             component.raw_schema_sha256 = super::ledger::PRE_LEDGER.into();
+        } else if component.name == "routing" {
+            component.raw_schema_sha256 = PRE_ROUTING.into();
         }
     }
     let mut installer = Sha256::new();
@@ -419,8 +425,8 @@ fn projection(live: &[String]) -> Result<(Vec<String>, Vec<String>), UpgradeErro
                     || s(7) != "O"
                     || row[8] != Value::Bool(false)
                     || row[9] != Value::Bool(false)
-                    || s(10) != ""
-                    || s(11) != ""
+                    || !s(10).is_empty()
+                    || !s(11).is_empty()
                     || !row[12].is_null()
                     || !fk.insert((s(2).to_owned(), s(3).to_owned(), s(5).to_owned()))
                 {

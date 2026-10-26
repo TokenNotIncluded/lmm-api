@@ -590,7 +590,7 @@
 }
 .lmm-provider-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.35rem 1rem;

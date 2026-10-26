@@ -660,18 +660,19 @@ async fn grants_foreign_profile_replay_cannot_revoke_family(pool: PgPool) {
 
 // Wait for a real PostgreSQL authority-lock waiter, then cross the exact DB
 // expiry while holding that lock. No success mocks or fixed startup sleep.
-async fn release_after_expiry(pool: &PgPool, mut blocker: Transaction<'_, Postgres>, table: &str) {
-    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *blocker)
-        .await
-        .unwrap();
+async fn release_after_expiry(
+    observer: &mut PgConnection,
+    blocker: Transaction<'_, Postgres>,
+    blocker_pid: i32,
+    table: &str,
+) {
     tokio::time::timeout(Duration::from_millis(400), async {
         loop {
             let waiting: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
             )
             .bind(blocker_pid)
-            .fetch_one(pool)
+            .fetch_one(&mut *observer)
             .await
             .unwrap();
             if waiting {
@@ -685,16 +686,16 @@ async fn release_after_expiry(pool: &PgPool, mut blocker: Transaction<'_, Postgr
     let still_live: bool = sqlx::query_scalar(&format!(
         "SELECT expires_at>clock_timestamp() FROM core_oauth.{table}"
     ))
-    .fetch_one(pool)
+    .fetch_one(&mut *observer)
     .await
     .unwrap();
     assert!(still_live, "wait must begin before exact expiry");
     sqlx::query(&format!("SELECT pg_sleep(GREATEST(0,extract(epoch FROM expires_at-clock_timestamp()))::double precision+0.03) FROM core_oauth.{table}"))
-        .execute(pool).await.unwrap();
+        .execute(&mut *observer).await.unwrap();
     let expired: bool = sqlx::query_scalar(&format!(
         "SELECT expires_at<=clock_timestamp() FROM core_oauth.{table}"
     ))
-    .fetch_one(pool)
+    .fetch_one(&mut *observer)
     .await
     .unwrap();
     assert!(expired);
@@ -716,19 +717,26 @@ async fn expiry_lock_regression(pool: PgPool, mode: &str) {
         "refresh_native" => "refresh_tokens",
         _ => "access_tokens",
     };
-    sqlx::query(&format!(
-        "UPDATE core_oauth.{table} SET expires_at=clock_timestamp()+interval '500 milliseconds'"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
     let mut blocker = pool.begin().await.unwrap();
+    let mut observer = pool.acquire().await.unwrap();
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
     let lock = if mode == "access_family" {
         "SELECT id FROM core_oauth.families FOR UPDATE"
     } else {
         "SELECT id FROM core_identity.users WHERE id=1 FOR UPDATE"
     };
     sqlx::query(lock).execute(&mut *blocker).await.unwrap();
+    // Start the expiry window only after the blocker and observer are ready.
+    // Reuse the observer so pool acquisition cannot consume that window.
+    sqlx::query(&format!(
+        "UPDATE core_oauth.{table} SET expires_at=clock_timestamp()+interval '500 milliseconds'"
+    ))
+    .execute(&mut *observer)
+    .await
+    .unwrap();
     let owned_store = store.clone();
     let is_refresh = mode == "refresh_native";
     let pending = tokio::spawn(async move {
@@ -752,7 +760,7 @@ async fn expiry_lock_regression(pool: PgPool, mode: &str) {
             }
         }
     });
-    release_after_expiry(&pool, blocker, table).await;
+    release_after_expiry(&mut observer, blocker, blocker_pid, table).await;
     let result = pending.await.unwrap();
     assert!(
         matches!(

@@ -27,6 +27,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
+import { LmmPluginLogo } from '@/components/lmm-plugin-logo'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -476,8 +477,13 @@ export function AssistantSetupTool(props: {
                 <TabsTrigger
                   key={client}
                   value={client}
-                  className='h-auto min-h-10 min-w-max flex-none px-3 py-2 text-xs whitespace-nowrap sm:text-sm'
+                  className='h-auto min-h-10 min-w-max flex-none gap-2 px-3 py-2 text-xs whitespace-nowrap sm:text-sm'
                 >
+                  {(client === 'pi' ||
+                    client === 'dsh' ||
+                    client === 'codewhale') && (
+                    <LmmPluginLogo plugin={client} className='size-5' />
+                  )}
                   {clientNames[client]}
                 </TabsTrigger>
               ))}

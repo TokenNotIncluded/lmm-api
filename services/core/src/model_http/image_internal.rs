@@ -163,24 +163,24 @@ fn secure(mut response: Response) -> Response {
 async fn secure_response(response: Response) -> Response {
     secure(response)
 }
-async fn bounded_body(request: Request) -> Result<Bytes, Response> {
+async fn bounded_body(request: Request) -> Result<Bytes, Box<Response>> {
     bounded_body_limit(request, MAX_BODY).await
 }
-async fn bounded_body_limit(request: Request, maximum: usize) -> Result<Bytes, Response> {
+async fn bounded_body_limit(request: Request, maximum: usize) -> Result<Bytes, Box<Response>> {
     tokio::time::timeout(
         std::time::Duration::from_secs(if maximum > MAX_BODY { 30 } else { 2 }),
         to_bytes(request.into_body(), maximum),
     )
     .await
-    .map_err(|_| failure(Error::Pending))?
+    .map_err(|_| Box::new(failure(Error::Pending)))?
     .map_err(|_| {
-        secure(
+        Box::new(secure(
             (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Json(json!({"error":"body_too_large"})),
             )
                 .into_response(),
-        )
+        ))
     })
 }
 async fn action(
@@ -221,7 +221,7 @@ async fn action(
         bounded_body(request).await
     } {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = async {
         match action.as_str() {
