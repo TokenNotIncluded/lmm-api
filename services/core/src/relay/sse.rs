@@ -33,11 +33,13 @@ impl Parser {
     /// Process one byte so callers can apply backpressure between events even
     /// when a single network chunk contains thousands of small events.
     pub fn feed(&mut self, byte: u8) -> Result<Option<Frame>, RelayError> {
-        if self.skip_lf {
-            self.skip_lf = false;
-            if byte == b'\n' {
-                return Ok(None);
-            }
+        let skip_lf = self.skip_lf && byte == b'\n';
+        self.skip_lf = false;
+        // A CR already dispatched a blank line when bytes is zero. Its LF
+        // belongs to that completed boundary, not the next event. Otherwise
+        // CRLF's LF still consumes a byte of the current event's budget.
+        if skip_lf && self.bytes == 0 {
+            return Ok(None);
         }
         self.bytes = self
             .bytes
@@ -45,6 +47,9 @@ impl Parser {
             .ok_or(RelayError::Limit("SSE event"))?;
         if self.bytes > self.limit {
             return Err(RelayError::Limit("SSE event"));
+        }
+        if skip_lf {
+            return Ok(None);
         }
         match byte {
             b'\r' => {
@@ -157,6 +162,39 @@ mod tests {
             p.feed(*b).unwrap();
         }
         assert!(matches!(p.feed(b'7'), Err(RelayError::Limit(_))));
+    }
+    #[test]
+    fn crlf_inside_an_event_counts_toward_the_byte_limit() {
+        // The second CR closes the frame; its optional LF is framing only.
+        // All bytes before that boundary must count, including CRLF's LF.
+        let raw = b"data: x\r\ndata: y\r\r";
+        let mut p = Parser::new(raw.len() - 1);
+        assert!(matches!(
+            raw.iter().try_for_each(|&byte| p.feed(byte).map(|_| ())),
+            Err(RelayError::Limit("SSE event"))
+        ));
+        let mut p = Parser::new(raw.len());
+        let mut frames = Vec::new();
+        for &byte in raw {
+            if let Some(frame) = p.feed(byte).unwrap() {
+                frames.push(frame.data);
+            }
+        }
+        assert_eq!(frames, ["x\ny"]);
+        p.finish().unwrap();
+    }
+    #[test]
+    fn crlf_between_events_does_not_consume_the_next_event_limit() {
+        let mut p = Parser::new(b"data: x\r\r".len());
+        let mut frames = Vec::new();
+        for &byte in b"data: x\r\r\ndata: y\r\r\n" {
+            if let Some(frame) = p.feed(byte).unwrap() {
+                frames.push(frame.data);
+            }
+        }
+        assert_eq!(frames, ["x", "y"]);
+        assert_eq!(p.bytes, 0);
+        p.finish().unwrap();
     }
     #[test]
     fn many_events_do_not_accumulate() {
