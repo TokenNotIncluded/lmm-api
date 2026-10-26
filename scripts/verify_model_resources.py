@@ -5,7 +5,7 @@ Prepare requires a successfully source-bound release build. Run uses only its
 sealed binaries and a fresh owned PostgreSQL fixture. Core alone is constrained;
 combined Go/node capacity remains outside this gate. The socket-backpressure
 case is a separate opt-in regression, not the sustained throughput gate.
-Wrap prepare/run in agcc with explicit output and Core target roots.
+Use private, task-owned output and process roots and coordinate heavy builds.
 """
 from __future__ import annotations
 import argparse

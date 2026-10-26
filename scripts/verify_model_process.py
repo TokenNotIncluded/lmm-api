@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare frozen model test binaries, then run them against fresh owned PostgreSQL.
 
-Invoke both phases through agcc with the explicit output/process/target/cache
-roots covered. Create those private (0700), absolute, symlink-free directories
+Use the explicit output, process, target and cache roots for both phases.
+Create those private (0700), absolute, symlink-free directories
 first. Only --reuse-leased-target permits the standard Core target directory
 with owner-only write access, after its current owner releases the build slot.
 prepare requires an already-built Core candidate, its SHA-256, a source

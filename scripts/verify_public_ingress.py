@@ -6,7 +6,7 @@ product to fail only the connection/retained-kernel contract, while its healthy
 paid traffic succeeds. Green mode requires the complete contract. Both resource
 modes keep all 512 offered socket identities until the recovery gate. Databases
 and generator have separate budgets; this is not whole-host acceptance.
-Run under agcc with selected output/process roots. No existing database URL or
+Use private, task-owned output and process roots. No existing database URL or
 ambient application credential is accepted. Failed fixtures remain private.
 """
 
