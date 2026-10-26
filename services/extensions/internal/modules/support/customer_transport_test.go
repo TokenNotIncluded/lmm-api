@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -14,7 +15,12 @@ import (
 )
 
 func TestCoreCustomerProjectionUsesOnlyUDSAndSeparateCredentials(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "core.sock")
+	// Unix socket paths are bounded independently of filesystem path limits.
+	// Avoid t.TempDir's full test name and a potentially long TMPDIR prefix.
+	dir, err := os.MkdirTemp("/tmp", "lmm-support-uds-")
+	must(t, err)
+	t.Cleanup(func() { must(t, os.RemoveAll(dir)) })
+	socket := filepath.Join(dir, "core.sock")
 	listener, err := net.Listen("unix", socket)
 	must(t, err)
 	var calls atomic.Int64
