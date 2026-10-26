@@ -60,6 +60,7 @@ impl AssistantRpc {
             confirmations: None,
         })
     }
+    #[cfg_attr(not(test), allow(dead_code))] // Tests attach an agent; process startup does not yet.
     pub(crate) async fn with_agent(
         mut self,
         agent: super::agent::store::AgentService,

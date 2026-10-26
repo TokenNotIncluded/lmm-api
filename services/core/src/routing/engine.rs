@@ -188,6 +188,16 @@ impl Snapshot {
                 let upstream = upstreams
                     .get(&target.upstream_id)
                     .ok_or(RoutingError::InvalidConfig("target upstream"))?;
+                if matches!(target.payload, PayloadPolicy::LegacyOpenai { .. })
+                    && !matches!(
+                        upstream.config.protocol,
+                        Protocol::OpenAiChat | Protocol::OpenAiResponses
+                    )
+                {
+                    return Err(RoutingError::InvalidConfig(
+                        "legacy OpenAI payload protocol",
+                    ));
+                }
                 targets.push(Arc::new(Target {
                     config: target.clone(),
                     upstream: Arc::clone(upstream),
@@ -378,7 +388,10 @@ impl Router {
             .filter(|target| {
                 target.available()
                     && target.config.speeds.contains(&speed)
-                    && (target.config.payload == PayloadPolicy::Adapt
+                    && (target
+                        .config
+                        .payload
+                        .adapts(request.protocol, target.upstream.config.protocol)
                         || (target.upstream.config.protocol == request.protocol
                             && target.config.upstream_model == request.model))
             })

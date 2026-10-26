@@ -12,6 +12,8 @@ use sqlx::{PgConnection, Row};
 
 /// Not deserializable. Confirmation coordinators receive this only after a live
 /// original Session and its immutable Core operation have been checked together.
+/// Market proof fields are read only by the authorizer below, which has no caller yet.
+#[allow(dead_code)]
 pub(crate) struct FrozenProposal {
     operation_id: String,
     turn_id: String,
@@ -43,6 +45,7 @@ impl FrozenProposal {
     pub(crate) fn tool_version(&self) -> &str {
         &self.tool_version
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn domain(&self) -> &str {
         &self.domain
     }
@@ -61,15 +64,19 @@ impl FrozenProposal {
     pub(crate) fn resource_version(&self) -> &str {
         &self.resource_version
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn scope_grant_id(&self) -> &str {
         &self.scope_grant_id
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn resource_schema_sha256(&self) -> Option<&[u8; 32]> {
         self.resource_schema_sha256.as_ref()
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn resource_price_sha256(&self) -> Option<&[u8; 32]> {
         self.resource_price_sha256.as_ref()
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn host_policy(&self) -> &serde_json::Value {
         &self.host_policy
     }
@@ -85,12 +92,13 @@ impl FrozenProposal {
     /// Core reads carry no market scope. Extension market calls carry both
     /// resource digests and a non-empty scope; partial bindings fail closed.
     fn validate_provenance(&self, extension_mode: i32) -> Result<(), Error> {
-        let expected_domain = match extension_mode {
-            0 => "registered_core",
-            1 | 2 => "extension",
-            _ => return Err(Error::Unavailable),
+        let valid_domain = match extension_mode {
+            0 => self.domain() == "registered_core",
+            1 => matches!(self.domain(), "registered_core" | "extension"),
+            2 => self.domain() == "extension",
+            _ => false,
         };
-        if self.domain() != expected_domain
+        if !valid_domain
             || !self.host_policy().is_object()
             || (self.resource_schema_sha256().is_some() != self.resource_price_sha256().is_some())
         {
@@ -137,6 +145,7 @@ pub(crate) async fn verify_confirmation_proposal_in_transaction(
 ) -> Result<FrozenProposal, Error> {
     verify_bound_proposal(c, operation_id, context, 1).await
 }
+#[allow(dead_code)] // Market authorizer only; that path has no caller yet.
 pub(crate) async fn verify_market_proposal_in_transaction(
     c: &mut PgConnection,
     operation_id: &str,

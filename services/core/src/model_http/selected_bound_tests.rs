@@ -1,7 +1,7 @@
 //! Real PostgreSQL identity, selected routing, charging and ledger boundaries.
-//! These tests deliberately stop before DNS or provider HTTP. HTTPS contracts
-//! exercise the external-policy branch; loopback remains a separate synthetic
-//! contract. Supplied usage below is test evidence, not a live vendor receipt.
+//! HTTPS contract tests stop before DNS or provider HTTP. Compatibility tests
+//! use numeric-loopback HTTP with captured bodies and synthetic protocol replies.
+//! Supplied usage is test evidence, not a live vendor receipt.
 use super::{
     ChargePolicy, ExternalModelContext, ModelGateway, Operation, ProviderPolicy, UpstreamCredential,
 };
@@ -35,6 +35,330 @@ const GLOBAL_INPUT: i64 = 1_048_576;
 const SMALL_OUTPUT: u32 = 128;
 const GLOBAL_OUTPUT: u32 = 4096;
 const EXTERNAL_BASE: &str = "https://selected-bound.example/v1";
+
+struct CompatibilityProvider {
+    endpoint: String,
+    bodies: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for CompatibilityProvider {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl CompatibilityProvider {
+    async fn start() -> Self {
+        use axum::{Json, Router, extract::State, response::IntoResponse, routing::post};
+        async fn reply(
+            State(bodies): State<Arc<std::sync::Mutex<Vec<serde_json::Value>>>>,
+            Json(body): Json<serde_json::Value>,
+        ) -> axum::response::Response {
+            bodies.lock().unwrap().push(body.clone());
+            let chat = body.get("messages").is_some();
+            let full = if chat {
+                json!({"id":"synthetic-chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"synthetic answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":0}}})
+            } else {
+                json!({"id":"synthetic-resp","object":"response","status":"completed","output":[{"id":"item1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"synthetic answer","annotations":[]}]}],"usage":{"input_tokens":2,"output_tokens":3,"input_tokens_details":{"cached_tokens":0}}})
+            };
+            if body["stream"] != true {
+                return Json(full).into_response();
+            }
+            let events = if chat {
+                vec![
+                    json!({"id":"synthetic-chat","choices":[{"index":0,"delta":{"role":"assistant","content":"synthetic answer"},"finish_reason":null}]}),
+                    json!({"id":"synthetic-chat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":full["usage"]}),
+                ]
+            } else {
+                vec![
+                    json!({"type":"response.created","response":{"id":"synthetic-resp","status":"in_progress","output":[]}}),
+                    json!({"type":"response.output_item.added","output_index":0,"item":{"id":"item1","type":"message","role":"assistant","content":[]}}),
+                    json!({"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+                    json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"synthetic answer"}),
+                    json!({"type":"response.content_part.done","output_index":0,"content_index":0}),
+                    json!({"type":"response.output_item.done","output_index":0,"item":full["output"][0]}),
+                    json!({"type":"response.completed","response":full}),
+                ]
+            };
+            let mut wire = String::new();
+            for event in events {
+                if !chat {
+                    wire.push_str(&format!("event: {}\n", event["type"].as_str().unwrap()));
+                }
+                wire.push_str(&format!("data: {event}\n\n"));
+            }
+            if chat {
+                wire.push_str("data: [DONE]\n\n");
+            }
+            ([("content-type", "text/event-stream")], wire).into_response()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(reply))
+            .route("/v1/responses", post(reply))
+            .with_state(bodies.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self {
+            endpoint,
+            bodies,
+            task,
+        }
+    }
+}
+
+fn compatibility_gateway(f: &Fixture, base: &str, protocol: Protocol) -> ModelGateway {
+    let original = gateway(f, base, vec![]);
+    let mut document = original.bridge.routing.catalog_document().unwrap();
+    document.routing.upstreams[0].protocol = protocol;
+    let policies: Vec<routing::PayloadPolicy> = vec![
+        serde_json::from_value(json!({"legacy_openai":{}})).unwrap(),
+        serde_json::from_value(json!({"legacy_openai":{
+            "allow_service_tier":true,"allow_inference_geo":true,"allow_speed":true,
+            "allow_safety_identifier":true,"allow_include_obfuscation":true
+        }}))
+        .unwrap(),
+        routing::PayloadPolicy::Adapt,
+        routing::PayloadPolicy::Passthrough,
+    ];
+    let route = document.routing.routes[0].clone();
+    let price = document.pricing.rules[0].clone();
+    document.routing.routes.clear();
+    document.pricing.rules.clear();
+    for (index, policy) in policies.into_iter().enumerate() {
+        let id = index as u64 + 1;
+        let name = format!("compat-{index}");
+        let mut route = route.clone();
+        route.id = id;
+        route.model = name.clone();
+        route.targets[0].id = id;
+        route.targets[0].upstream_model = name.clone();
+        route.targets[0].payload = policy;
+        document.routing.routes.push(route);
+        let mut price = price.clone();
+        price.id = id;
+        price.model = name;
+        document.pricing.rules.push(price);
+    }
+    ModelGateway::new_with_provider_policy(
+        f.pool.clone(),
+        Arc::new(
+            routing::Router::new(
+                document.routing,
+                Arc::new(PriceSnapshot::compile(document.pricing).unwrap()),
+            )
+            .unwrap(),
+        ),
+        vec![UpstreamCredential {
+            reference: CredentialRef { id: 7, revision: 1 },
+            secret: "synthetic-compatibility-key".into(),
+        }],
+        BTreeMap::from([(f.key_id, "allowed".into())]),
+        original.limits.clone(),
+        original.bridge.policy,
+        ProviderPolicy::new(vec![], GLOBAL_INPUT).unwrap(),
+    )
+    .unwrap()
+    .with_local_streaming()
+}
+
+fn compatibility_body(chat: bool, stream: bool, model: &str) -> serde_json::Value {
+    let mut body = if chat {
+        json!({"model":model,"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":16,"stream":stream})
+    } else {
+        json!({"model":model,"input":"hello","max_output_tokens":16,"stream":stream})
+    };
+    body["service_tier"] = json!("auto");
+    body["inference_geo"] = json!("synthetic-region");
+    body["speed"] = json!("synthetic-speed");
+    body["safety_identifier"] = json!("synthetic-user");
+    if stream {
+        body["stream_options"] = json!({"include_obfuscation":false});
+    }
+    body
+}
+
+async fn compatibility_call(
+    g: &ModelGateway,
+    f: &Fixture,
+    chat: bool,
+    id: &str,
+    body: String,
+) -> (u16, String, String) {
+    use tower::ServiceExt;
+    let response = g
+        .router()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(if chat {
+                    "/v1/chat/completions"
+                } else {
+                    "/v1/responses"
+                })
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", f.key))
+                .header("x-request-id", id)
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .map(|value| value.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+        .await
+        .unwrap();
+    // Body closure precedes the host's completion receiver removing the operation.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if !g.bridge.active.lock().unwrap().contains_key(&request_id) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    (
+        status,
+        String::from_utf8(bytes.to_vec()).unwrap(),
+        request_id,
+    )
+}
+
+#[sqlx::test(migrations = false)]
+async fn legacy_openai_gateway_forwards_selected_policy_and_settles(pool: PgPool) {
+    let f = fixture(pool, 10_000_000).await;
+    let provider = CompatibilityProvider::start().await;
+    let mut completed = 0;
+    for chat in [true, false] {
+        let protocol = if chat {
+            Protocol::OpenAiChat
+        } else {
+            Protocol::OpenAiResponses
+        };
+        let g = compatibility_gateway(&f, &provider.endpoint, protocol);
+        for stream in [false, true] {
+            for allowed in [false, true] {
+                let model = if allowed { "compat-1" } else { "compat-0" };
+                let id = format!("compat-success-{chat}-{stream}-{allowed}");
+                let body = compatibility_body(chat, stream, model);
+                let (status, response, request_id) =
+                    compatibility_call(&g, &f, chat, &id, body.to_string()).await;
+                assert_eq!(status, 200, "{response}");
+                assert!(!request_id.is_empty());
+                assert!(response.contains("synthetic answer"), "{response}");
+                if stream {
+                    assert!(response.contains(if chat { "[DONE]" } else { "response.completed" }));
+                }
+                let mut expected = if chat {
+                    json!({"model":model,"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":16,"stream":stream,"store":false})
+                } else {
+                    json!({"model":model,"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"max_output_tokens":16,"stream":stream,"store":false})
+                };
+                if chat && stream {
+                    expected["stream_options"] = json!({"include_usage":true});
+                }
+                if allowed {
+                    for name in [
+                        "service_tier",
+                        "inference_geo",
+                        "speed",
+                        "safety_identifier",
+                    ] {
+                        expected[name] = body[name].clone();
+                    }
+                    if stream {
+                        if expected.get("stream_options").is_none() {
+                            expected["stream_options"] = json!({});
+                        }
+                        expected["stream_options"]["include_obfuscation"] = json!(false);
+                    }
+                }
+                assert_eq!(provider.bodies.lock().unwrap()[completed], expected);
+                let charge: (String, i64, i64, i64) = sqlx::query_as("SELECT state,settled,input_tokens,output_tokens FROM core_charging.requests WHERE id=$1")
+                    .bind(&request_id).fetch_one(&f.pool).await.unwrap();
+                assert_eq!(charge, ("settled".into(), 2, 2, 3));
+                assert!(checkpoint_rows(&f.pool, &request_id).await > 0);
+                completed += 1;
+                assert_balance(&f, 10_000_000 - 2 * completed as i64, 0).await;
+            }
+        }
+    }
+    assert_eq!(completed, 8);
+    assert_eq!(provider.bodies.lock().unwrap().len(), completed);
+    assert_eq!(requests(&f.pool).await, completed as i64);
+}
+
+#[sqlx::test(migrations = false)]
+async fn legacy_openai_gateway_rejects_before_reserve_or_provider(pool: PgPool) {
+    let f = fixture(pool, 10_000_000).await;
+    let provider = CompatibilityProvider::start().await;
+    for chat in [true, false] {
+        let protocol = if chat {
+            Protocol::OpenAiChat
+        } else {
+            Protocol::OpenAiResponses
+        };
+        let g = compatibility_gateway(&f, &provider.endpoint, protocol);
+        let mut cases = Vec::new();
+        for name in [
+            "service_tier",
+            "inference_geo",
+            "speed",
+            "safety_identifier",
+        ] {
+            let mut body = compatibility_body(chat, true, "compat-1");
+            body[name] = json!({"invalid":true});
+            cases.push((body.to_string(), 400));
+        }
+        let mut body = compatibility_body(chat, true, "compat-1");
+        body["stream_options"]["include_obfuscation"] = json!("false");
+        cases.push((body.to_string(), 400));
+        let mut body = compatibility_body(chat, false, "compat-1");
+        body["stream_options"] = json!({"include_obfuscation":true});
+        cases.push((body.to_string(), 400));
+        for model in ["compat-0", "compat-2", "compat-3"] {
+            let body = compatibility_body(chat, true, model).to_string();
+            if model != "compat-0" {
+                // The gateway has always refused Passthrough before encoding.
+                cases.push((body.clone(), if model == "compat-3" { 503 } else { 400 }));
+            }
+            cases.push((
+                body.replace(
+                    "\"include_obfuscation\":false",
+                    "\"include_obfuscation\":false,\"INCLUDE_OBFUSCATION\":true",
+                ),
+                400,
+            ));
+            cases.push((
+                body.replace(
+                    "\"service_tier\":\"auto\"",
+                    "\"service_tier\":\"auto\",\"service_tier\":\"auto\"",
+                ),
+                400,
+            ));
+            let mut body = compatibility_body(chat, true, model);
+            body["payload_policy"] = json!({"legacy_openai":{}});
+            cases.push((body.to_string(), 400));
+        }
+        for (index, (body, expected_status)) in cases.into_iter().enumerate() {
+            let id = format!("compat-reject-{chat}-{index}");
+            let (status, response, _) = compatibility_call(&g, &f, chat, &id, body).await;
+            assert_eq!(status, expected_status, "{id}: {response}");
+            assert_eq!(requests(&f.pool).await, 0, "{id}");
+            assert!(provider.bodies.lock().unwrap().is_empty(), "{id}");
+            assert_balance(&f, 10_000_000, 0).await;
+        }
+    }
+}
 
 struct Fixture {
     pool: PgPool,

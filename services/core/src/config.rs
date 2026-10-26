@@ -1290,12 +1290,12 @@ pub async fn tool_market_server(
             "LMM_CORE_REMOTE_CONTROL_TOKEN_FILE",
             "LMM_CORE_INGRESS_TOKEN_FILE",
         ] {
-            if let Some(path) = setting_os(name) {
-                if service_token(Path::new(&path))? == *token {
-                    return Err(invalid_config(
-                        "private projection credential must be independent from other services",
-                    ));
-                }
+            if let Some(path) = setting_os(name)
+                && service_token(Path::new(&path))? == *token
+            {
+                return Err(invalid_config(
+                    "private projection credential must be independent from other services",
+                ));
             }
         }
         if gateway.is_some_and(|g| g.contains_credential(std::str::from_utf8(token).unwrap_or("")))
@@ -1536,12 +1536,12 @@ pub async fn assistant_rpc(
         "LMM_CORE_TOOL_MARKET_TOKEN_FILE",
         "LMM_CORE_WALLET_TOKEN_FILE",
     ] {
-        if let Some(path) = setting_os(name) {
-            if service_token(Path::new(&path))? == token {
-                return Err(invalid_config(
-                    "assistant credential must be independent from other service credentials",
-                ));
-            }
+        if let Some(path) = setting_os(name)
+            && service_token(Path::new(&path))? == token
+        {
+            return Err(invalid_config(
+                "assistant credential must be independent from other service credentials",
+            ));
         }
     }
     let config: AssistantConfig = parse_document(&document)?;
@@ -2179,6 +2179,37 @@ struct ImageProviderConfig {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct LegacyKeyAliasesConfig {
+    manifest_file: PathBuf,
+    manifest_sha256: String,
+    credential_receipt_file: PathBuf,
+    credential_receipt_sha256: String,
+}
+
+impl LegacyKeyAliasesConfig {
+    fn read(&self) -> io::Result<(Vec<u8>, Vec<u8>)> {
+        use sha2::{Digest, Sha256};
+        let read = |path: &Path, expected: &str| {
+            let bytes = private_file(path, 4 * 1024 * 1024)?;
+            if format!("{:x}", Sha256::digest(&bytes)) != expected {
+                return Err(invalid_config(
+                    "legacy key alias installation hash mismatch",
+                ));
+            }
+            Ok(bytes)
+        };
+        Ok((
+            read(&self.manifest_file, &self.manifest_sha256)?,
+            read(
+                &self.credential_receipt_file,
+                &self.credential_receipt_sha256,
+            )?,
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelConfig {
     version: u32,
     routing: ModelRouting,
@@ -2197,6 +2228,8 @@ struct ModelConfig {
     image_prices: Option<crate::model_http::image_price::ImagePriceConfig>,
     #[serde(default)]
     image_providers: Vec<ImageProviderConfig>,
+    #[serde(default)]
+    legacy_key_aliases: Option<LegacyKeyAliasesConfig>,
 }
 
 #[cfg(test)]
@@ -2412,6 +2445,14 @@ fn model_gateway_with_origins(
         provider_policy,
     )
     .map_err(|_| invalid_config("unsafe or incomplete model gateway configuration"))?;
+    let gateway = if let Some(aliases) = config.legacy_key_aliases {
+        let (manifest, receipt) = aliases.read()?;
+        gateway
+            .with_legacy_key_aliases(&manifest, &receipt)
+            .map_err(|_| invalid_config("invalid legacy key alias installation"))?
+    } else {
+        gateway
+    };
     let gateway = if let Some(images) = images {
         gateway.with_image_service(images)
     } else {
@@ -2788,6 +2829,35 @@ fn read_database_url(inline: Option<String>, file: Option<PathBuf>) -> io::Resul
     Ok(Some(value))
 }
 
+/// Explicit optional HumanGrant assembly with the exact configured Web origin.
+pub async fn humangrant(
+    pool: sqlx::PgPool,
+) -> io::Result<Option<(axum::Router, Arc<crate::humangrant::HumanGrantEngine>)>> {
+    let enabled = match setting("LMM_CORE_HUMANGRANT_ENABLED").as_deref() {
+        Ok("true") => true,
+        Ok("false") | Err(_) => false,
+        _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
+    };
+    if !enabled {
+        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
+            return Err(invalid_config(
+                "HumanGrant SMTP requires HumanGrant enabled",
+            ));
+        }
+        return Ok(None);
+    }
+    let origin = setting("LMM_CORE_WEB_ORIGIN")
+        .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
+    let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
+    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
+        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
+            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
+            .transpose()?;
+    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
+        .await
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2862,9 +2932,11 @@ mod tests {
             file.write_all(contents.as_bytes()).unwrap();
         }
         for path in [&proof, &reused] {
-            let error = checked_edge_access_config(Some(proof.clone()), &[path.clone()])
-                .err()
-                .unwrap();
+            let token = path.to_path_buf();
+            let error =
+                checked_edge_access_config(Some(proof.clone()), std::slice::from_ref(&token))
+                    .err()
+                    .unwrap();
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert_eq!(
                 error.to_string(),
@@ -3718,7 +3790,12 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
             .unwrap();
-        assert!(model_gateway(pool.clone(), document.as_bytes(), false).is_ok());
+        let mut unconfigured_aliases =
+            model_gateway(pool.clone(), document.as_bytes(), false).unwrap();
+        unconfigured_aliases
+            .verify_legacy_key_aliases()
+            .await
+            .unwrap();
         // The installation's output maximum need not fit every model. Startup
         // binds both contracts; runtime checks the output actually requested.
         let low_output = document.replace(
@@ -3828,6 +3905,74 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn model_configuration_accepts_explicit_pinned_legacy_key_alias_files() {
+        let document = serde_json::json!({
+            "version":1,"routing":{"version":1,"groups":[],"upstreams":[],"routes":[],"aliases":[]},
+            "prices":{"version":1,"rules":[]},"credentials":[],"key_groups":[],
+            "input_token_ceiling":100,"lease_seconds":20,"timeout_seconds":3,"max_output_tokens":20,
+            "legacy_key_aliases":{
+                "manifest_file":"/synthetic/legacy-key-aliases.json","manifest_sha256":"a".repeat(64),
+                "credential_receipt_file":"/synthetic/credential-mapping.json","credential_receipt_sha256":"b".repeat(64)
+            }
+        });
+        assert!(
+            serde_json::from_value::<ModelConfig>(document).is_ok(),
+            "an explicit private manifest and its credential receipt must be configurable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_key_alias_installation_requires_private_files_and_both_exact_hashes() {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = std::env::temp_dir().join(format!(
+            "lmm-legacy-alias-config-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let manifest = directory.join("manifest.json");
+        let receipt = directory.join("receipt.json");
+        fs::write(&manifest, b"synthetic-manifest-bytes").unwrap();
+        fs::write(&receipt, b"synthetic-owner-mapping-bytes").unwrap();
+        for path in [&manifest, &receipt] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut config = LegacyKeyAliasesConfig {
+            manifest_file: manifest.clone(),
+            manifest_sha256: format!("{:x}", Sha256::digest(b"synthetic-manifest-bytes")),
+            credential_receipt_file: receipt.clone(),
+            credential_receipt_sha256: format!(
+                "{:x}",
+                Sha256::digest(b"synthetic-owner-mapping-bytes")
+            ),
+        };
+        let actual = config.read().unwrap();
+        assert_eq!(actual.0, b"synthetic-manifest-bytes");
+        assert_eq!(actual.1, b"synthetic-owner-mapping-bytes");
+        let manifest_hash = config.manifest_sha256.clone();
+        config.manifest_sha256 = "0".repeat(64);
+        assert!(config.read().is_err());
+        config.manifest_sha256 = manifest_hash;
+        let original_hash = config.credential_receipt_sha256.clone();
+        config.credential_receipt_sha256 = "0".repeat(64);
+        let error = config.read().err().unwrap().to_string();
+        assert!(!error.contains("synthetic-owner-mapping-bytes"));
+        assert!(!error.contains(directory.to_str().unwrap()));
+        config.credential_receipt_sha256 = original_hash;
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(config.read().is_err());
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.join("manifest-link.json");
+        symlink(&manifest, &link).unwrap();
+        config.manifest_file = link;
+        assert!(config.read().is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[tokio::test]
     async fn model_configuration_rejects_malformed_documents_and_empty_grants() {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -3850,33 +3995,4 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
                 .contains("do-not-log-this-secret")
         );
     }
-}
-
-/// Explicit optional HumanGrant assembly with the exact configured Web origin.
-pub async fn humangrant(
-    pool: sqlx::PgPool,
-) -> io::Result<Option<(axum::Router, Arc<crate::humangrant::HumanGrantEngine>)>> {
-    let enabled = match setting("LMM_CORE_HUMANGRANT_ENABLED").as_deref() {
-        Ok("true") => true,
-        Ok("false") | Err(_) => false,
-        _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
-    };
-    if !enabled {
-        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
-            return Err(invalid_config(
-                "HumanGrant SMTP requires HumanGrant enabled",
-            ));
-        }
-        return Ok(None);
-    }
-    let origin = setting("LMM_CORE_WEB_ORIGIN")
-        .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
-    let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
-    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
-        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
-            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
-            .transpose()?;
-    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
-        .await
-        .map(Some)
 }

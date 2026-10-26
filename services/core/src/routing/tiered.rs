@@ -263,7 +263,14 @@ impl TieredTariff {
         if self.source_digest.len() != 64 {
             return Err(invalid());
         }
-        for (i, chunk) in self.source_digest.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in self
+            .source_digest
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+        {
             let decode = |v: u8| match v {
                 b'0'..=b'9' => Some(v - b'0'),
                 b'a'..=b'f' => Some(v - b'a' + 10),

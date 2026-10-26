@@ -873,7 +873,8 @@ def verify_source_files(material: dict) -> None:
         import legacy_escrow_mapping as mapper
         candidate = mapper.build(PLANNER, tables=tables, identity_records=records, plan=material["source_plan"],
             migration_id=material["migration_id"], observed_at=material["observation"]["observed_at"],
-            source_proof=proof, unit_evidence=material["escrow_unit_evidence"])
+            source_proof=proof, unit_evidence=material["escrow_unit_evidence"],
+            post_parent_claim_evidence=material["escrow_candidate"].get("post_parent_claim_evidence"))
         require(digest(candidate) == digest(material["escrow_candidate"]), "escrow_source_mapper_rebuild_mismatch")
 
 
@@ -1058,19 +1059,23 @@ def check_readiness(args, output: Path) -> dict:
           observation=values["observation"], reservation_reconciliation=values["reservations"]),
           ("source_file_bindings", "input_reservations"))
     if composed:
-        def context():
+        def source_context():
             plan = values["plan"]
             return {**{key: plan[key] for key in ("source_archive_sha256", "mapping_sha256", "identity_map_sha256")},
-                "migration_id": args.migration_id, "source_plan": plan, "source_files": files,
-                "source_review": values["source_review"], "escrow_candidate": values["escrow_candidate"],
-                "escrow_unit_evidence": values["escrow_unit_evidence"], "inflight_evidence": values["inflight_evidence"],
+                "migration_id": args.migration_id, "source_files": files,
+                "escrow_candidate": values["escrow_candidate"], "escrow_unit_evidence": values["escrow_unit_evidence"]}
+
+        def review_context():
+            plan = values["plan"]
+            return {**source_context(), "source_plan": plan, "source_review": values["source_review"],
+                "inflight_evidence": values["inflight_evidence"],
                 "escrow_batch": {"observed_at": values["observation"]["observed_at"]},
                 "counters": [{"user_id": row["source_user_id"]} for row in plan["wallet_positions"]]}
-        check("escrow_unit_and_candidate_bindings", lambda: validate_escrow_source_evidence(context()),
-              ("source_file_bindings", "input_source_review", "input_escrow_candidate", "input_escrow_unit_evidence", "input_inflight_evidence"))
-        check("inflight_source_evidence", lambda: validate_inflight(context()),
+        check("escrow_unit_and_candidate_bindings", lambda: validate_escrow_source_evidence(source_context()),
+              ("source_file_bindings", "input_escrow_candidate", "input_escrow_unit_evidence"))
+        check("inflight_source_evidence", lambda: validate_inflight(review_context()),
               ("source_file_bindings", "input_source_review", "input_escrow_candidate", "input_escrow_unit_evidence", "input_inflight_evidence", "input_inflight_process_evidence"))
-        check("economic_and_policy_evidence_files", lambda: validate_review_evidence_files(context()),
+        check("economic_and_policy_evidence_files", lambda: validate_review_evidence_files(review_context()),
               ("source_file_bindings", "input_source_review", "input_escrow_unit_evidence", "input_escrow_candidate", "input_inflight_evidence",
                "input_source_review_evidence", "input_escrow_policy_evidence"))
 

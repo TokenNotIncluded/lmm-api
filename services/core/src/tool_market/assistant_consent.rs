@@ -10,6 +10,7 @@ use crate::{
 use sqlx::PgConnection;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)] // Browser preview DTO; the confirmation coordinator does not call it yet.
 pub(crate) struct MarketConsentPreview {
     pub request: ConsentRequest,
     pub service_id: String,
@@ -18,6 +19,7 @@ pub(crate) struct MarketConsentPreview {
     pub resource_schema_sha256: String,
     pub resource_price_sha256: String,
 }
+#[allow(dead_code)] // Browser preview; the confirmation coordinator does not call it yet.
 pub(crate) async fn build_preview(
     c: &mut PgConnection,
     context: &VerifiedToolContext,

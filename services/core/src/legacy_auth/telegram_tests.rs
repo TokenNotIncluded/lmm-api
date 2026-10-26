@@ -103,7 +103,7 @@ fn telegram_binding_cookie_rejects_duplicates_malformed_and_other_purposes() {
     let mut headers = HeaderMap::new();
     assert!(binding(&headers, &config, "login").is_err());
     for invalid in [
-        format!("{login}"),
+        login.to_string(),
         format!("{login}="),
         format!("{login}={}", "a".repeat(63)),
         format!("{login}={}", "a".repeat(65)),
