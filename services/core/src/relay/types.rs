@@ -265,6 +265,7 @@ pub struct Route {
     pub(crate) endpoint: Url,
     pub(crate) credential: HeaderValue,
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
+    pub(crate) payload_policy: crate::routing::PayloadPolicy,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -328,8 +329,15 @@ impl Route {
             credential,
             price_version,
             cache_creation_mode: None,
+            payload_policy: crate::routing::PayloadPolicy::Adapt,
             availability: None,
         })
+    }
+
+    /// Captured only from the actual selected Attempt, never caller JSON.
+    pub(crate) fn with_payload_policy(mut self, policy: crate::routing::PayloadPolicy) -> Self {
+        self.payload_policy = policy;
+        self
     }
 
     /// Captured from the selected frozen Core price, never from provider JSON.

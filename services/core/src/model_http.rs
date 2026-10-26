@@ -741,7 +741,7 @@ async fn dispatch(
             },
         )
     } else {
-        relay::Request::parse(client, &body, &gateway.limits)
+        relay::Request::parse_deferred_openai(client, &body, &gateway.limits)
     };
     let request = match parsed {
         Ok(v) => v,

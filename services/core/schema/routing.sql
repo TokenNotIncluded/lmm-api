@@ -91,7 +91,24 @@ CREATE TABLE routing_targets (
     priority integer NOT NULL CHECK (priority BETWEEN 0 AND 65535),
     weight bigint NOT NULL CHECK (weight BETWEEN 0 AND 4294967295),
     speeds text[] NOT NULL CHECK (cardinality(speeds) BETWEEN 1 AND 3 AND speeds <@ ARRAY['standard','fast','ultrafast']::text[]),
-    payload text NOT NULL CHECK (payload IN ('passthrough', 'adapt')),
+    -- Preserve the complete selected-target policy. Old string variants keep their
+    -- wire shape; the opt-in object permits only the five explicit boolean flags.
+    payload jsonb NOT NULL CHECK (
+        payload IN ('"passthrough"'::jsonb, '"adapt"'::jsonb) OR
+        CASE WHEN jsonb_typeof(payload) = 'object'
+            AND payload ? 'legacy_openai' AND payload - 'legacy_openai' = '{}'::jsonb
+            AND jsonb_typeof(payload->'legacy_openai') = 'object' THEN
+            (payload->'legacy_openai') - ARRAY[
+                'allow_service_tier', 'allow_inference_geo', 'allow_speed',
+                'allow_safety_identifier', 'allow_include_obfuscation'
+            ] = '{}'::jsonb
+            AND coalesce(payload->'legacy_openai'->'allow_service_tier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_inference_geo', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_speed', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_safety_identifier', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+            AND coalesce(payload->'legacy_openai'->'allow_include_obfuscation', 'false'::jsonb) IN ('true'::jsonb, 'false'::jsonb)
+        ELSE false END
+    ),
     timeout_ms integer NOT NULL CHECK (timeout_ms BETWEEN 1 AND 3600000),
     PRIMARY KEY (version, id),
     UNIQUE (version, route_id, upstream_id),
@@ -245,7 +262,7 @@ BEGIN
         SELECT v, (t->>'id')::bigint, (r->>'id')::bigint, (t->>'upstream_id')::bigint,
             t->>'upstream_model', (t->>'enabled')::boolean, (t->>'priority')::integer,
             (t->>'weight')::bigint, ARRAY(SELECT jsonb_array_elements_text(t->'speeds')),
-            t->>'payload', (t->>'timeout_ms')::integer
+            t->'payload', (t->>'timeout_ms')::integer
         FROM jsonb_array_elements(p_document->'routes') r,
             LATERAL jsonb_array_elements(r->'targets') t;
     INSERT INTO routing_aliases

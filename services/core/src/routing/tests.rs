@@ -151,6 +151,158 @@ fn failure() -> Failure {
     }
 }
 
+#[test]
+fn legacy_openai_policy_defaults_are_explicit_and_serde_remains_strict() {
+    let disabled: PayloadPolicy = serde_json::from_str(r#"{"legacy_openai":{}}"#).unwrap();
+    let expected = PayloadPolicy::LegacyOpenai {
+        allow_service_tier: false,
+        allow_inference_geo: false,
+        allow_speed: false,
+        allow_safety_identifier: false,
+        allow_include_obfuscation: false,
+    };
+    assert_eq!(disabled, expected);
+    for name in [
+        "allow_service_tier",
+        "allow_inference_geo",
+        "allow_speed",
+        "allow_safety_identifier",
+        "allow_include_obfuscation",
+    ] {
+        let explicit_false = serde_json::json!({"legacy_openai":{name:false}});
+        assert_eq!(
+            serde_json::from_value::<PayloadPolicy>(explicit_false).unwrap(),
+            expected
+        );
+        let explicit_true = serde_json::json!({"legacy_openai":{name:true}});
+        let policy: PayloadPolicy = serde_json::from_value(explicit_true).unwrap();
+        assert_eq!(
+            serde_json::to_value(policy).unwrap()["legacy_openai"][name],
+            true
+        );
+        assert_ne!(policy, disabled);
+    }
+    for invalid in [
+        r#"{"legacy_openai":{"unknown":true}}"#,
+        r#"{"legacy_openai":{"allow_speed":null}}"#,
+        r#"{"legacy_openai":{"allow_speed":"true"}}"#,
+        r#"{"legacy_openai":{"allow_speed":true,"allow_speed":false}}"#,
+        r#""legacy_openai""#,
+        r#"{"legacy_openai":null}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<PayloadPolicy>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&PayloadPolicy::Adapt).unwrap(),
+        "\"adapt\""
+    );
+    assert_eq!(
+        serde_json::to_string(&PayloadPolicy::Passthrough).unwrap(),
+        "\"passthrough\""
+    );
+}
+
+#[test]
+fn legacy_openai_attempt_policy_is_frozen_across_publication_and_retry() {
+    let disabled: PayloadPolicy = serde_json::from_str(r#"{"legacy_openai":{}}"#).unwrap();
+    let enabled: PayloadPolicy =
+        serde_json::from_str(r#"{"legacy_openai":{"allow_speed":true}}"#).unwrap();
+    let (mut config, prices) = fixture(1);
+    config.routes[0].targets[0].priority = 0;
+    config.routes[0].targets[0].payload = disabled;
+    config.routes[0].targets[1].priority = 1;
+    config.routes[0].targets[1].payload = enabled;
+    let router = build(config, prices);
+    let mut old = router.route(request()).unwrap();
+    let first = old.start().unwrap();
+    assert_eq!((first.target_id(), first.payload_policy()), (1, disabled));
+    let (mut next, next_prices) = fixture(2);
+    next.routes[0].targets[0].priority = 0;
+    next.routes[0].targets[0].payload = enabled;
+    next.routes[0].targets[1].priority = 1;
+    next.routes[0].targets[1].payload = disabled;
+    router
+        .publish(
+            router.version().unwrap(),
+            next,
+            Arc::new(PriceSnapshot::compile(next_prices).unwrap()),
+        )
+        .unwrap();
+    assert_eq!(first.payload_policy(), disabled);
+    let second = old.retry(failure()).unwrap();
+    assert_eq!((second.target_id(), second.payload_policy()), (2, enabled));
+    assert_eq!(second.version(), first.version());
+    let mut new = router.route(request()).unwrap();
+    let current = new.start().unwrap();
+    assert_eq!(
+        (current.target_id(), current.payload_policy()),
+        (1, enabled)
+    );
+    assert_ne!(current.version(), first.version());
+
+    let bytes =
+        br#"{"model":"model-a","messages":[{"role":"user","content":"hello"}],"speed":"fast"}"#;
+    let request = crate::relay::Request::parse_deferred_openai(
+        crate::relay::ClientProtocol::Chat,
+        bytes,
+        &crate::relay::Limits::default(),
+    )
+    .unwrap();
+    for (attempt, allowed) in [(first, false), (second, true), (current, true)] {
+        let route = crate::relay::Route::new(
+            "synthetic".into(),
+            crate::relay::UpstreamProtocol::Chat,
+            attempt.endpoint(),
+            attempt.upstream_model().to_owned(),
+            "synthetic",
+            attempt.quote().version(),
+        )
+        .unwrap()
+        .with_payload_policy(attempt.payload_policy());
+        let payload = request.upstream(&route).unwrap();
+        assert_eq!(payload.get("speed").is_some(), allowed);
+    }
+}
+
+#[test]
+fn legacy_openai_native_targets_and_cross_protocol_adaptation_fail_closed() {
+    let policy: PayloadPolicy = serde_json::from_str(r#"{"legacy_openai":{}}"#).unwrap();
+    for protocol in [
+        Protocol::AnthropicMessages,
+        Protocol::Gemini,
+        Protocol::SystemOne,
+    ] {
+        let (mut config, prices) = fixture(1);
+        config.upstreams[0].protocol = protocol;
+        config.routes[0].targets[0].payload = policy;
+        assert!(Router::new(config, Arc::new(PriceSnapshot::compile(prices).unwrap())).is_err());
+    }
+    let (mut config, prices) = fixture(1);
+    config.routes[0].targets.truncate(1);
+    config.routes[0].targets[0].payload = policy;
+    config.routes[0].targets[0].upstream_model = "mapped-provider-model".into();
+    let router = build(config, prices);
+    assert!(router.route(request()).is_ok());
+    for protocol in [
+        Protocol::OpenAiResponses,
+        Protocol::AnthropicMessages,
+        Protocol::Gemini,
+        Protocol::SystemOne,
+    ] {
+        assert!(
+            router
+                .route(RouteRequest {
+                    protocol,
+                    ..request()
+                })
+                .is_err()
+        );
+    }
+}
+
 fn invalid(config: RoutingConfig, prices: PriceConfig) {
     let result =
         PriceSnapshot::compile(prices).and_then(|prices| Router::new(config, Arc::new(prices)));
@@ -921,6 +1073,227 @@ async fn postgres_publish_recover_and_sealed_rows_are_immutable(pool: PgPool) {
         StoreError::VersionAlreadyExists
     );
     assert_eq!(store.load_active().await.unwrap().routing.version, 1);
+}
+
+#[sqlx::test]
+async fn postgres_legacy_openai_policies_survive_publish_reload_and_retry(pool: PgPool) {
+    let store = database(&pool).await;
+    let (mut config, prices) = fixture(1);
+    config.routes[0].targets[0].payload = PayloadPolicy::Passthrough;
+    store.stage_prices(prices).await.unwrap();
+    store.publish(config, 1, None).await.unwrap();
+    let projection: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT payload FROM routing_targets WHERE version=1 ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        projection,
+        vec![serde_json::json!("passthrough"), serde_json::json!("adapt")]
+    );
+
+    let flags = [
+        "allow_service_tier",
+        "allow_inference_geo",
+        "allow_speed",
+        "allow_safety_identifier",
+        "allow_include_obfuscation",
+    ];
+    // Exercise omitted defaults through the actual SQL publication boundary too.
+    let (config, _) = fixture(2);
+    let mut document = serde_json::to_value(config).unwrap();
+    for target in document["routes"][0]["targets"].as_array_mut().unwrap() {
+        target["payload"] = serde_json::json!({"legacy_openai": {}});
+    }
+    sqlx::query("SELECT routing_publish_config($1, 1, 1, 1)")
+        .bind(document)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let recovered = store.load_active().await.unwrap();
+    let disabled = recovered.routing.routes[0].targets[0].payload;
+    assert_eq!(
+        serde_json::to_value(disabled).unwrap(),
+        serde_json::json!({
+            "legacy_openai": flags.into_iter().map(|name| (name.to_owned(), serde_json::Value::Bool(false)))
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+        })
+    );
+    let router = recovered.into_router().unwrap();
+    let mut old = router.route(request()).unwrap();
+    let first = old.start().unwrap();
+
+    for mask in 0..32_u64 {
+        let version = mask + 3;
+        let values = flags
+            .into_iter()
+            .enumerate()
+            .map(|(bit, name)| {
+                (
+                    name.to_owned(),
+                    serde_json::Value::Bool(mask & (1 << bit) != 0),
+                )
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>();
+        let policy: PayloadPolicy =
+            serde_json::from_value(serde_json::json!({"legacy_openai": values})).unwrap();
+        let (mut config, _) = fixture(version);
+        for target in &mut config.routes[0].targets {
+            target.payload = policy;
+        }
+        let published = store
+            .publish(
+                config,
+                1,
+                Some(ReleaseVersion {
+                    routing: version - 1,
+                    pricing: 1,
+                }),
+            )
+            .await
+            .unwrap();
+        // New connections and a new store recover exclusively from durable state.
+        let reopened = PgPool::connect_with(pool.connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        let loaded = PostgresRoutingStore::new(reopened.clone())
+            .load_active()
+            .await
+            .unwrap();
+        assert_eq!(loaded, published);
+        let restarted = ReleaseDocument::decode(&loaded.encode().unwrap())
+            .unwrap()
+            .into_router()
+            .unwrap();
+        assert_eq!(
+            restarted
+                .route(request())
+                .unwrap()
+                .start()
+                .unwrap()
+                .payload_policy(),
+            policy
+        );
+        let projection: Vec<serde_json::Value> =
+            sqlx::query_scalar("SELECT payload FROM routing_targets WHERE version=$1 ORDER BY id")
+                .bind(version as i64)
+                .fetch_all(&reopened)
+                .await
+                .unwrap();
+        assert_eq!(projection, vec![serde_json::to_value(policy).unwrap(); 2]);
+        loaded.apply(&router).unwrap();
+        assert_eq!(
+            router
+                .route(request())
+                .unwrap()
+                .start()
+                .unwrap()
+                .payload_policy(),
+            policy
+        );
+        reopened.close().await;
+    }
+    assert_eq!(first.payload_policy(), disabled);
+    let retry = old.retry(failure()).unwrap();
+    assert_eq!(retry.payload_policy(), disabled);
+    assert_eq!(retry.version(), first.version());
+    assert!(
+        sqlx::query("UPDATE routing_targets SET payload='\"adapt\"'::jsonb WHERE version=2")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test]
+async fn postgres_legacy_openai_invalid_policy_publication_is_atomic(pool: PgPool) {
+    let store = database(&pool).await;
+    let (config, prices) = fixture(1);
+    store.stage_prices(prices).await.unwrap();
+    let active = store.publish(config, 1, None).await.unwrap();
+    let tables = [
+        "routing_credential_refs",
+        "routing_price_versions",
+        "routing_config_versions",
+        "routing_active_release",
+        "routing_price_rules",
+        "routing_groups",
+        "routing_upstreams",
+        "routing_routes",
+        "routing_targets",
+        "routing_aliases",
+    ];
+    let mut before = Vec::<serde_json::Value>::new();
+    for table in tables {
+        before.push(sqlx::query_scalar(&format!(
+            "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb) FROM {table} t"
+        )).fetch_one(&pool).await.unwrap());
+    }
+    let mut invalid = vec![
+        serde_json::json!(null),
+        serde_json::json!(true),
+        serde_json::json!([]),
+        serde_json::json!("legacy_openai"),
+        serde_json::json!("unknown"),
+        serde_json::json!({}),
+        serde_json::json!({"legacy_openai": null}),
+        serde_json::json!({"legacy_openai": []}),
+        serde_json::json!({"legacy_openai": true}),
+        serde_json::json!({"legacy_openai": {}, "adapt": null}),
+        serde_json::json!({"legacy_openai": {"unknown": true}}),
+    ];
+    for name in [
+        "allow_service_tier",
+        "allow_inference_geo",
+        "allow_speed",
+        "allow_safety_identifier",
+        "allow_include_obfuscation",
+    ] {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            invalid.push(serde_json::json!({"legacy_openai": {name: value}}));
+        }
+    }
+    for policy in invalid.into_iter().map(Some).chain(std::iter::once(None)) {
+        let (config, _) = fixture(2);
+        let mut document = serde_json::to_value(config).unwrap();
+        // Reject after a valid first target has already been projected.
+        if let Some(policy) = &policy {
+            assert!(serde_json::from_value::<PayloadPolicy>(policy.clone()).is_err());
+            document["routes"][0]["targets"][1]["payload"] = policy.clone();
+        } else {
+            document["routes"][0]["targets"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove("payload");
+            assert!(serde_json::from_value::<RoutingConfig>(document.clone()).is_err());
+        }
+        let error = sqlx::query("SELECT routing_publish_config($1, 1, 1, 1)")
+            .bind(document)
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some(if policy.is_some() { "23514" } else { "23502" }),
+            "{policy:?}"
+        );
+        assert_eq!(store.load_active().await.unwrap(), active);
+        for (index, table) in tables.into_iter().enumerate() {
+            let after: serde_json::Value = sqlx::query_scalar(&format!(
+                "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb) FROM {table} t"
+            )).fetch_one(&pool).await.unwrap();
+            assert_eq!(
+                after, before[index],
+                "partial publication in {table}: {policy:?}"
+            );
+        }
+    }
 }
 
 #[sqlx::test]

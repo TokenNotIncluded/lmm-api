@@ -395,13 +395,13 @@ fn api_supported(
                 && t.weight > 0
                 && u.enabled
                 && t.speeds.contains(&Speed::Standard)
-                && (t.payload == PayloadPolicy::Adapt
+                && (t.payload.adapts(client, u.protocol)
                     || (u.protocol == client && t.upstream_model == name))
         })
         .collect();
     !targets.is_empty()
         && targets.into_iter().all(|(t, u)| {
-            t.payload == PayloadPolicy::Adapt
+            t.payload.adapts(client, u.protocol)
                 && u128::from(t.timeout_ms) >= total_timeout.as_millis()
                 && t.upstream_model == name
                 && (quote.billing_mode() != BillingMode::UpstreamCost
@@ -636,6 +636,23 @@ mod tests {
         assert!(v["models"][0]["pricing"]["trust_multiplier"].is_null());
         assert!(v["models"][0]["native_cost"].is_null());
         assert_eq!(v["groups"][0]["scope"], "group:c3ludGhldGlj");
+    }
+
+    #[test]
+    fn legacy_openai_catalog_advertises_only_the_selected_wire_protocol() {
+        for (protocol, api) in [
+            (Protocol::OpenAiChat, "openai-completions"),
+            (Protocol::OpenAiResponses, "openai-responses"),
+        ] {
+            let (mut config, prices) = fixture("model");
+            config.upstreams[0].protocol = protocol;
+            config.routes[0].targets[0].payload =
+                serde_json::from_value(serde_json::json!({"legacy_openai":{}})).unwrap();
+            let (_, surface) = surface(config, prices);
+            let value = serde_json::to_value(view(&surface)).unwrap();
+            assert_eq!(value["models"][0]["apis"], serde_json::json!([api]));
+            assert_eq!(value["models"][0]["pricing"]["input"].to_string(), "2.5");
+        }
     }
 
     #[test]

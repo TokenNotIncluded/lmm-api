@@ -22,6 +22,418 @@ fn input(client: ClientProtocol, stream: bool) -> Request {
     )
     .unwrap()
 }
+fn legacy_policy(flags: [bool; 5]) -> crate::routing::PayloadPolicy {
+    crate::routing::PayloadPolicy::LegacyOpenai {
+        allow_service_tier: flags[0],
+        allow_inference_geo: flags[1],
+        allow_speed: flags[2],
+        allow_safety_identifier: flags[3],
+        allow_include_obfuscation: flags[4],
+    }
+}
+
+fn legacy_route(protocol: UpstreamProtocol, flags: [bool; 5]) -> Route {
+    Route::new(
+        "synthetic".into(),
+        protocol,
+        "https://provider.invalid/v1",
+        "real".into(),
+        "synthetic",
+        1,
+    )
+    .unwrap()
+    .with_payload_policy(legacy_policy(flags))
+}
+
+#[test]
+fn legacy_openai_all_flags_preserve_or_remove_exact_payloads() {
+    for (client, upstream) in [
+        (ClientProtocol::Chat, UpstreamProtocol::Chat),
+        (ClientProtocol::Responses, UpstreamProtocol::Responses),
+    ] {
+        for stream in [false, true] {
+            let mut body = match client {
+                ClientProtocol::Chat => {
+                    json!({"model":"alias","messages":[{"role":"user","content":"hello"}],"stream":stream})
+                }
+                _ => json!({"model":"alias","input":"hello","stream":stream}),
+            };
+            let baseline = input(client, stream).upstream_to(upstream, "real").unwrap();
+            // Each field is tested alone as well as together, so one flag cannot
+            // accidentally authorize another field.
+            for mask in 0..32_u8 {
+                let flags = std::array::from_fn(|i| mask & (1 << i) != 0);
+                for (name, value) in [
+                    ("service_tier", json!("priority")),
+                    ("inference_geo", json!("us")),
+                    ("speed", json!("fast")),
+                    ("safety_identifier", json!("synthetic-user")),
+                ] {
+                    body[name] = value;
+                }
+                body["stream_options"] = json!({"include_obfuscation":false});
+                let bytes = serde_json::to_vec(&body).unwrap();
+                assert!(Request::parse(client, &bytes, &Limits::default()).is_err());
+                let request =
+                    Request::parse_deferred_openai(client, &bytes, &Limits::default()).unwrap();
+                assert!(request.upstream_to(upstream, "real").is_err());
+                let ordinary = Route::new(
+                    "strict".into(),
+                    upstream,
+                    "https://provider.invalid/v1",
+                    "real".into(),
+                    "synthetic",
+                    1,
+                )
+                .unwrap();
+                assert!(request.upstream(&ordinary).is_err());
+                let encoded = request.upstream(&legacy_route(upstream, flags));
+                if !stream && flags[4] {
+                    assert!(encoded.is_err());
+                    continue;
+                }
+                let mut expected = baseline.clone();
+                for (i, name) in [
+                    "service_tier",
+                    "inference_geo",
+                    "speed",
+                    "safety_identifier",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if flags[i] {
+                        expected[name] = body[name].clone();
+                    }
+                }
+                if flags[4] {
+                    if expected.get("stream_options").is_none() {
+                        expected["stream_options"] = json!({});
+                    }
+                    expected["stream_options"]["include_obfuscation"] = json!(false);
+                }
+                assert_eq!(
+                    encoded.unwrap(),
+                    expected,
+                    "client={client:?}, stream={stream}, mask={mask}"
+                );
+            }
+            // Absent request fields never get synthesized, even with all flags on.
+            assert_eq!(
+                input(client, stream)
+                    .upstream(&legacy_route(upstream, [true; 5]))
+                    .unwrap(),
+                baseline
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_openai_disabled_values_are_removed_but_enabled_values_are_validated() {
+    for (client, upstream, base) in [
+        (
+            ClientProtocol::Chat,
+            UpstreamProtocol::Chat,
+            json!({"model":"alias","messages":[{"role":"user","content":"hello"}],"stream":true}),
+        ),
+        (
+            ClientProtocol::Responses,
+            UpstreamProtocol::Responses,
+            json!({"model":"alias","input":"hello","stream":true}),
+        ),
+    ] {
+        for (index, name) in [
+            "service_tier",
+            "inference_geo",
+            "speed",
+            "safety_identifier",
+            "include_obfuscation",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let invalid = if index == 4 {
+                vec![json!(null), json!("true"), json!(0), json!({})]
+            } else {
+                vec![
+                    json!(null),
+                    json!(true),
+                    json!(0),
+                    json!({}),
+                    json!(""),
+                    json!("bad\nvalue"),
+                    json!("x".repeat(if index == 3 { 129 } else { 257 })),
+                ]
+            };
+            for value in invalid {
+                if value.is_null() && matches!(name, "service_tier" | "safety_identifier") {
+                    continue;
+                }
+                let mut body = base.clone();
+                if index == 4 {
+                    body["stream_options"] = json!({name:value});
+                } else {
+                    body[name] = value;
+                }
+                let request = Request::parse_deferred_openai(
+                    client,
+                    &serde_json::to_vec(&body).unwrap(),
+                    &Limits::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    request
+                        .upstream(&legacy_route(upstream, [false; 5]))
+                        .unwrap(),
+                    input(client, true).upstream_to(upstream, "real").unwrap()
+                );
+                let mut flags = [false; 5];
+                flags[index] = true;
+                assert!(
+                    request.upstream(&legacy_route(upstream, flags)).is_err(),
+                    "{name}"
+                );
+            }
+        }
+        let mut body = base.clone();
+        body["service_tier"] = json!("unreviewed-tier");
+        let request = Request::parse_deferred_openai(
+            client,
+            &serde_json::to_vec(&body).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        assert!(
+            request
+                .upstream(&legacy_route(upstream, [true; 5]))
+                .is_err()
+        );
+        body.as_object_mut().unwrap().remove("service_tier");
+        body["safety_identifier"] = json!("界".repeat(128));
+        body["stream_options"] = json!({"include_obfuscation":true});
+        let request = Request::parse_deferred_openai(
+            client,
+            &serde_json::to_vec(&body).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        let payload = request
+            .upstream(&legacy_route(upstream, [true; 5]))
+            .unwrap();
+        assert_eq!(payload["safety_identifier"], body["safety_identifier"]);
+        assert_eq!(payload["stream_options"]["include_obfuscation"], true);
+    }
+}
+
+#[test]
+fn legacy_openai_preserves_nullable_fields_and_protocol_specific_tiers() {
+    for (client, upstream) in [
+        (ClientProtocol::Chat, UpstreamProtocol::Chat),
+        (ClientProtocol::Responses, UpstreamProtocol::Responses),
+    ] {
+        let mut body = match client {
+            ClientProtocol::Chat => {
+                json!({"model":"alias","messages":[{"role":"user","content":"hello"}]})
+            }
+            _ => json!({"model":"alias","input":"hello"}),
+        };
+        body["service_tier"] = Value::Null;
+        body["safety_identifier"] = Value::Null;
+        let request = Request::parse_deferred_openai(
+            client,
+            &serde_json::to_vec(&body).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        let mut expected = input(client, false).upstream_to(upstream, "real").unwrap();
+        expected["service_tier"] = Value::Null;
+        expected["safety_identifier"] = Value::Null;
+        assert_eq!(
+            request
+                .upstream(&legacy_route(upstream, [true; 5]))
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            request
+                .upstream(&legacy_route(upstream, [false; 5]))
+                .unwrap(),
+            input(client, false).upstream_to(upstream, "real").unwrap()
+        );
+        body["service_tier"] = json!("ultrafast");
+        let request = Request::parse_deferred_openai(
+            client,
+            &serde_json::to_vec(&body).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        let result = request.upstream(&legacy_route(upstream, [true; 5]));
+        if client == ClientProtocol::Responses {
+            expected["service_tier"] = json!("ultrafast");
+            assert_eq!(result.unwrap(), expected);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn legacy_openai_admission_rejects_duplicates_unknowns_and_control_keys_before_filtering() {
+    for (client, base) in [
+        (
+            ClientProtocol::Chat,
+            r#""model":"alias","messages":[{"role":"user","content":"hello"}]"#,
+        ),
+        (
+            ClientProtocol::Responses,
+            r#""model":"alias","input":"hello""#,
+        ),
+    ] {
+        for extra in [
+            r#""service_tier":0,"service_tier":1"#,
+            r#""service_tier":0,"SERVICE_TIER":1"#,
+            r#""stream_options":{"include_obfuscation":false,"include_obfuscation":true}"#,
+            r#""stream_options":{"include_obfuscation":false,"Include_Obfuscation":true}"#,
+            r#""stream_options":{"include_usage":true,"INCLUDE_USAGE":false,"include_obfuscation":false}"#,
+            r#""stream_options":{"include_obfuscation":false,"unknown":1}"#,
+            r#""stream_options":[],"speed":"fast""#,
+            r#""unknown":1,"speed":"fast""#,
+            r#""payload_policy":{"legacy_openai":{}},"speed":"fast""#,
+            r#""allow_speed":true,"speed":"fast""#,
+            r#""upstream_id":7,"speed":"fast""#,
+            r#""SERVICE_TIER":"priority""#,
+        ] {
+            let body = format!("{{{base},{extra}}}");
+            assert!(
+                Request::parse_deferred_openai(client, body.as_bytes(), &Limits::default())
+                    .is_err(),
+                "{body}"
+            );
+        }
+        let body = format!("{{{base},\"speed\":\"fast\"}}");
+        let limits = Limits {
+            request_bytes: body.len() - 1,
+            ..Limits::default()
+        };
+        assert!(Request::parse_deferred_openai(client, body.as_bytes(), &limits).is_err());
+    }
+}
+
+#[test]
+fn openai_request_parsing_bounds_nested_stream_options_and_values() {
+    let limits = Limits::default();
+    for (client, base) in [
+        (
+            ClientProtocol::Chat,
+            r#""model":"alias","messages":[{"role":"user","content":"hello"}]"#,
+        ),
+        (
+            ClientProtocol::Responses,
+            r#""model":"alias","input":"hello""#,
+        ),
+    ] {
+        for depth in [1, 256, 4096] {
+            let nested = format!(
+                "{}null{}",
+                "{\"stream_options\":".repeat(depth),
+                "}".repeat(depth)
+            );
+            let body = format!("{{{base},\"stream_options\":{nested}}}");
+            assert!(body.len() < limits.request_bytes);
+            for result in [
+                Request::parse(client, body.as_bytes(), &limits),
+                Request::parse_deferred_openai(client, body.as_bytes(), &limits),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(RelayError::Invalid("invalid or ambiguous JSON body"))
+                ));
+            }
+        }
+        let deep = format!("{}null{}", "[".repeat(256), "]".repeat(256));
+        for extra in [
+            format!("\"stream_options\":{{\"include_obfuscation\":{deep}}}"),
+            format!("\"stream_options\":{{\"include_usage\":{deep}}}"),
+            format!("\"service_tier\":{deep}"),
+            r#""stream_options":{"include_usage":true,"include_usage":false}"#.into(),
+            r#""stream_options":{"include_usage":true,"INCLUDE_USAGE":false}"#.into(),
+            r#""stream_options":{"include_obfuscation":true,"include_obfuscation":false}"#.into(),
+            r#""stream_options":{"include_obfuscation":true,"INCLUDE_OBFUSCATION":false}"#.into(),
+        ] {
+            let body = format!("{{{base},{extra}}}");
+            for result in [
+                Request::parse(client, body.as_bytes(), &limits),
+                Request::parse_deferred_openai(client, body.as_bytes(), &limits),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(RelayError::Invalid("invalid or ambiguous JSON body"))
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_openai_empty_stream_options_match_omitted_options() {
+    for (client, upstream, base) in [
+        (
+            ClientProtocol::Chat,
+            UpstreamProtocol::Chat,
+            json!({"model":"alias","messages":[{"role":"user","content":"hello"}]}),
+        ),
+        (
+            ClientProtocol::Responses,
+            UpstreamProtocol::Responses,
+            json!({"model":"alias","input":"hello"}),
+        ),
+    ] {
+        for stream in [false, true] {
+            let mut body = base.clone();
+            body["stream"] = json!(stream);
+            body["stream_options"] = json!({});
+            let request = Request::parse_deferred_openai(
+                client,
+                &serde_json::to_vec(&body).unwrap(),
+                &Limits::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                request.upstream_to(upstream, "real").unwrap(),
+                input(client, stream).upstream_to(upstream, "real").unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_openai_never_authorizes_cross_protocol_or_passthrough_encoding() {
+    let bytes =
+        br#"{"model":"alias","messages":[{"role":"user","content":"hello"}],"speed":"fast"}"#;
+    let request =
+        Request::parse_deferred_openai(ClientProtocol::Chat, bytes, &Limits::default()).unwrap();
+    for protocol in [
+        UpstreamProtocol::Responses,
+        UpstreamProtocol::Anthropic,
+        UpstreamProtocol::Gemini,
+    ] {
+        assert!(
+            request
+                .upstream(&legacy_route(protocol, [false; 5]))
+                .is_err()
+        );
+        assert!(
+            input(ClientProtocol::Chat, false)
+                .upstream(&legacy_route(protocol, [false; 5]))
+                .is_err()
+        );
+    }
+    let passthrough = legacy_route(UpstreamProtocol::Chat, [false; 5])
+        .with_payload_policy(crate::routing::PayloadPolicy::Passthrough);
+    assert!(request.upstream(&passthrough).is_err());
+}
+
 fn frame(decoder: &mut Decoder, v: Value) -> Result<Vec<Event>, RelayError> {
     decoder.frame(Frame {
         event: v["type"].as_str().map(str::to_owned),
