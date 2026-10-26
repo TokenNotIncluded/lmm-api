@@ -15,9 +15,9 @@ Task 05 (`wip/mk-05-relay`) owns HTTP clients, credential resolution, protocol
 conversion, streaming, cancellation, and reporting transport outcomes. Task 06
 (`wip/mk-06-protocol-events`) owns Protobuf messages and field numbers. Neither a
 new proto file nor a shared `lib.rs`, `main.rs`, HTTP entry point, or Go file is
-changed here. `tests/routing.rs` compiles the module independently until the
-integration owner adds `pub mod routing` to the core library. Once integrated,
-remove that bridge so module unit tests are not compiled a second time.
+changed in the original task. The module is now integrated as `pub mod routing`
+in the core library. Its unit tests run through that production module; the
+temporary `tests/routing.rs` source-compilation bridge has been retired.
 
 `CONTRACT_VERSION = 1` is the Rust contract. It is NOT a Protobuf field number.
 
@@ -350,19 +350,22 @@ values have no field in the route configuration or decision types.
 
 ## Validation and benchmark
 
-The integration test bridge includes pure routing tests and isolated PostgreSQL
-tests. No live model provider or paid API is used. With the pinned Rust toolchain:
+The core library includes the routing and upstream-cost unit tests, including
+isolated PostgreSQL cases. Both groups below retain the former bridge coverage.
+No live model provider or paid API is used. With the pinned Rust toolchain:
 
 ```sh
 cd services/core
-rustfmt --edition 2024 --check src/routing/mod.rs tests/routing.rs
-cargo clippy --locked --test routing -- -D warnings
+rustfmt --edition 2024 --check src/routing/mod.rs src/routing/tests.rs src/upstream_cost.rs
+cargo clippy --locked --all-targets -- -D warnings
 # Mock/in-memory tests only, without PostgreSQL:
-cargo test --locked --test routing -- --skip postgres_
+cargo test --locked --lib routing:: -- --skip postgres_
+cargo test --locked --lib upstream_cost::
 # Full tests: DATABASE_URL must point to a DISPOSABLE PostgreSQL server.
 # SQLx creates separate test databases; do not use production credentials.
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
-  cargo test --locked --test routing -- --nocapture
+  cargo test --locked --lib routing:: -- --nocapture
+cargo test --locked --lib upstream_cost:: -- --nocapture
 ```
 
 The dedicated [`Rust routing contract` workflow](../../../../.github/workflows/core-routing.yml)
@@ -400,7 +403,7 @@ model, concurrent workers, pre-measurement warmup and a start barrier.
 cd services/core
 rustc -Vv
 ROUTING_BENCH_REQUESTS=1000000 ROUTING_BENCH_THREADS=4 ROUTING_BENCH_MODELS=1000 \
-  cargo test --release --locked --test routing routing_benchmark -- --ignored --nocapture
+  cargo test --release --locked --lib routing_benchmark -- --ignored --nocapture
 ```
 
 Record the commit, compiler, CPU, available memory, OS, thread count, model count,

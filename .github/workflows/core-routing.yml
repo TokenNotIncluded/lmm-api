@@ -36,18 +36,20 @@ jobs:
       - name: Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Format
-        run: rustfmt --edition 2024 --check src/routing/mod.rs tests/routing.rs
+        run: rustfmt --edition 2024 --check src/routing/mod.rs src/routing/tests.rs src/upstream_cost.rs
       - name: Compile and lint routing contract
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --test routing -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Mock upstream and real PostgreSQL tests
         if: ${{ !cancelled() }}
-        run: cargo test --locked --test routing -- --nocapture
+        run: |
+          cargo test --locked --lib routing:: -- --nocapture
+          cargo test --locked --lib upstream_cost:: -- --nocapture
       - name: Prepare formatting repair patch
         if: ${{ always() }}
         run: |
-          rustfmt --edition 2024 src/routing/mod.rs tests/routing.rs
-          git diff -- src/routing tests/routing.rs > "$RUNNER_TEMP/routing-format.patch"
+          rustfmt --edition 2024 src/routing/mod.rs src/routing/tests.rs src/upstream_cost.rs
+          git diff -- src/routing src/upstream_cost.rs > "$RUNNER_TEMP/routing-format.patch"
       - name: Preserve formatting evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
