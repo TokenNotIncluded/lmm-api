@@ -376,6 +376,9 @@ pub(crate) fn parse(
         .map_err(|_| RelayError::Invalid("Gemini conversion failed"))?;
     let mut request = Request::parse(ClientProtocol::Chat, &bytes, limits)?;
     request.continuation_token = continuation_token(v.get("continuationToken"), limits)?;
+    if let Some(captured) = super::schema_order::gemini_schemas(body) {
+        request.assign_ordered_schemas(&captured);
+    }
     Ok(request)
 }
 fn continuation_token(v: Option<&Value>, limits: &Limits) -> Result<Option<String>, RelayError> {

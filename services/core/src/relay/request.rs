@@ -1,5 +1,7 @@
 //! Bounded, text/function-call request conversion. Unsupported inputs fail closed.
-use super::{ClientProtocol, Limits, RelayError, Route, UpstreamProtocol};
+#[cfg(test)]
+use super::Route;
+use super::{ClientProtocol, Limits, RelayError, UpstreamProtocol};
 use serde::{
     Deserialize,
     de::{MapAccess, Visitor},
@@ -66,6 +68,9 @@ pub struct FunctionTool {
     pub description: Option<String>,
     pub parameters: Value,
     pub strict: Option<bool>,
+    /// Compact JSON for `parameters`, using the client's object-key order when
+    /// that text still parses as the validated value.
+    pub(crate) ordered_parameters: String,
 }
 #[derive(Clone, Debug)]
 pub enum ToolChoice {
@@ -372,11 +377,14 @@ impl Request {
                 if !parameters.is_object() {
                     return Err(RelayError::Invalid("function parameters must be an object"));
                 }
+                let ordered_parameters =
+                    serde_json::to_string(&parameters).unwrap_or_else(|_| "{}".to_owned());
                 tools.push(FunctionTool {
                     name,
                     parameters,
                     description: f.get("description").map(string).transpose()?,
                     strict: boolean(f.get("strict"))?,
+                    ordered_parameters,
                 });
             }
         }
@@ -638,7 +646,7 @@ impl Request {
                 Ok(options.clone())
             })
             .transpose()?;
-        Ok(Self {
+        let mut request = Self {
             client,
             model,
             stream,
@@ -654,9 +662,58 @@ impl Request {
             reasoning_effort,
             prompt_cache_options,
             continuation_token: None,
-        })
+        };
+        let captured = match client {
+            ClientProtocol::Chat => super::schema_order::chat_schemas(body),
+            ClientProtocol::Responses => super::schema_order::responses_schemas(body),
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => None,
+        };
+        if let Some(captured) = captured {
+            request.assign_ordered_schemas(&captured);
+        }
+        Ok(request)
     }
 
+    pub(crate) fn assign_ordered_schemas(
+        &mut self,
+        captured: &[Option<super::schema_order::RawSchema>],
+    ) {
+        if captured.len() != self.tools.len() {
+            return;
+        }
+        for (tool, item) in self.tools.iter_mut().zip(captured) {
+            let Some(item) = item else { continue };
+            let ordered = match item {
+                super::schema_order::RawSchema::Json(raw) => {
+                    super::schema_order::ordered_json_matching(raw, &tool.parameters)
+                }
+                super::schema_order::RawSchema::GeminiOpenApi(raw) => {
+                    super::schema_order::ordered_gemini_schema(raw, &tool.parameters)
+                }
+            };
+            if let Some(text) = ordered {
+                tool.ordered_parameters = text;
+            }
+        }
+    }
+
+    /// Upstream JSON bytes. Tool schemas keep the client's property order when
+    /// that encoding is semantically identical to the validated value.
+    pub(crate) fn upstream_body(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+    ) -> Result<Vec<u8>, RelayError> {
+        let payload = self.upstream_to(protocol, model)?;
+        let schemas: Vec<String> = self
+            .tools
+            .iter()
+            .map(|tool| tool.ordered_parameters.clone())
+            .collect();
+        super::schema_order::splice_ordered_schemas(&payload, &schemas)
+    }
+
+    #[cfg(test)]
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {
         self.upstream_to(route.protocol, &route.model)
     }

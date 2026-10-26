@@ -29,6 +29,7 @@ pub mod identity_http;
 pub mod internal_rpc;
 pub mod legacy_auth;
 pub mod lifecycle;
+pub mod log_redact;
 pub mod market_oauth;
 pub mod model_http;
 pub mod native_key_read;

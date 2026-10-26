@@ -631,6 +631,10 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             lmm_core::remote_control::preadmit,
         ));
     }
+    // Outermost: see the final status, and mask query credentials before stderr.
+    app = app.layer(axum::middleware::from_fn(
+        lmm_core::log_redact::log_redacted_request_target,
+    ));
     // All enabled components and listener binds have succeeded. The health body
     // lists capabilities; model readiness has its own explicit endpoint.
     assert!(lifecycle.mark_ready());

@@ -565,9 +565,7 @@ impl Worker {
         } else {
             None
         };
-        let payload = self.request.upstream_to(route.protocol, &route.model)?;
-        let bytes = serde_json::to_vec(&payload)
-            .map_err(|_| RelayError::Invalid("request encoding failed"))?;
+        let bytes = self.request.upstream_body(route.protocol, &route.model)?;
         if bytes.len() > self.limits.request_bytes {
             return Err(RelayError::Limit("encoded request"));
         }
