@@ -12,6 +12,8 @@ use sqlx::{PgConnection, Row};
 
 /// Not deserializable. Confirmation coordinators receive this only after a live
 /// original Session and its immutable Core operation have been checked together.
+/// Market proof fields are read only by the authorizer below, which has no caller yet.
+#[allow(dead_code)]
 pub(crate) struct FrozenProposal {
     operation_id: String,
     turn_id: String,
@@ -43,6 +45,7 @@ impl FrozenProposal {
     pub(crate) fn tool_version(&self) -> &str {
         &self.tool_version
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn domain(&self) -> &str {
         &self.domain
     }
@@ -61,15 +64,19 @@ impl FrozenProposal {
     pub(crate) fn resource_version(&self) -> &str {
         &self.resource_version
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn scope_grant_id(&self) -> &str {
         &self.scope_grant_id
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn resource_schema_sha256(&self) -> Option<&[u8; 32]> {
         self.resource_schema_sha256.as_ref()
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn resource_price_sha256(&self) -> Option<&[u8; 32]> {
         self.resource_price_sha256.as_ref()
     }
+    #[allow(dead_code)] // Market authorizer only; that path has no caller yet.
     pub(crate) fn host_policy(&self) -> &serde_json::Value {
         &self.host_policy
     }
@@ -110,6 +117,7 @@ pub(crate) async fn verify_confirmation_proposal_in_transaction(
 ) -> Result<FrozenProposal, Error> {
     verify_bound_proposal(c, operation_id, context, 1).await
 }
+#[allow(dead_code)] // Market authorizer only; that path has no caller yet.
 pub(crate) async fn verify_market_proposal_in_transaction(
     c: &mut PgConnection,
     operation_id: &str,

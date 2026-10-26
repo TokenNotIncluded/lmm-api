@@ -84,7 +84,7 @@ pub(crate) async fn builtin_with_session(
     };
     let grant = store
         .create_consent(
-            &secret,
+            secret,
             &ConsentRequest {
                 owner: owner.clone(),
                 operation_id: "joint-builtin-human-consent".into(),
@@ -101,7 +101,7 @@ pub(crate) async fn builtin_with_session(
         .unwrap();
     let call = store
         .reserve(
-            &secret,
+            secret,
             &ReserveRequest {
                 owner,
                 client_id: "web-market".into(),
@@ -116,7 +116,7 @@ pub(crate) async fn builtin_with_session(
         )
         .await
         .unwrap();
-    let dispatched = store.dispatch(&secret, &call.call_id).await.unwrap();
+    let dispatched = store.dispatch(secret, &call.call_id).await.unwrap();
     assert!(dispatched.dispatch_won);
     BuiltinFixture {
         secret: secret.to_owned(),

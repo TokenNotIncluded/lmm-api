@@ -17,6 +17,7 @@ fn upload_digest(edits: &ImageMultipartInput) -> Value {
     json!({"images":edits.images.iter().map(item).collect::<Vec<_>>(),"mask":edits.mask.as_ref().map(item)})
 }
 impl ImageService {
+    #[cfg_attr(not(test), allow(dead_code))] // Tests call this; production passes an explicit response format.
     pub(crate) async fn execute_api(
         &self,
         secret: &str,
@@ -37,6 +38,8 @@ impl ImageService {
         )
         .await
     }
+    // Secret, key, groups, input, edits, peer and format stay separate.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_api_with_response_format(
         &self,
         secret: &str,
@@ -63,6 +66,8 @@ impl ImageService {
         .await
         .map_err(|_| Error::Pending)?
     }
+    // Secret, key, groups, input, edits, peer and format stay separate.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_api_owned(
         &self,
         secret: &str,

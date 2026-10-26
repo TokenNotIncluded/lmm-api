@@ -23,6 +23,9 @@ pub use pricing::{
     BillingMode, CreditQuote, CreditRate, Credits, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd,
     PriceConfig, PriceQuote, PriceRule, PriceSnapshot, TokenRates, Usage,
 };
+// Relay code uses this re-export. The standalone routing test compiles this
+// module by itself, so the name has no caller in that crate.
+#[allow(unused_imports)]
 pub(crate) use tiered::CacheCreationPartition;
 pub use tiered::{
     CacheCreationMode, CompiledTariff, DecimalRate, InputSemantics, PersistedTieredTariff,

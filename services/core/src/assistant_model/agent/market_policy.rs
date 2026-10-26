@@ -79,6 +79,7 @@ pub(crate) async fn authorize_market_policy_context_in_transaction(
     }
     Ok(MarketPolicyPermission { _private: () })
 }
+#[allow(dead_code)] // Built only by the unused market-tool authorizer below.
 pub(crate) struct MarketIntent<'a> {
     pub service_id: &'a str,
     pub tool_id: &'a str,
@@ -87,11 +88,13 @@ pub(crate) struct MarketIntent<'a> {
     pub input_digest: &'a str,
     pub quote_id: &'a str,
 }
+#[allow(dead_code)] // Returned only by the unused market-tool authorizer below.
 pub(crate) struct MarketToolAuthority {
     operation_id: String,
     quote_id: String,
     consent_id: String,
 }
+#[allow(dead_code)] // Returned only by the unused market-tool authorizer below.
 impl MarketToolAuthority {
     pub(crate) fn operation_id(&self) -> &str {
         &self.operation_id
@@ -112,9 +115,11 @@ struct MarketArguments {
     grant_id: String,
     arguments: Value,
 }
+#[allow(dead_code)] // Used only by the unused market-tool authorizer below.
 fn hex(hash: &[u8; 32]) -> String {
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }
+#[allow(dead_code)] // Used only by the unused market-tool authorizer below.
 fn check_proposal(proposal: &FrozenProposal, intent: &MarketIntent<'_>) -> Result<(), Error> {
     let args: MarketArguments =
         serde_json::from_slice(proposal.arguments_json()).map_err(|_| Error::Invalid)?;
@@ -135,6 +140,7 @@ fn check_proposal(proposal: &FrozenProposal, intent: &MarketIntent<'_>) -> Resul
     }
     Ok(())
 }
+#[allow(dead_code)] // Checked market binding; no production caller yet.
 pub(crate) async fn authorize_market_tool_operation_in_transaction(
     c: &mut PgConnection,
     actor: &Principal,
