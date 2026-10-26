@@ -51,7 +51,7 @@ docs/            # 文档
 
 | 范围 | 已有源码与验证记录 | 仍需按当前候选核对 |
 | --- | --- | --- |
-| 核心安装与启动 | 当前源码的 `init-db` 在一个事务中安装 25 个组件；普通启动校验完整组件契约、实时 catalog 指纹和运行账户权限，可独立于 Go 启动。新增 `upgrade-db` 显式离线处理固定的 24 → 25 契约 | 25 组件候选及升级的完整独立复验、正式流量切换与整机资源验收；旧版本通过记录不替代新候选验收 |
+| 核心安装与启动 | 当前源码的 `init-db` 在一个事务中安装 26 个组件；普通启动校验完整组件契约、实时 catalog 指纹和运行账户权限，可独立于 Go 启动。`upgrade-db` 仅处理编译时固定的前置契约，不是通用迁移入口 | 当前候选及适用升级的完整独立复验、正式流量切换与整机资源验收；旧版本通过记录不替代新候选验收 |
 | 控制台身份 | 显式配置后接入注册、登录、刷新、注销、用户信息和状态接口；会话轮换、旧凭证注销及部分旧 Web 身份接口有数据库测试；本轮真实 v3 身份导入、重放与冲突拒绝已通过 | 真实导入账号的登录与浏览器验收、旧 OAuth 登录兼容、双因素、Passkey 和完整管理员权限 |
 | 公告与初始化状态 | 公告读取、按版本与顺序确认、Notice 和只读 setup 状态已接入持久化及真实 PostgreSQL 测试；本轮真实 v3 导入、原 SQL 重放与冲突拒绝已通过 | 实际 `/api/setup` 因尚无已重新授权的超级管理员返回 503；受保护页面及真实登录后的公告验收 |
 | 计费与账本 | 同事务预留、结算、退款、预算和重复请求已接入真实 PostgreSQL 测试 | 真实旧余额、欠款、订阅及历史操作的迁移对账 |
@@ -60,16 +60,17 @@ docs/            # 文档
 | 助手 | 预设、会话、脱敏历史与所有者归档已持久化并有独立数据库测试；未装配模型执行时明确返回不可用 | 原会话与平台赞助付款方的安全模型委托、真实对话、平台支持客服和完整管理员历史权限 |
 | 支付 | 正常宿主可显式装配 `payments` 与 `host.web_compat`；本轮真实 Rust RPC、隔离 PostgreSQL 和实际 `app.Run` 已独立验证 `PREPARED` 订单读取、团队非创建者授权及撤权、注销、禁写和准入/排空，读取期间资金表与序列不变、账本 journal 为 0；默认不启用支付。此前合成供应商的真实 Rust/Go 进程已独立验证回调证明持久接纳、真实过期后的消费、两产品SIGKILL与重启后首次入账及原键唯一账本 | 真实供应商、完整退款和扣款恢复联合验收、浏览器支付与支付资源验收；失败退款释放仍缺可信dispatch绑定，历史 review 恢复仍只有开发 fixture 测试，范围见[支付验收说明](../tests/payments/README.md) |
 
-当前 25 个安装组件按实际执行顺序为 humangrant、identity、ledger、payments、charging、
+当前 26 个安装组件按实际执行顺序为 humangrant、identity、ledger、payments、charging、
 routing、events、charging-ledger、migration、console、model-gateway、commerce、tool-market、
 abuse、oauth-grants、history、assistant-model、gift、image、market-oauth、tool-market-credit、
-wallet、bounties、assistant-tools、trust-pricing；清单以
+wallet、bounties、assistant-tools、trust-pricing、telegram-auth；清单以
 [`core_schema.rs`](../services/core/src/core_schema.rs) 和待运行二进制的 `schema-manifest` 为准。
 安装 schema 不等于启用对应业务；普通启动不创建角色、不授权、不执行 DDL，也不自动升级已有库。
 
-第 25 个组件由账户价格 SQL 与图片价格约束扩展组成；原 24 份组件 SQL 字节不变。
-显式升级记录图片约束、原子计费函数的精确定义变更，并核对其余旧对象、权限、行与序列。
-它只接受固定的 PostgreSQL 18 前置契约，不是旧单体的通用迁移入口。
+第 25 个组件 `trust-pricing` 由账户价格 SQL、换行与图片价格约束扩展拼接组成；
+第 26 个组件为 `telegram-auth`。组件指纹按编译时实际 SQL 字节计算，不能只按单个 SQL 文件核算。
+显式升级按所选过程核对固定的 PostgreSQL 18 前置契约及允许变更的对象、权限、行与序列；
+现有 26 组件二进制不能作为早期 24 → 25 升级的通用执行器，也不是旧单体的通用迁移入口。
 新结构中的账户折扣事实由 Core 持有；Go、浏览器及兼容配置不能自行授予折扣。
 来源事实导入、实际计费与恢复验收仍须分别完成。
 
