@@ -734,3 +734,118 @@ async fn repeatable_read_agent_writes_fail_instead_of_using_stale_parent_budget(
     let unchanged = agent.get(&session, &cv, "turn1").await.unwrap();
     assert_eq!(unchanged.revision, waiting.revision);
 }
+
+mod frozen_provenance_tests {
+    use super::super::FrozenProposal;
+    use crate::assistant_model::Error;
+    fn proposal(domain: &str) -> FrozenProposal {
+        FrozenProposal {
+            operation_id: "a".repeat(64),
+            turn_id: "b".repeat(64),
+            tool_name: "get_account_access".into(),
+            tool_version: "1".into(),
+            domain: domain.into(),
+            arguments: b"{}".to_vec(),
+            arguments_sha256: [0; 32],
+            resource_kind: String::new(),
+            resource_id: String::new(),
+            resource_version: String::new(),
+            scope_grant_id: String::new(),
+            resource_schema_sha256: None,
+            resource_price_sha256: None,
+            host_policy: serde_json::json!({"allowed_tools":["get_account_access"]}),
+            source_web_session_sid: Some("synthetic-browser-session".into()),
+            expires_at_unix: 1900000000,
+        }
+    }
+    fn market_proposal() -> FrozenProposal {
+        let mut p = proposal("extension");
+        p.tool_name = "call_market_tool".into();
+        p.resource_kind = "toolmarket".into();
+        p.resource_id = "synthetic-tool".into();
+        p.resource_version = "synthetic-version".into();
+        p.scope_grant_id = "synthetic-grant".into();
+        p.resource_schema_sha256 = Some([1; 32]);
+        p.resource_price_sha256 = Some([2; 32]);
+        p
+    }
+    #[test]
+    fn core_worker_mode_accepts_registered_core() {
+        assert!(proposal("registered_core").validate_provenance(0).is_ok());
+    }
+    #[test]
+    fn browser_confirmation_mode_preserves_registered_core_lookup_contract() {
+        // SQL mode 1 deliberately permits registered_core as well as named extensions.
+        assert!(proposal("registered_core").validate_provenance(1).is_ok());
+    }
+    #[test]
+    fn browser_confirmation_mode_accepts_whitelisted_extension_shape() {
+        let mut p = proposal("extension");
+        p.tool_name = "set_overview_greeting".into();
+        assert!(p.validate_provenance(1).is_ok());
+    }
+    #[test]
+    fn market_mode_accepts_complete_extension_binding() {
+        assert!(market_proposal().validate_provenance(2).is_ok());
+    }
+    #[test]
+    fn unsupported_domains_and_modes_fail_closed() {
+        for (mode, domain) in [
+            (0, "extension"),
+            (0, "unknown"),
+            (1, "unknown"),
+            (2, "registered_core"),
+            (2, "unknown"),
+            (-1, "registered_core"),
+            (3, "extension"),
+        ] {
+            assert!(
+                matches!(
+                    proposal(domain).validate_provenance(mode),
+                    Err(Error::Unavailable)
+                ),
+                "mode={mode}, domain={domain}"
+            );
+        }
+    }
+    #[test]
+    fn non_object_host_policy_is_rejected() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(true),
+            serde_json::json!("policy"),
+            serde_json::json!([]),
+            serde_json::json!(7),
+        ] {
+            let mut p = proposal("registered_core");
+            p.host_policy = value;
+            assert!(matches!(p.validate_provenance(0), Err(Error::Unavailable)));
+        }
+    }
+    #[test]
+    fn partial_digest_pairs_are_rejected() {
+        for (schema, price) in [(Some([1; 32]), None), (None, Some([2; 32]))] {
+            let mut p = market_proposal();
+            p.resource_schema_sha256 = schema;
+            p.resource_price_sha256 = price;
+            assert!(matches!(p.validate_provenance(2), Err(Error::Unavailable)));
+        }
+    }
+    #[test]
+    fn digest_pair_requires_every_scope_identifier() {
+        for field in 0..4 {
+            let mut p = market_proposal();
+            match field {
+                0 => p.resource_kind.clear(),
+                1 => p.resource_id.clear(),
+                2 => p.resource_version.clear(),
+                3 => p.scope_grant_id.clear(),
+                _ => unreachable!(),
+            };
+            assert!(
+                matches!(p.validate_provenance(2), Err(Error::Unavailable)),
+                "empty field={field}"
+            );
+        }
+    }
+}
