@@ -1,27 +1,40 @@
-//! Keep JSON Schema object-key order when a tool schema is re-encoded.
+//! Keep client object order only in the selected upstream tool-schema fields.
 //!
-//! `serde_json::Map` is a `BTreeMap`, so a decode/encode cycle sorts keys.
-//! Structured-output and tool callers that fill `properties` in listed order
-//! then see `answer` before `reasoning`. This module reads the client's schema
-//! bytes, writes them again with that order, and splices the result into the
-//! upstream body. Global JSON encoding stays sorted: billing and policy
-//! digests must not start following client key order.
-//!
-//! Adapted from QuantumNous/new-api `d0b840e7`, which keeps schema bytes
-//! instead of round-tripping them through a map.
+//! Behavior follows QuantumNous/new-api `d0b840e75ff36d731b04ff981ee361819acd593f`.
+//! Parsing and raw-field serialization reuse the already locked serde_json
+//! 1.0.151 (`serde-rs/json` v1.0.151, MIT OR Apache-2.0). Global JSON maps remain
+//! sorted, so billing and policy digests keep their existing representation.
 
-use super::RelayError;
-use serde::Deserialize;
+use super::{RelayError, UpstreamProtocol};
+use serde::{
+    Deserialize, Serialize,
+    de::{MapAccess, Visitor},
+    ser::SerializeMap,
+};
 use serde_json::{Value, value::RawValue};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 enum Node {
-    Null,
-    Bool(bool),
-    Number(String),
-    String(String),
+    Scalar(Value),
     Array(Vec<Node>),
     Object(Vec<(String, Node)>),
+}
+
+impl Serialize for Node {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Scalar(value) => value.serialize(serializer),
+            Self::Array(items) => items.serialize(serializer),
+            Self::Object(items) => {
+                let mut map = serializer.serialize_map(Some(items.len()))?;
+                for (key, value) in items {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -31,14 +44,13 @@ pub(crate) enum RawSchema {
 }
 
 pub(crate) fn ordered_json_matching(raw: &str, expected: &Value) -> Option<String> {
-    let node = parse_json(raw)?;
-    let text = emit(&node)?;
+    let text = serde_json::to_string(&parse_json(raw)?).ok()?;
     (serde_json::from_str::<Value>(&text).ok().as_ref() == Some(expected)).then_some(text)
 }
 
 pub(crate) fn ordered_gemini_schema(raw: &str, expected: &Value) -> Option<String> {
     let node = convert_gemini(&parse_json(raw)?)?;
-    let text = emit(&node)?;
+    let text = serde_json::to_string(&node).ok()?;
     (serde_json::from_str::<Value>(&text).ok().as_ref() == Some(expected)).then_some(text)
 }
 
@@ -154,45 +166,131 @@ pub(crate) fn gemini_schemas(body: &[u8]) -> Option<Vec<Option<RawSchema>>> {
     )
 }
 
-/// Replace each tool schema in `payload`'s compact encoding with `schemas`,
-/// which use the client's object-key order. The parsed JSON value stays equal
-/// to `payload`. A splice that would change that value is discarded.
-pub(crate) fn splice_ordered_schemas(
+/// Serialize a verified payload, replacing only the protocol's actual schema
+/// fields. A same-valued message/tool-result object can never consume an update.
+pub(crate) fn encode_ordered_schemas(
     payload: &Value,
+    protocol: UpstreamProtocol,
     schemas: &[String],
 ) -> Result<Vec<u8>, RelayError> {
     let canonical =
-        serde_json::to_vec(payload).map_err(|_| RelayError::Invalid("request encoding failed"))?;
-    let mut body = canonical.clone();
-    let mut from = 0usize;
-    for schema in schemas {
-        let Ok(parsed) = serde_json::from_str::<Value>(schema) else {
+        || serde_json::to_vec(payload).map_err(|_| RelayError::Invalid("request encoding failed"));
+    let Some(paths) = schema_paths(payload, protocol) else {
+        return canonical();
+    };
+    if paths.len() != schemas.len() {
+        return canonical();
+    }
+    let mut output = WireValue::Value(payload);
+    for (path, schema) in paths.iter().zip(schemas) {
+        let Some(actual) = value_at(payload, path) else {
             continue;
         };
-        let Ok(needle) = serde_json::to_vec(&parsed) else {
-            continue;
-        };
-        let Some(relative) = find_subslice(&body[from..], &needle) else {
-            continue;
-        };
-        let at = from + relative;
-        if needle.as_slice() == schema.as_bytes() {
-            from = at + needle.len();
+        if serde_json::from_str::<Value>(schema).ok().as_ref() != Some(actual) {
             continue;
         }
-        body.splice(at..at + needle.len(), schema.bytes());
-        from = at + schema.len();
+        let Ok(raw) = RawValue::from_string(schema.clone()) else {
+            continue;
+        };
+        replace_at(&mut output, path, raw);
     }
-    match serde_json::from_slice::<Value>(&body) {
-        Ok(value) if value == *payload => Ok(body),
-        _ => Ok(canonical),
+    let body =
+        serde_json::to_vec(&output).map_err(|_| RelayError::Invalid("request encoding failed"))?;
+    if serde_json::from_slice::<Value>(&body).ok().as_ref() == Some(payload) {
+        Ok(body)
+    } else {
+        canonical()
     }
 }
 
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireValue<'a> {
+    Value(&'a Value),
+    Raw(Box<RawValue>),
+    Object(BTreeMap<&'a str, WireValue<'a>>),
+    Array(Vec<WireValue<'a>>),
+}
+
+#[derive(Clone, Copy)]
+enum Member {
+    Key(&'static str),
+    Index(usize),
+}
+
+fn schema_paths(payload: &Value, protocol: UpstreamProtocol) -> Option<Vec<Vec<Member>>> {
+    use Member::{Index, Key};
+    let Some(tools) = payload.get("tools") else {
+        return Some(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for (index, tool) in tools.as_array()?.iter().enumerate() {
+        let mut path = vec![Key("tools"), Index(index)];
+        match protocol {
+            UpstreamProtocol::Chat => {
+                path.extend([Key("function"), Key("parameters")]);
+                paths.push(path);
+            }
+            UpstreamProtocol::Responses => {
+                path.push(Key("parameters"));
+                paths.push(path);
+            }
+            UpstreamProtocol::Anthropic => {
+                path.push(Key("input_schema"));
+                paths.push(path);
+            }
+            UpstreamProtocol::Gemini => {
+                let declarations = tool.get("functionDeclarations")?.as_array()?;
+                for declaration in 0..declarations.len() {
+                    let mut path = path.clone();
+                    path.extend([
+                        Key("functionDeclarations"),
+                        Index(declaration),
+                        Key("parametersJsonSchema"),
+                    ]);
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    Some(paths)
+}
+
+fn value_at<'a>(mut value: &'a Value, path: &[Member]) -> Option<&'a Value> {
+    for member in path {
+        value = match member {
+            Member::Key(key) => value.get(*key)?,
+            Member::Index(index) => value.get(*index)?,
+        };
+    }
+    Some(value)
+}
+
+fn replace_at<'a>(value: &mut WireValue<'a>, path: &[Member], raw: Box<RawValue>) {
+    let Some((head, tail)) = path.split_first() else {
+        *value = WireValue::Raw(raw);
+        return;
+    };
+    if let WireValue::Value(original) = value {
+        *value = match original {
+            Value::Object(items) => WireValue::Object(
+                items
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), WireValue::Value(value)))
+                    .collect(),
+            ),
+            Value::Array(items) => WireValue::Array(items.iter().map(WireValue::Value).collect()),
+            _ => return,
+        };
+    }
+    let next = match (value, head) {
+        (WireValue::Object(items), Member::Key(key)) => items.get_mut(key),
+        (WireValue::Array(items), Member::Index(index)) => items.get_mut(*index),
+        _ => None,
+    };
+    if let Some(next) = next {
+        replace_at(next, tail, raw);
+    }
 }
 
 const GEMINI_KEYS: &[&str] = &[
@@ -223,7 +321,7 @@ fn convert_gemini(node: &Node) -> Option<Node> {
     for (key, value) in items {
         let converted = match key.as_str() {
             "type" => {
-                let Node::String(kind) = value else {
+                let Node::Scalar(Value::String(kind)) = value else {
                     return None;
                 };
                 let mapped = match kind.as_str() {
@@ -235,7 +333,7 @@ fn convert_gemini(node: &Node) -> Option<Node> {
                     "BOOLEAN" => "boolean",
                     _ => return None,
                 };
-                Node::String(mapped.to_owned())
+                Node::Scalar(Value::String(mapped.to_owned()))
             }
             "properties" => {
                 let Node::Object(properties) = value else {
@@ -255,294 +353,85 @@ fn convert_gemini(node: &Node) -> Option<Node> {
     Some(Node::Object(out))
 }
 
-struct Parser<'a> {
-    bytes: &'a [u8],
-    index: usize,
-    depth: usize,
+// RawValue and MapAccess delegate JSON syntax, UTF-8, numbers and escapes to
+// serde_json. The bounded tree is only for local object order and Gemini type
+// conversion; it is never a replacement for the main request validator.
+struct Members<'a>(Vec<(String, &'a RawValue)>);
+impl<'de> Deserialize<'de> for Members<'de> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct MembersVisitor;
+        impl<'de> Visitor<'de> for MembersVisitor {
+            type Value = Members<'de>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut positions: BTreeMap<String, usize> = BTreeMap::new();
+                let mut items: Vec<(String, &'de RawValue)> = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    let value = map.next_value::<&'de RawValue>()?;
+                    if let Some(index) = positions.get(&key).copied() {
+                        items[index].1 = value;
+                    } else {
+                        positions.insert(key.clone(), items.len());
+                        items.push((key, value));
+                    }
+                }
+                Ok(Members(items))
+            }
+        }
+        deserializer.deserialize_map(MembersVisitor)
+    }
 }
 
 fn parse_json(raw: &str) -> Option<Node> {
-    let mut parser = Parser {
-        bytes: raw.as_bytes(),
-        index: 0,
-        depth: 0,
-    };
-    let node = parser.value()?;
-    parser.skip_ws();
-    (parser.index == parser.bytes.len()).then_some(node)
+    parse_node(serde_json::from_str::<&RawValue>(raw).ok()?, 0)
 }
 
-impl<'a> Parser<'a> {
-    fn value(&mut self) -> Option<Node> {
-        self.skip_ws();
-        if self.depth > 64 {
-            return None;
-        }
-        match self.peek()? {
-            b'{' => self.object(),
-            b'[' => self.array(),
-            b'"' => self.string().map(Node::String),
-            b't' => self.literal(b"true").map(|()| Node::Bool(true)),
-            b'f' => self.literal(b"false").map(|()| Node::Bool(false)),
-            b'n' => self.literal(b"null").map(|()| Node::Null),
-            b'-' | b'0'..=b'9' => self.number(),
-            _ => None,
-        }
+fn parse_node(raw: &RawValue, depth: usize) -> Option<Node> {
+    if depth > 64 {
+        return None;
     }
-
-    fn object(&mut self) -> Option<Node> {
-        self.bump(b'{')?;
-        self.depth += 1;
-        let mut items = Vec::new();
-        self.skip_ws();
-        if self.peek() == Some(b'}') {
-            self.index += 1;
-            self.depth -= 1;
-            return Some(Node::Object(items));
-        }
-        loop {
-            self.skip_ws();
-            let key = self.string()?;
-            self.skip_ws();
-            self.bump(b':')?;
-            let value = self.value()?;
-            if let Some(existing) = items.iter_mut().find(|(name, _)| name == &key) {
-                existing.1 = value;
-            } else {
-                items.push((key, value));
+    match raw.get().as_bytes().first()? {
+        b'{' => {
+            let members: Members<'_> = serde_json::from_str(raw.get()).ok()?;
+            let mut items = Vec::with_capacity(members.0.len());
+            for (key, value) in members.0 {
+                items.push((key, parse_node(value, depth + 1)?));
             }
-            self.skip_ws();
-            match self.peek()? {
-                b',' => self.index += 1,
-                b'}' => {
-                    self.index += 1;
-                    self.depth -= 1;
-                    return Some(Node::Object(items));
-                }
-                _ => return None,
-            }
+            Some(Node::Object(items))
         }
+        b'[' => {
+            let values: Vec<&RawValue> = serde_json::from_str(raw.get()).ok()?;
+            let mut items = Vec::with_capacity(values.len());
+            for value in values {
+                items.push(parse_node(value, depth + 1)?);
+            }
+            Some(Node::Array(items))
+        }
+        _ => Some(Node::Scalar(serde_json::from_str(raw.get()).ok()?)),
     }
-
-    fn array(&mut self) -> Option<Node> {
-        self.bump(b'[')?;
-        self.depth += 1;
-        let mut items = Vec::new();
-        self.skip_ws();
-        if self.peek() == Some(b']') {
-            self.index += 1;
-            self.depth -= 1;
-            return Some(Node::Array(items));
-        }
-        loop {
-            items.push(self.value()?);
-            self.skip_ws();
-            match self.peek()? {
-                b',' => self.index += 1,
-                b']' => {
-                    self.index += 1;
-                    self.depth -= 1;
-                    return Some(Node::Array(items));
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn string(&mut self) -> Option<String> {
-        self.bump(b'"')?;
-        let mut out = String::new();
-        while let Some(byte) = self.peek() {
-            match byte {
-                b'"' => {
-                    self.index += 1;
-                    return Some(out);
-                }
-                b'\\' => {
-                    self.index += 1;
-                    let escaped = self.peek()?;
-                    self.index += 1;
-                    match escaped {
-                        b'"' | b'\\' | b'/' => out.push(escaped as char),
-                        b'b' => out.push('\u{0008}'),
-                        b'f' => out.push('\u{000c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
-                        b'u' => out.push(self.unicode_escape()?),
-                        _ => return None,
-                    }
-                }
-                0x00..=0x1f => return None,
-                byte if byte < 0x80 => {
-                    out.push(byte as char);
-                    self.index += 1;
-                }
-                _ => {
-                    let rest = self.bytes.get(self.index..)?;
-                    let text = std::str::from_utf8(rest).ok()?;
-                    let ch = text.chars().next()?;
-                    out.push(ch);
-                    self.index += ch.len_utf8();
-                }
-            }
-        }
-        None
-    }
-
-    fn unicode_escape(&mut self) -> Option<char> {
-        let unit = self.hex4()?;
-        if (0xD800..=0xDBFF).contains(&unit) {
-            self.bump(b'\\')?;
-            self.bump(b'u')?;
-            let low = self.hex4()?;
-            if !(0xDC00..=0xDFFF).contains(&low) {
-                return None;
-            }
-            let code = 0x10000 + (((unit as u32 - 0xD800) << 10) | (low as u32 - 0xDC00));
-            return char::from_u32(code);
-        }
-        if (0xDC00..=0xDFFF).contains(&unit) {
-            return None;
-        }
-        char::from_u32(unit as u32)
-    }
-
-    fn hex4(&mut self) -> Option<u16> {
-        let mut value = 0u16;
-        for _ in 0..4 {
-            let byte = self.peek()?;
-            self.index += 1;
-            let digit = match byte {
-                b'0'..=b'9' => byte - b'0',
-                b'a'..=b'f' => byte - b'a' + 10,
-                b'A'..=b'F' => byte - b'A' + 10,
-                _ => return None,
-            };
-            value = (value << 4) | u16::from(digit);
-        }
-        Some(value)
-    }
-
-    fn number(&mut self) -> Option<Node> {
-        let start = self.index;
-        if self.peek() == Some(b'-') {
-            self.index += 1;
-        }
-        match self.peek()? {
-            b'0' => self.index += 1,
-            b'1'..=b'9' => {
-                self.index += 1;
-                while matches!(self.peek(), Some(b'0'..=b'9')) {
-                    self.index += 1;
-                }
-            }
-            _ => return None,
-        }
-        if self.peek() == Some(b'.') {
-            self.index += 1;
-            let mut digits = false;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                digits = true;
-                self.index += 1;
-            }
-            if !digits {
-                return None;
-            }
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            self.index += 1;
-            if matches!(self.peek(), Some(b'+' | b'-')) {
-                self.index += 1;
-            }
-            let mut digits = false;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                digits = true;
-                self.index += 1;
-            }
-            if !digits {
-                return None;
-            }
-        }
-        let literal = std::str::from_utf8(&self.bytes[start..self.index]).ok()?;
-        Some(Node::Number(literal.to_owned()))
-    }
-
-    fn literal(&mut self, expected: &[u8]) -> Option<()> {
-        if self.bytes.get(self.index..)?.starts_with(expected) {
-            self.index += expected.len();
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    fn bump(&mut self, expected: u8) -> Option<()> {
-        if self.peek() == Some(expected) {
-            self.index += 1;
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.index).copied()
-    }
-
-    fn skip_ws(&mut self) {
-        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
-            self.index += 1;
-        }
-    }
-}
-
-fn emit(node: &Node) -> Option<String> {
-    let mut out = String::new();
-    write_node(&mut out, node)?;
-    Some(out)
-}
-
-fn write_node(out: &mut String, node: &Node) -> Option<()> {
-    match node {
-        Node::Null => out.push_str("null"),
-        Node::Bool(true) => out.push_str("true"),
-        Node::Bool(false) => out.push_str("false"),
-        Node::Number(literal) => out.push_str(literal),
-        Node::String(text) => out.push_str(&serde_json::to_string(text).ok()?),
-        Node::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_node(out, item)?;
-            }
-            out.push(']');
-        }
-        Node::Object(items) => {
-            out.push('{');
-            for (index, (key, value)) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(key).ok()?);
-                out.push(':');
-                write_node(out, value)?;
-            }
-            out.push('}');
-        }
-    }
-    Some(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::{
-        ClientProtocol, Limits, UpstreamProtocol, native_anthropic, native_gemini, request,
+        ClientProtocol, Limits, Route, UpstreamProtocol, native_anthropic, native_gemini, request,
     };
     use super::*;
     use serde_json::json;
+
+    fn route(protocol: UpstreamProtocol) -> Route {
+        Route::new(
+            "test-route".into(),
+            protocol,
+            "https://example.test/model",
+            "upstream-model".into(),
+            "synthetic-key",
+            1,
+        )
+        .unwrap()
+    }
 
     const SCHEMA: &str = r#"{"type":"object","properties":{"reasoning":{"type":"string","description":"why"},"answer":{"type":"string"}},"required":["reasoning","answer"]}"#;
 
@@ -574,7 +463,7 @@ mod tests {
             request::Request::parse(ClientProtocol::Chat, chat, &Limits::default()).unwrap();
         let body = String::from_utf8(
             request
-                .upstream_body(UpstreamProtocol::Chat, "upstream-model")
+                .upstream_body(&route(UpstreamProtocol::Chat))
                 .unwrap(),
         )
         .unwrap();
@@ -590,7 +479,7 @@ mod tests {
                 .unwrap();
         let body = String::from_utf8(
             request
-                .upstream_body(UpstreamProtocol::Responses, "upstream-model")
+                .upstream_body(&route(UpstreamProtocol::Responses))
                 .unwrap(),
         )
         .unwrap();
@@ -604,7 +493,7 @@ mod tests {
         let request = native_anthropic::parse(anthropic, &Limits::default()).unwrap();
         let body = String::from_utf8(
             request
-                .upstream_body(UpstreamProtocol::Anthropic, "upstream-model")
+                .upstream_body(&route(UpstreamProtocol::Anthropic))
                 .unwrap(),
         )
         .unwrap();
@@ -621,7 +510,7 @@ mod tests {
         let body = br#"{"contents":[{"parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[{"name":"answer","parameters":{"type":"OBJECT","properties":{"reasoning":{"type":"STRING"},"answer":{"type":"STRING"}}}}]}]}"#;
         let request = native_gemini::parse("gemini-test", false, body, &Limits::default()).unwrap();
         let encoded = request
-            .upstream_body(UpstreamProtocol::Gemini, "gemini-test")
+            .upstream_body(&route(UpstreamProtocol::Gemini))
             .unwrap();
         let text = String::from_utf8(encoded).unwrap();
         assert!(
@@ -643,7 +532,7 @@ mod tests {
         let request = native_gemini::parse("gemini-test", false, body, &Limits::default()).unwrap();
         let text = String::from_utf8(
             request
-                .upstream_body(UpstreamProtocol::Gemini, "gemini-test")
+                .upstream_body(&route(UpstreamProtocol::Gemini))
                 .unwrap(),
         )
         .unwrap();
@@ -653,5 +542,131 @@ mod tests {
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn replacing_schema_order_cannot_rewrite_a_same_value_tool_input() {
+        let raw = r#"{"type":"object","properties":{"z":{"type":"string"},"a":{"type":"string"}}}"#;
+        let body = format!(
+            r#"{{"model":"m","max_tokens":16,"messages":[{{"role":"assistant","content":[{{"type":"tool_use","id":"call_1","name":"echo","input":{raw}}}]}},{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"call_1","content":"done"}}]}}],"tools":[{{"name":"echo","input_schema":{raw}}}]}}"#
+        );
+        let request = request::Request::parse(
+            ClientProtocol::Anthropic,
+            body.as_bytes(),
+            &Limits::default(),
+        )
+        .unwrap();
+        let route = route(UpstreamProtocol::Anthropic);
+        let payload = request.upstream(&route).unwrap();
+        let canonical =
+            serde_json::to_string(&payload["messages"][0]["content"][0]["input"]).unwrap();
+        let bytes = request.upstream_body(&route).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), payload);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(&format!("\"input_schema\":{raw}")), "{text}");
+        assert!(text.contains(&format!("\"input\":{canonical}")), "{text}");
+    }
+
+    #[test]
+    fn equal_tool_schemas_keep_their_own_order_by_index() {
+        let first =
+            r#"{"type":"object","properties":{"z":{"type":"string"},"a":{"type":"string"}}}"#;
+        let second =
+            r#"{"properties":{"a":{"type":"string"},"z":{"type":"string"}},"type":"object"}"#;
+        let body = format!(
+            r#"{{"model":"m","messages":[{{"role":"user","content":"hi"}}],"tools":[{{"type":"function","function":{{"name":"one","parameters":{first}}}}},{{"type":"function","function":{{"name":"two","parameters":{second}}}}}]}}"#
+        );
+        let request =
+            request::Request::parse(ClientProtocol::Chat, body.as_bytes(), &Limits::default())
+                .unwrap();
+        let route = route(UpstreamProtocol::Chat);
+        let bytes = request.upstream_body(&route).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            request.upstream(&route).unwrap()
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(&format!("\"parameters\":{first}")), "{text}");
+        assert!(text.contains(&format!("\"parameters\":{second}")), "{text}");
+    }
+
+    #[test]
+    fn deferred_capture_and_body_encoding_keep_the_selected_route_policy() {
+        let body = br#"{"model":"m","service_tier":"priority","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"answer","parameters":{"type":"object","properties":{"z":{"type":"string"},"a":{"type":"string"}}}}}]}"#;
+        let request =
+            request::Request::parse_deferred_openai(ClientProtocol::Chat, body, &Limits::default())
+                .unwrap();
+        assert!(
+            request
+                .upstream_body(&route(UpstreamProtocol::Chat))
+                .is_err()
+        );
+        for allowed in [false, true] {
+            let route = route(UpstreamProtocol::Chat).with_payload_policy(
+                crate::routing::PayloadPolicy::LegacyOpenai {
+                    allow_service_tier: allowed,
+                    allow_inference_geo: false,
+                    allow_speed: false,
+                    allow_safety_identifier: false,
+                    allow_include_obfuscation: false,
+                },
+            );
+            let bytes = request.upstream_body(&route).unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value, request.upstream(&route).unwrap());
+            assert_eq!(value.get("service_tier").is_some(), allowed);
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(
+                text.contains(r#""properties":{"z":{"type":"string"},"a":{"type":"string"}}"#),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_escaped_keys_use_last_value_at_first_position() {
+        let raw = r#"{"z":1,"a":{"description":"中文😄"},"\u007a":1234567890123456789012345678901234567890123}"#;
+        let expected: Value = serde_json::from_str(raw).unwrap();
+        let text = ordered_json_matching(raw, &expected).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+        assert!(text.find("\"z\"").unwrap() < text.find("\"a\"").unwrap());
+        assert_eq!(text.matches("\"z\"").count(), 1);
+    }
+
+    #[test]
+    fn strict_transport_encoding_preserves_schema_and_rejects_deferred_fields() {
+        let strict = br#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"answer","parameters":{"type":"object","properties":{"z":{"type":"string"},"a":{"type":"string"}}}}}]}"#;
+        let request =
+            request::Request::parse(ClientProtocol::Chat, strict, &Limits::default()).unwrap();
+        for protocol in [
+            UpstreamProtocol::Chat,
+            UpstreamProtocol::Responses,
+            UpstreamProtocol::Anthropic,
+            UpstreamProtocol::Gemini,
+        ] {
+            let bytes = request
+                .upstream_body_to(protocol, "upstream-model")
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                request.upstream_to(protocol, "upstream-model").unwrap()
+            );
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(
+                text.contains(r#""properties":{"z":{"type":"string"},"a":{"type":"string"}}"#),
+                "{text}"
+            );
+        }
+        let deferred = br#"{"model":"m","service_tier":"priority","messages":[{"role":"user","content":"hi"}]}"#;
+        let request = request::Request::parse_deferred_openai(
+            ClientProtocol::Chat,
+            deferred,
+            &Limits::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            request.upstream_body_to(UpstreamProtocol::Chat, "upstream-model"),
+            Err(RelayError::Unsupported(_))
+        ));
     }
 }

@@ -37,6 +37,8 @@ fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
         assert_eq!(old["name"], *name);
         let original = if *name == "ledger" {
             include_str!("../../../tests/core_schema/ledger_before_escrow_submit.sql")
+        } else if *name == "routing" {
+            include_str!("../../../tests/core_schema/routing_before_payload_policy.sql")
         } else {
             ddl
         };
@@ -51,6 +53,8 @@ fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
     for component in &mut producer.components {
         if component.name == "ledger" {
             component.raw_schema_sha256 = ledger::PRE_LEDGER.into();
+        } else if component.name == "routing" {
+            component.raw_schema_sha256 = PRE_ROUTING.into();
         }
     }
     producer.installer_contract_sql_sha256 = hex(&Sha256::digest(super::super::CONTRACT));
@@ -72,25 +76,77 @@ fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
     legacy.procedure = PROCEDURE.into();
     legacy.predecessor_manifest_sha256 = PRE_MANIFEST.into();
     legacy.predecessor_catalog_sha256 = PRE_CATALOG.into();
+    legacy.validate().unwrap();
     assert!(matches!(
-        legacy.validate(),
+        legacy.authorize_target(),
         Err(UpgradeError::Rejected(
-            "UPGRADE_DB_COMPILED_PREDECESSOR_DRIFT"
+            "UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"
         ))
     ));
     assert!(!UPGRADE_METADATA.contains("core_migration"));
     assert!(!UPGRADE_METADATA.contains("source_archive"));
 }
 #[test]
+fn routing_authorization_binds_exact_historical_bytes() {
+    let original = include_str!("../../../tests/core_schema/routing_before_payload_policy.sql");
+    assert_eq!(hex(&Sha256::digest(original)), PRE_ROUTING);
+    authorize_routing_target(original).unwrap();
+    assert!(matches!(
+        authorize_routing_target(&format!("{original}\n")),
+        Err(UpgradeError::Rejected(
+            "UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn every_historical_procedure_refuses_current_routing_before_connecting() {
+    for (procedure, manifest, catalog) in [
+        (PROCEDURE, PRE_MANIFEST, PRE_CATALOG),
+        (
+            additive::PROCEDURE,
+            "a9c69e01a631fd9e1b005b892ca855fb19a12041c279d04f19b2e9189d4ea301",
+            "0d3ceaaf5a3a25d2c372d3ede66890f69073dcb327100e293070ff47bce534ec",
+        ),
+        (
+            ledger::PROCEDURE,
+            "310937ea692be55a4b5070e3d6bc2ddf86071945b717e47359d68d3571fad351",
+            "05dcb5fadfc11269de196e3730f9f65ff791bd44d499a6d062fc2b3f9c6c0061",
+        ),
+    ] {
+        let mut r = request();
+        r.procedure = procedure.into();
+        r.predecessor_manifest_sha256 = manifest.into();
+        r.predecessor_catalog_sha256 = catalog.into();
+        let bytes = serde_json::to_vec(&r).unwrap();
+        UpgradeRequest::read_fields(&bytes[..]).unwrap();
+        assert!(matches!(
+            UpgradeRequest::read(&bytes[..]),
+            Err(UpgradeError::Rejected(
+                "UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"
+            ))
+        ));
+        // An unusable URL proves a caller constructing the public request
+        // directly is rejected before any connection attempt or receipt lookup.
+        assert!(matches!(
+            upgrade_database("not-a-postgresql-url", r).await,
+            Err(UpgradeError::Rejected(
+                "UPGRADE_DB_USE_PRESERVED_ROUTING_INSTALLER"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn upgrade_request_is_bounded_strict_and_binds_both_compiled_contracts() {
     let good = request();
     let bytes = serde_json::to_vec(&good).unwrap();
-    let parsed = UpgradeRequest::read(&bytes[..]).unwrap();
+    let parsed = UpgradeRequest::read_fields(&bytes[..]).unwrap();
     assert_eq!(parsed.digest().unwrap(), good.digest().unwrap());
     let mut unknown = serde_json::to_value(&good).unwrap();
     unknown["grant_everything"] = true.into();
-    assert!(UpgradeRequest::read(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
-    assert!(UpgradeRequest::read(&vec![b' '; 16_385][..]).is_err());
+    assert!(UpgradeRequest::read_fields(&serde_json::to_vec(&unknown).unwrap()[..]).is_err());
+    assert!(UpgradeRequest::read_fields(&vec![b' '; 16_385][..]).is_err());
     let mut wrong = good.clone();
     wrong.predecessor_catalog_sha256 = "0".repeat(64);
     assert!(wrong.validate().is_err());
@@ -120,7 +176,7 @@ fn upgrade_request_whitespace_and_object_order_do_not_change_identity() {
     let good = request();
     let reordered = serde_json::to_vec_pretty(&serde_json::to_value(&good).unwrap()).unwrap();
     assert_eq!(
-        UpgradeRequest::read(&reordered[..])
+        UpgradeRequest::read_fields(&reordered[..])
             .unwrap()
             .digest()
             .unwrap(),

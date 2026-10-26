@@ -86,6 +86,34 @@ impl FrozenProposal {
     pub(crate) fn expires_at_unix(&self) -> i64 {
         self.expires_at_unix
     }
+
+    /// Validate the immutable provenance shape before a caller can consume it.
+    ///
+    /// Core reads carry no market scope. Extension market calls carry both
+    /// resource digests and a non-empty scope; partial bindings fail closed.
+    fn validate_provenance(&self, extension_mode: i32) -> Result<(), Error> {
+        let valid_domain = match extension_mode {
+            0 => self.domain() == "registered_core",
+            1 => matches!(self.domain(), "registered_core" | "extension"),
+            2 => self.domain() == "extension",
+            _ => false,
+        };
+        if !valid_domain
+            || !self.host_policy().is_object()
+            || (self.resource_schema_sha256().is_some() != self.resource_price_sha256().is_some())
+        {
+            return Err(Error::Unavailable);
+        }
+        if self.resource_schema_sha256().is_some()
+            && (self.resource_kind().is_empty()
+                || self.resource_id().is_empty()
+                || self.resource_version().is_empty()
+                || self.scope_grant_id().is_empty())
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
 }
 fn context_error(error: crate::assistant_tools_core::Error) -> Error {
     use crate::assistant_tools_core::Error as E;
@@ -157,7 +185,7 @@ async fn verify_bound_proposal(
             .map(|v| v.try_into().map_err(|_| Error::Unavailable))
             .transpose()
     }
-    Ok(FrozenProposal {
+    let proposal = FrozenProposal {
         operation_id: row.try_get("id")?,
         turn_id: row.try_get("turn_id")?,
         tool_name: row.try_get("tool_name")?,
@@ -174,7 +202,9 @@ async fn verify_bound_proposal(
         host_policy: row.try_get("host_policy")?,
         source_web_session_sid: family,
         expires_at_unix: row.try_get("expires_at")?,
-    })
+    };
+    proposal.validate_provenance(extension_mode)?;
+    Ok(proposal)
 }
 
 // Installed only through the explicit agent component in a later batch. Startup

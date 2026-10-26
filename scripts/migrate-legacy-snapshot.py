@@ -60,13 +60,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE_SEED_CONTRACT = "fresh26-identity5-trust-policy-telegram-empty-v1"
 # Reviewed against 3e02d13435447181675f2d4c23fd7f6496339593. Byte changes require
 # a new review, never a caller-provided replacement fingerprint. Order is DDL order.
+# Routing additionally binds the reviewed fresh-install JSONB payload policy and
+# JSON-preserving projection; this grants no existing-site upgrade authority.
 REVIEWED_COMPONENTS = {
     'humangrant': ('include_str!("../schema/humangrant.sql")', '7d9437a2ee485bc7491c76e755ca481a7a722c4ea9ae7322fe32ac5f8f0090bc'),
     'identity': ('include_str!("../schema/identity.sql")', 'c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9'),
     'ledger': ('include_str!("../schema/ledger.sql")', 'ce973f6fee25904d4fcdc87895ec49e6c53e10c9fb3508df4d7d72ace16df77f'),
     'payments': ('include_str!("../schema/payments.sql")', '9579afddbe5aeb4deb67984e731bcdc6ca405dc619ceede8d92505ecc43f7d39'),
     'charging': ('include_str!("../schema/charging.sql")', '08f0a99e3cc7729627f782ec0341c31353008926b8ec8584c555a6c10dcb53de'),
-    'routing': ('include_str!("../schema/routing.sql")', 'd8a0906d52ca8ca0a7c136f035d579e04ecd5cbc790de31018998190f892cd3e'),
+    'routing': ('include_str!("../schema/routing.sql")', '9d91dc1796a39a32e1e4ce7c907eabf186687c7725230bd95af3b782fcf6a2a3'),
     'events': ('include_str!("../schema/events.sql")', '99b3f6e9daa36c97fd18d515c8654310945612c0d992297b816a0405c17d5f22'),
     'charging-ledger': ('include_str!("../schema/charging_ledger.sql")', 'a06370899332ece92cf54fe0fa24df70ea532480b09a19abf99a52a30a7d24de'),
     'migration': ('include_str!("../schema/migration.sql")', '4f6264d3edff1bd7a1f80289595a9e4dea596e325be7c6f4db568d03e738c78c'),

@@ -1,358 +1,262 @@
-//! Query-credential redaction for request logs.
+//! A conservative request-target log derived from QuantumNous/new-api
+//! `30748c6558bc97de49ff74871cfec717e50f3322`.
 //!
-//! Adapted from QuantumNous/new-api `30748c65` (`SanitizeURLForLog` and the
-//! access-log formatter). The deny list is exact, case-insensitive, and
-//! whitespace-trimmed. Any other query key is kept so operators can still see
-//! `alt`, `api-version`, `model`, `stream`, `client_id`, and similar values.
-//!
-//! A key is also denied when its normalized form contains `token`, `secret`,
-//! or `signature` (`session_token`, `nottoken`, `client_secret`). `code` and
-//! `state` are not on that list. Paths under `/api/oauth/` and `/oauth/` drop
-//! the whole query, matching the upstream logger. `/api/oauth2/` does not.
-//!
-//! Access logs re-encode the query before masking, which drops invalid
-//! percent-escapes and semicolon pairs. `sanitize_url_for_log` itself follows
-//! `url.URL.Query`: if nothing sensitive remains, the original string is kept.
+//! Only bounded `model`, `alt`, `api-version` and `stream` values are retained.
+//! Every other query member, including its key, is omitted: OAuth codes,
+//! state, unknown credential names and bare query tokens are never logged.
+//! Parsing uses the existing reqwest::Url implementation. Invalid input loses
+//! the complete target rather than returning unredacted bytes. URL userinfo
+//! and fragments are always removed, and path escaping is preserved.
 
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{extract::Request, http::Uri, middleware::Next, response::Response};
+use reqwest::Url;
 
-const MASK: &str = "***masked***";
+const MAX_URL_BYTES: usize = 16_384;
+const MAX_TARGET_BYTES: usize = 1024;
+const REDACTED: &str = "[redacted-target]";
+const ORIGIN: &str = "https://redacted.invalid";
 
-const EXACT_KEYS: &[&str] = &[
-    "key",
-    "api_key",
-    "api-key",
-    "apikey",
-    "x-api-key",
-    "access_token",
-    "refresh_token",
-    "id_token",
-    "token",
-    "authorization",
-    "auth",
-    "client_secret",
-    "secret",
-    "password",
-    "passwd",
-    "signature",
-    "sig",
-    "awsaccesskeyid",
-    "x-amz-credential",
-    "x-amz-security-token",
-    "x-amz-signature",
-];
-
-/// True when a decoded query key must not be written to a log.
+/// Known credential names; the logger also omits all unlisted query members.
 pub fn is_sensitive_query_key(key: &str) -> bool {
-    let normalized = key.trim().to_lowercase();
-    EXACT_KEYS.contains(&normalized.as_str())
-        || normalized.contains("token")
-        || normalized.contains("secret")
-        || normalized.contains("signature")
+    let key = key.trim().to_ascii_lowercase();
+    matches!(
+        key.as_str(),
+        "key"
+            | "api_key"
+            | "api-key"
+            | "apikey"
+            | "x-api-key"
+            | "authorization"
+            | "auth"
+            | "password"
+            | "passwd"
+            | "sig"
+            | "awsaccesskeyid"
+            | "x-amz-credential"
+            | "code"
+            | "state"
+    ) || key.contains("token")
+        || key.contains("secret")
+        || key.contains("signature")
 }
 
-/// Mask sensitive query values in a URL. Non-sensitive queries, including
-/// their original key order, are returned unchanged.
+/// Remove userinfo, fragments and all query members outside the finite
+/// operational allowlist. Malformed or oversized input returns a fixed marker.
 pub fn sanitize_url_for_log(raw: &str) -> String {
-    if raw.is_empty() || has_control(raw) {
-        return raw.to_owned();
+    if raw.is_empty() {
+        return String::new();
     }
-    let (base, fragment) = match split_once_char(raw, '#') {
-        Some((base, fragment)) => (base, Some(fragment)),
-        None => (raw, None),
-    };
-    let Some((prefix, query)) = split_once_char(base, '?') else {
-        return raw.to_owned();
-    };
-    let mut pairs = parse_query(query);
-    if pairs.is_empty() || !pairs.keys().any(|key| is_sensitive_query_key(key)) {
-        return raw.to_owned();
+    if !valid_input(raw) {
+        return REDACTED.to_owned();
     }
-    for (key, values) in &mut pairs {
-        if is_sensitive_query_key(key) {
-            values.clear();
-            values.push(MASK.to_owned());
-        }
+    if raw.starts_with('?') {
+        return sanitize(raw, Form::Query);
     }
-    let mut out = format!("{prefix}?{}", encode_query(&pairs));
-    if let Some(fragment) = fragment {
-        out.push('#');
-        out.push_str(&escape(fragment, Escape::Fragment));
+    if raw.starts_with("//") {
+        return sanitize(raw, Form::Network);
     }
-    out
+    if raw.starts_with('/') {
+        return sanitize(raw, Form::Target);
+    }
+    sanitize(raw, Form::Absolute)
 }
 
-/// Request-target as it should appear in an access log.
-///
-/// OAuth callback paths lose the query. Other targets keep a re-encoded query
-/// with sensitive values replaced by `***masked***` (`*` is percent-encoded).
+/// Log an origin-form HTTP target. Unknown/credential query keys and values
+/// are omitted on every path, including OAuth callbacks and unknown routes.
 pub fn logged_request_target(target: &str) -> String {
-    let Some(parsed) = parse_request_target(target) else {
-        return strip_query(target);
-    };
-    if parsed.decoded_path.starts_with("/api/oauth/") || parsed.decoded_path.starts_with("/oauth/")
-    {
-        return parsed.decoded_path;
+    if target == "*" {
+        return "*".to_owned();
     }
-    if !parsed.had_query {
-        return parsed.decoded_path;
+    if !target.starts_with('/') || !valid_input(target) {
+        return REDACTED.to_owned();
     }
-    let encoded = encode_query(&parse_query(&parsed.raw_query));
-    let suffix = sanitize_url_for_log(&format!("?{encoded}"));
-    format!("{}{suffix}", parsed.escaped_path)
+    sanitize(target, Form::Target)
 }
 
-/// One stderr line for a request whose target carries a query. The original
-/// target is not included.
+/// A single bounded stderr line; ordinary query-less requests remain quiet.
 pub fn access_log_line(method: &str, status: u16, target: &str) -> Option<String> {
     if !target.contains('?') {
         return None;
     }
-    let mut logged = logged_request_target(target);
-    if logged.chars().count() > 1024 {
-        logged = logged.chars().take(1024).collect();
-    }
-    let logged: String = logged
-        .chars()
-        .map(|c| if c.is_control() { '_' } else { c })
-        .collect();
-    let method: String = method
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(16)
-        .collect();
-    Some(format!(
-        "core_access method={method} status={status} target={logged}"
-    ))
+    Some(format_line(method, status, &logged_request_target(target)))
 }
 
-/// Outermost access note. Query-less requests stay quiet; credential-bearing
-/// queries are masked before they reach stderr.
+/// Redact before moving the request into the handler. Only the already-safe
+/// target is retained while waiting for the final response status.
 pub async fn log_redacted_request_target(request: Request, next: Next) -> Response {
-    let method = request.method().as_str().to_owned();
-    let target = request
-        .uri()
-        .path_and_query()
-        .map(|value| value.as_str().to_owned())
-        .unwrap_or_default();
+    let method = safe_method(request.method().as_str()).to_owned();
+    let target = request.uri().path_and_query().and_then(|target| {
+        request
+            .uri()
+            .query()
+            .map(|_| logged_request_target(target.as_str()))
+    });
     let response = next.run(request).await;
-    if let Some(line) = access_log_line(&method, response.status().as_u16(), &target) {
-        eprintln!("{line}");
+    if let Some(target) = target {
+        eprintln!(
+            "{}",
+            format_line(&method, response.status().as_u16(), &target)
+        );
     }
     response
 }
 
-fn strip_query(target: &str) -> String {
-    let path = split_once_char(target, '?')
-        .map(|(path, _)| path)
-        .unwrap_or(target);
-    path.chars()
-        .map(|c| if c.is_control() { '_' } else { c })
-        .collect()
-}
-
-struct RequestTarget {
-    decoded_path: String,
-    escaped_path: String,
-    raw_query: String,
-    had_query: bool,
-}
-
-fn parse_request_target(target: &str) -> Option<RequestTarget> {
-    if target.is_empty() || has_control(target) {
-        return None;
-    }
-    // Request-targets are parsed like Go's ParseRequestURI: `#` stays in the
-    // query because the request line has no fragment.
-    let (path_raw, raw_query, had_query) = match split_once_char(target, '?') {
-        Some((path, query)) => (path, query.to_owned(), true),
-        None => (target, String::new(), false),
-    };
-    if path_raw != "*" && !path_raw.starts_with('/') {
-        return None;
-    }
-    let decoded = unescape(path_raw, Escape::Path)?;
-    let escaped_path = escaped_path(path_raw, &decoded);
-    Some(RequestTarget {
-        decoded_path: decoded,
-        escaped_path,
-        raw_query,
-        had_query,
-    })
-}
-
-fn escaped_path(raw: &str, decoded: &str) -> String {
-    if raw != "*"
-        && valid_encoded(raw, Escape::Path)
-        && unescape(raw, Escape::Path).as_deref() == Some(decoded)
-    {
-        let escaped = escape(decoded, Escape::Path);
-        if escaped != raw {
-            return raw.to_owned();
+fn safe_method(method: &str) -> &str {
+    match method {
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE" => {
+            method
         }
+        _ => "OTHER",
     }
-    if decoded == "*" {
-        return "*".to_owned();
-    }
-    escape(decoded, Escape::Path)
 }
 
-fn parse_query(query: &str) -> std::collections::BTreeMap<String, Vec<String>> {
-    let mut pairs = std::collections::BTreeMap::new();
-    if query.is_empty() {
-        return pairs;
-    }
-    for segment in query.split('&') {
-        if segment.is_empty() || segment.contains(';') {
-            continue;
-        }
-        let (key, value) = segment.split_once('=').unwrap_or((segment, ""));
-        let (Some(key), Some(value)) =
-            (unescape(key, Escape::Query), unescape(value, Escape::Query))
-        else {
-            continue;
-        };
-        pairs.entry(key).or_default().push(value);
-    }
-    pairs
+fn format_line(method: &str, status: u16, target: &str) -> String {
+    let method = safe_method(method);
+    format!("core_access method={method} status={status} target={target}")
 }
 
-fn encode_query(pairs: &std::collections::BTreeMap<String, Vec<String>>) -> String {
-    let mut out = String::new();
-    for (key, values) in pairs {
-        let key = escape(key, Escape::Query);
-        for value in values {
-            if !out.is_empty() {
-                out.push('&');
-            }
-            out.push_str(&key);
-            out.push('=');
-            out.push_str(&escape(value, Escape::Query));
-        }
-    }
-    out
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Escape {
-    Path,
+#[derive(Clone, Copy)]
+enum Form {
+    Target,
+    Absolute,
+    Network,
     Query,
-    Fragment,
 }
 
-fn has_control(value: &str) -> bool {
-    value.bytes().any(|byte| byte < 0x20 || byte == 0x7f)
-}
-
-fn split_once_char(value: &str, separator: char) -> Option<(&str, &str)> {
-    value.split_once(separator)
-}
-
-fn should_escape(byte: u8, mode: Escape) -> bool {
-    if byte.is_ascii_alphanumeric() {
+fn valid_input(raw: &str) -> bool {
+    if raw.len() > MAX_URL_BYTES || raw.chars().any(char::is_control) {
         return false;
     }
-    if matches!(byte, b'-' | b'_' | b'.' | b'~') {
-        return false;
-    }
-    if matches!(
-        byte,
-        b'$' | b'&' | b'+' | b',' | b'/' | b':' | b';' | b'=' | b'?' | b'@'
-    ) {
-        return match mode {
-            Escape::Path => byte == b'?',
-            Escape::Query => true,
-            Escape::Fragment => false,
-        };
-    }
-    if mode == Escape::Fragment && matches!(byte, b'!' | b'(' | b')' | b'*') {
-        return false;
+    let bytes = raw.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            if bytes.get(at + 1).is_none_or(|b| !b.is_ascii_hexdigit())
+                || bytes.get(at + 2).is_none_or(|b| !b.is_ascii_hexdigit())
+            {
+                return false;
+            }
+            at += 3;
+        } else {
+            at += 1;
+        }
     }
     true
 }
 
-fn escape(value: &str, mode: Escape) -> String {
-    let bytes = value.as_bytes();
-    if !bytes
-        .iter()
-        .any(|byte| should_escape(*byte, mode) || (*byte == b' ' && mode == Escape::Query))
-    {
-        return value.to_owned();
-    }
-    let mut out = String::with_capacity(bytes.len());
-    for byte in bytes {
-        if *byte == b' ' && mode == Escape::Query {
-            out.push('+');
-        } else if should_escape(*byte, mode) {
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            out.push('%');
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        } else {
-            out.push(*byte as char);
+fn sanitize(raw: &str, form: Form) -> String {
+    let original_path = if matches!(form, Form::Target) {
+        let Ok(uri) = raw.parse::<Uri>() else {
+            return REDACTED.to_owned();
+        };
+        if raw.contains('#') {
+            return REDACTED.to_owned();
         }
+        Some(uri.path().to_owned())
+    } else {
+        None
+    };
+    let input = match form {
+        Form::Target => format!("{ORIGIN}{raw}"),
+        Form::Query => format!("{ORIGIN}/{raw}"),
+        Form::Network => format!("https:{raw}"),
+        Form::Absolute => raw.to_owned(),
+    };
+    let Ok(mut url) = Url::parse(&input) else {
+        return REDACTED.to_owned();
+    };
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return REDACTED.to_owned();
     }
-    out
-}
-
-fn unescape(value: &str, mode: Escape) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                if index + 2 >= bytes.len() {
-                    return None;
-                }
-                let high = from_hex(bytes[index + 1])?;
-                let low = from_hex(bytes[index + 2])?;
-                out.push((high << 4) | low);
-                index += 3;
+    if url.set_username("").is_err() || url.set_password(None).is_err() {
+        return REDACTED.to_owned();
+    }
+    url.set_fragment(None);
+    let mut pairs: Vec<_> = url
+        .query_pairs()
+        .filter(|(key, value)| allowed_pair(key, value))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    url.set_query(None);
+    if !pairs.is_empty() {
+        url.query_pairs_mut().extend_pairs(pairs);
+    }
+    let target = match form {
+        Form::Absolute => url.to_string(),
+        Form::Network => url
+            .as_str()
+            .strip_prefix("https:")
+            .unwrap_or(REDACTED)
+            .to_owned(),
+        Form::Target => {
+            // Keep the actual escaped HTTP path, including dot segments;
+            // the URL parser's normalization must not rewrite log evidence.
+            let mut target = original_path
+                .filter(|path| path.is_ascii())
+                .unwrap_or_else(|| url.path().to_owned());
+            if let Some(query) = url.query() {
+                target.push('?');
+                target.push_str(query);
             }
-            b'+' if mode == Escape::Query => {
-                out.push(b' ');
-                index += 1;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
+            target
         }
-    }
-    String::from_utf8(out).ok()
+        Form::Query => url
+            .query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default(),
+    };
+    bounded(target)
 }
 
-fn from_hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
+fn allowed_pair(key: &str, value: &str) -> bool {
+    if is_sensitive_query_key(key) {
+        return false;
+    }
+    match key {
+        "alt" => matches!(value, "json" | "sse" | "media"),
+        "stream" => matches!(value, "true" | "false" | "0" | "1"),
+        "model" => {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.:/".contains(&b))
+        }
+        "api-version" => {
+            let bytes = value.as_bytes();
+            bytes.len() >= 10
+                && matches!(bytes.len(), 10 | 18)
+                && bytes[..10].iter().enumerate().all(|(index, b)| {
+                    if matches!(index, 4 | 7) {
+                        *b == b'-'
+                    } else {
+                        b.is_ascii_digit()
+                    }
+                })
+                && (bytes.len() == 10 || &value[10..] == "-preview")
+        }
+        _ => false,
     }
 }
 
-fn valid_encoded(value: &str, mode: Escape) -> bool {
-    value.bytes().all(|byte| {
-        matches!(
-            byte,
-            b'!' | b'$'
-                | b'&'
-                | b'\''
-                | b'('
-                | b')'
-                | b'*'
-                | b'+'
-                | b','
-                | b';'
-                | b'='
-                | b':'
-                | b'@'
-                | b'['
-                | b']'
-                | b'%'
-        ) || !should_escape(byte, mode)
-    })
+fn bounded(mut target: String) -> String {
+    const SUFFIX: &str = "...[truncated]";
+    if target.len() <= MAX_TARGET_BYTES {
+        return target;
+    }
+    let mut end = MAX_TARGET_BYTES - SUFFIX.len();
+    while !target.is_char_boundary(end) {
+        end -= 1;
+    }
+    if target.as_bytes()[end - 1] == b'%' {
+        end -= 1;
+    } else if target.as_bytes()[end - 2] == b'%' {
+        end -= 2;
+    }
+    target.truncate(end);
+    target.push_str(SUFFIX);
+    target
 }
 
 #[cfg(test)]
@@ -360,112 +264,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn access_log_matches_upstream_query_redaction_goldens() {
-        let cases = [
-            (
-                "/v1/models?%6bey=first&key=second&API-Key=third&session_token=fourth&alt=sse",
-                "/v1/models?API-Key=%2A%2A%2Amasked%2A%2A%2A&alt=sse&key=%2A%2A%2Amasked%2A%2A%2A&session_token=%2A%2A%2Amasked%2A%2A%2A",
-            ),
-            (
-                "/v1/models%23test%25?key=#secret&alt=#sse",
-                "/v1/models%23test%25?alt=%23sse&key=%2A%2A%2Amasked%2A%2A%2A",
-            ),
-            (
-                "//v1%2Fmodels?key=secret",
-                "//v1%2Fmodels?key=%2A%2A%2Amasked%2A%2A%2A",
-            ),
-            (
-                "/v1/models?key=bad%ZZ&%ZZ=bad&token=bad;other=true&alt=sse",
-                "/v1/models?alt=sse",
-            ),
-            ("/v1/models?key=bad%ZZ", "/v1/models?"),
-            (
-                "/v1/models?alt=sse&api-version=2024-02-01",
-                "/v1/models?alt=sse&api-version=2024-02-01",
-            ),
-            ("/v1/models", "/v1/models"),
-            (
-                "/%61pi/oauth/test?code=secret&state=secret",
-                "/api/oauth/test",
-            ),
-            ("/oauth/callback?code=abc&state=xyz", "/oauth/callback"),
-            (
-                "/v1?+key+=secret&model=gpt",
-                "/v1?+key+=%2A%2A%2Amasked%2A%2A%2A&model=gpt",
-            ),
-            (
-                "/v1?author=ada&authentication=no&auth=yes&alt=sse",
-                "/v1?alt=sse&auth=%2A%2A%2Amasked%2A%2A%2A&authentication=no&author=ada",
-            ),
-            (
-                "/api/oauth2/authorize?client_id=public&code=secret",
-                "/api/oauth2/authorize?client_id=public&code=secret",
-            ),
-            (
-                "/v1/models?api_key=k&apikey=k2&x-api-key=k3&refresh_token=r&id_token=i&password=p&passwd=p2&sig=s&signature=s2&awsaccesskeyid=a&x-amz-security-token=t&model=keep",
-                "/v1/models?api_key=%2A%2A%2Amasked%2A%2A%2A&apikey=%2A%2A%2Amasked%2A%2A%2A&awsaccesskeyid=%2A%2A%2Amasked%2A%2A%2A&id_token=%2A%2A%2Amasked%2A%2A%2A&model=keep&passwd=%2A%2A%2Amasked%2A%2A%2A&password=%2A%2A%2Amasked%2A%2A%2A&refresh_token=%2A%2A%2Amasked%2A%2A%2A&sig=%2A%2A%2Amasked%2A%2A%2A&signature=%2A%2A%2Amasked%2A%2A%2A&x-amz-security-token=%2A%2A%2Amasked%2A%2A%2A&x-api-key=%2A%2A%2Amasked%2A%2A%2A",
-            ),
-        ];
-        for (target, expected) in cases {
-            let logged = logged_request_target(target);
-            assert_eq!(logged, expected, "{target}");
-            for secret in ["first", "second", "third", "fourth", "sk-secret", "#secret"] {
-                if target.contains(secret) && !expected.contains(secret) {
-                    assert!(!logged.contains(secret), "{target} leaked {secret}");
-                }
+    fn credentials_and_unknown_members_are_omitted_on_every_path() {
+        for path in [
+            "/v1/models",
+            "/oauth",
+            "/oauth2/callback",
+            "/core/v1/auth/oauth/google/callback",
+            "/unknown",
+        ] {
+            let target = format!(
+                "{path}?key=synthetic-key&code=synthetic-code&state=synthetic-state&unknown=synthetic-unknown&synthetic-bare-token&model=gpt-5&alt=sse"
+            );
+            for status in [200, 401, 404, 500] {
+                let line = access_log_line("GET", status, &target).unwrap();
+                assert!(!line.contains("synthetic"), "{line}");
+                assert!(line.contains("alt=sse&model=gpt-5"), "{line}");
             }
         }
-    }
-
-    #[test]
-    fn sanitize_url_for_log_masks_keys_and_keeps_operational_queries() {
-        let masked = sanitize_url_for_log(
-            "https://example.test/v1beta/models/gemini:streamGenerateContent?alt=sse&key=sk-secret&access_token=ya29-secret&api-version=2024-02-01",
-        );
-        assert_eq!(
-            masked,
-            "https://example.test/v1beta/models/gemini:streamGenerateContent?access_token=%2A%2A%2Amasked%2A%2A%2A&alt=sse&api-version=2024-02-01&key=%2A%2A%2Amasked%2A%2A%2A"
-        );
-        assert!(!masked.contains("sk-secret"));
-        assert!(!masked.contains("ya29-secret"));
-        let aws = sanitize_url_for_log(
-            "https://example.test/path?X-Amz-Credential=credential&X-Amz-Signature=signature&session_token=session&client_secret=secret&model=gpt-test",
-        );
-        assert!(!aws.contains("=credential"));
-        assert!(!aws.contains("=signature"));
-        assert!(!aws.contains("=session"));
-        assert!(!aws.contains("=secret"));
-        assert!(aws.contains("X-Amz-Credential=%2A%2A%2Amasked%2A%2A%2A"));
-        assert!(aws.contains("model=gpt-test"));
-        let kept = "https://example.test/v1/chat/completions?api-version=2024-02-01&alt=sse";
-        assert_eq!(sanitize_url_for_log(kept), kept);
-        assert_eq!(
-            sanitize_url_for_log("https://user:pass@example.test/v1?key=sek&alt=sse"),
-            "https://user:pass@example.test/v1?alt=sse&key=%2A%2A%2Amasked%2A%2A%2A"
-        );
-        assert_eq!(
-            sanitize_url_for_log("https://example.test/v1?key=bad%ZZ"),
-            "https://example.test/v1?key=bad%ZZ"
-        );
-        assert_eq!(sanitize_url_for_log("not a url %%"), "not a url %%");
-        assert_eq!(sanitize_url_for_log(""), "");
-    }
-
-    #[test]
-    fn access_log_line_omits_plaintext_credentials_and_keeps_model() {
-        let line = access_log_line(
-            "GET",
-            401,
-            "/v1/models?key=sk-secret&token=plain-token&api_key=abc&access_token=def&secret=ghi&model=gpt-test&alt=sse",
-        )
-        .expect("query is logged");
-        for secret in ["sk-secret", "plain-token", "abc", "def", "ghi"] {
-            assert!(!line.contains(secret), "{line}");
-        }
-        assert!(line.contains("model=gpt-test"));
-        assert!(line.contains("alt=sse"));
-        assert!(line.contains("%2A%2A%2Amasked%2A%2A%2A"));
-        assert!(line.starts_with("core_access method=GET status=401 target="));
         assert!(access_log_line("GET", 200, "/health/live").is_none());
+    }
+
+    #[test]
+    fn absolute_urls_drop_userinfo_fragments_and_invalid_input() {
+        assert_eq!(
+            sanitize_url_for_log(
+                "https://synthetic-user:synthetic-pass@example.test/v1?key=synthetic-key&stream=true#synthetic-fragment"
+            ),
+            "https://example.test/v1?stream=true"
+        );
+        for raw in [
+            "https://example.test/?key=synthetic%ZZ",
+            "/v1?key=synthetic\n",
+            "/v1?model=synthetic%",
+            "not a url?key=synthetic",
+        ] {
+            assert_eq!(sanitize_url_for_log(raw), REDACTED);
+        }
+        assert_eq!(sanitize_url_for_log("?state=synthetic"), "");
+        assert_eq!(
+            sanitize_url_for_log("//user:synthetic@example.test/v1?password=synthetic"),
+            "//example.test/v1"
+        );
+    }
+
+    #[test]
+    fn operational_values_are_bounded_and_path_remains_escaped() {
+        assert_eq!(
+            logged_request_target(
+                "/core/v1/auth/oauth/google/callback%20%E2%80%A8?code=synthetic&state=synthetic&api-version=2024-02-01"
+            ),
+            "/core/v1/auth/oauth/google/callback%20%E2%80%A8?api-version=2024-02-01"
+        );
+        assert_eq!(
+            logged_request_target("//v1%2Fmodels?alt=sse"),
+            "//v1%2Fmodels?alt=sse"
+        );
+        assert_eq!(
+            logged_request_target(
+                "/v1?model=one%26key%3Dsynthetic&stream=maybe&alt=other&client_id=synthetic"
+            ),
+            "/v1"
+        );
+        let line =
+            access_log_line("GET", 401, &format!("/{}?code=synthetic", "a".repeat(2000))).unwrap();
+        assert!(line.ends_with("...[truncated]"));
+        assert!(line.len() <= MAX_TARGET_BYTES + 64);
+        assert!(!line.contains("synthetic"));
+        for separator in ['\u{2028}', '\u{2029}'] {
+            let line =
+                access_log_line("GET", 200, &format!("/oauth/{separator}?code=synthetic")).unwrap();
+            assert!(!line.contains(separator));
+            assert!(!line.contains("synthetic"));
+        }
     }
 }

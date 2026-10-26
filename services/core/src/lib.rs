@@ -54,3 +54,6 @@ pub mod usage;
 pub mod wallet;
 
 pub mod humangrant;
+
+#[cfg(test)]
+mod independent_966_log_tests;
