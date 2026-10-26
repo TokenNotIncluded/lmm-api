@@ -240,15 +240,15 @@ release 构建。`SOURCE_BINDING.files` 恰好覆盖资源入口的 `PRODUCT_TRE
 和二进制摘要。基本来源格式见[普通模型流程入口](../scripts/verify_model_process.py)。
 `PROCESS_ROOT` 须为空、权限 0700、路径长度不超过 35 字节。示例变量只指向自有测试目录：
 
+先确认这些目录只由本轮任务使用；并行重型构建继续使用现有合作式资源租约。
+按以下命令直接运行，不需要额外的文件跟踪包装：
+
 ```sh
-agcc run --agent core-resource-prepare --root services/core/target \
-  --root "$RESOURCE_OUTPUT" --root "$BUILD_REQUESTS" -- \
-  python3 -B scripts/verify_model_resources.py prepare \
+python3 -B scripts/verify_model_resources.py prepare \
   --output "$RESOURCE_OUTPUT" --resource "$BUILD_RESOURCE" --requests "$BUILD_REQUESTS" \
   --core-binary "$CORE_BIN" --source-binding "$SOURCE_BINDING" --build-receipt "$BUILD_RECEIPT"
 
-agcc run --agent core-resource-run --root "$RESOURCE_OUTPUT" --root "$PROCESS_ROOT" -- \
-  python3 -B scripts/verify_model_resources.py run --output "$RESOURCE_OUTPUT" \
+python3 -B scripts/verify_model_resources.py run --output "$RESOURCE_OUTPUT" \
   --process-root "$PROCESS_ROOT" --prepared-sha256 "$PREPARED_SHA256"
 ```
 
@@ -324,7 +324,7 @@ Hyper 原生10秒期限。已解析请求的 SSE、HTTP/2 和升级连接没有�
 [`verify_public_ingress.py`](../scripts/verify_public_ingress.py)。
 脚本接受 `--mode unit|red|green`，要求指定封存 Core、测试程序及各自 SHA256，
 同时提供 Core 的 `--source-binding` 和 `--build-receipt`。`--output` 与
-`--process-root` 必须是新建、空的私有目录；写入前用 agcc 覆盖这些目录。
+`--process-root` 必须是新建、空的私有目录，并确认只由本轮任务使用。
 完整参数见 `python3 -B scripts/verify_public_ingress.py --help`。
 脚本只创建自有隔离 PostgreSQL，不使用已有站点数据库；失败 fixture 保留供排查。
 
