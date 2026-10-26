@@ -293,12 +293,23 @@ fn owned_database_name(database: &str) -> &str {
     database
 }
 
+async fn release_pool(pool: PgPool) {
+    // close() only waits for connections the pool still tracks. A just-finished
+    // query returns its backend on a spawned task, and that task cannot send
+    // Terminate while this runtime is blocked inside docker. Drop the handle,
+    // then poll, before any blocking probe.
+    pool.close().await;
+    drop(pool);
+    tokio::task::yield_now().await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+}
+
 async fn wait_for_no_clients(fixture: &OwnedFixture, database: &str) {
-    // SQLx has closed its sockets, but backend exit can lag pool.close().
-    // One session has to observe that drain: a fresh psql per poll stays in
+    // One session has to observe the drain: a fresh psql per poll stays in
     // pg_stat_activity and the next poll counts it. The offline writer rejects
     // any other backend in its own database, so that is the only set that
-    // matters. Never terminate clients to manufacture exclusivity.
+    // matters. Never terminate clients to manufacture exclusivity. The probe
+    // itself runs off the test runtime so a slow reap cannot block Terminate.
     let database = owned_database_name(database);
     let sql = format!(
         "DO $$\n\
@@ -322,22 +333,27 @@ async fn wait_for_no_clients(fixture: &OwnedFixture, database: &str) {
            END IF;\n\
          END $$;"
     );
-    let clients = docker(&[
-        "exec",
-        &fixture.id,
-        "psql",
-        "-X",
-        "--no-password",
-        "-qAt",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
-        "postgres",
-        "-d",
-        "postgres",
-        "-c",
-        &sql,
-    ]);
+    let container_id = fixture.id.clone();
+    let clients = tokio::task::spawn_blocking(move || {
+        docker(&[
+            "exec",
+            &container_id,
+            "psql",
+            "-X",
+            "--no-password",
+            "-qAt",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-c",
+            &sql,
+        ])
+    })
+    .await
+    .expect("drain probe");
     assert!(
         clients.status.success(),
         "retain owned fixture with active clients after bounded drain: {} {}",
@@ -353,8 +369,8 @@ async fn finish_fixture(pool: PgPool) {
         .unwrap()
         .to_string();
     let database = pool.connect_options().get_database().unwrap().to_string();
-    pool.close().await;
     let fixture = verify_owned_container(&container);
+    release_pool(pool).await;
     wait_for_no_clients(&fixture, &database).await;
     let result = docker(&["rm", "--force", "--volumes", &fixture.id]);
     assert!(result.status.success(), "owned fixture cleanup failed");
@@ -615,8 +631,8 @@ async fn run_writer_sql(options: &PgConnectOptions, sql: &str) -> Result<String,
 async fn apply_writer_sql(pool: PgPool, sql: &str) -> (Result<String, String>, PgPool) {
     let options = (*pool.connect_options()).clone();
     let database = options.get_database().unwrap().to_string();
-    pool.close().await;
     let fixture = verify_owned_container(options.get_application_name().unwrap());
+    release_pool(pool).await;
     wait_for_no_clients(&fixture, &database).await;
     let result = run_writer_sql(&options, sql).await;
     let pool = PgPool::connect_with(options).await.unwrap();
