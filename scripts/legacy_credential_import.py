@@ -390,8 +390,10 @@ def verify_source_files(material: dict) -> None:
 def native_users_sql() -> str:
     return """SELECT coalesce(jsonb_agg(jsonb_build_object('user_id',u.id,'personal_account_id',u.personal_account_id,
  'auth_version',u.auth_version,'active',u.active AND a.active,
- 'developer_access_granted',coalesce(d.granted,false),'routing_groups',coalesce((SELECT jsonb_agg(group_name ORDER BY group_name)
- FROM core_identity.user_routing_groups g WHERE g.user_id=u.id AND g.enabled),'[]'::jsonb)) ORDER BY u.id),'[]'::jsonb)
+ 'developer_access_granted',coalesce(d.granted,false),'routing_groups',coalesce((SELECT jsonb_agg(ug.group_name ORDER BY ug.group_name)
+ FROM core_identity.user_routing_groups ug JOIN routing_active_release r ON r.singleton
+ JOIN routing_groups g ON g.version=r.config_version AND g.name=ug.group_name
+ WHERE ug.user_id=u.id AND ug.enabled AND g.enabled),'[]'::jsonb)) ORDER BY u.id),'[]'::jsonb)
  FROM core_identity.users u JOIN core_identity.accounts a ON a.id=u.personal_account_id AND a.kind='personal'
  LEFT JOIN core_identity.developer_access d ON d.user_id=u.id"""
 
