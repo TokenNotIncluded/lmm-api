@@ -144,12 +144,39 @@ pub struct ModelGroup {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PayloadPolicy {
     /// Same wire protocol AND exact model name. Do not alter the request body.
     Passthrough,
     /// Task 05 may use its explicit protocol/model-name adapter. No parameter downgrade.
     Adapt,
+    /// Explicit type-1 OpenAI HTTP filtering. Unset flags remove only these fields.
+    LegacyOpenai {
+        #[serde(default)]
+        allow_service_tier: bool,
+        #[serde(default)]
+        allow_inference_geo: bool,
+        #[serde(default)]
+        allow_speed: bool,
+        #[serde(default)]
+        allow_safety_identifier: bool,
+        #[serde(default)]
+        allow_include_obfuscation: bool,
+    },
+}
+
+impl PayloadPolicy {
+    /// Compatibility is an adapter only within the selected OpenAI wire protocol.
+    pub(crate) fn adapts(self, client: Protocol, upstream: Protocol) -> bool {
+        match self {
+            Self::Adapt => true,
+            Self::Passthrough => false,
+            Self::LegacyOpenai { .. } => {
+                client == upstream
+                    && matches!(client, Protocol::OpenAiChat | Protocol::OpenAiResponses)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

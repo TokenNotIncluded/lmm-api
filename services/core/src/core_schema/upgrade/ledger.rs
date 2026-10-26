@@ -55,8 +55,11 @@ pub(super) fn validate(r: &UpgradeRequest) -> Result<(), UpgradeError> {
     {
         return Err(reject("UPGRADE_DB_ROLES_INVALID"));
     }
-    predecessor_components()?;
     Ok(())
+}
+
+pub(super) fn authorize_target() -> Result<(), UpgradeError> {
+    predecessor_components().map(|_| ())
 }
 
 fn predecessor_components() -> Result<BTreeMap<String, String>, UpgradeError> {
@@ -68,6 +71,8 @@ fn predecessor_components() -> Result<BTreeMap<String, String>, UpgradeError> {
     for component in &mut producer.components {
         if component.name == "ledger" {
             component.raw_schema_sha256 = PRE_LEDGER.into();
+        } else if component.name == "routing" {
+            component.raw_schema_sha256 = PRE_ROUTING.into();
         }
     }
     let mut installer = Sha256::new();
@@ -402,12 +407,15 @@ mod tests {
         validate(&good).unwrap();
         let bytes = serde_json::to_vec(&good).unwrap();
         assert_eq!(
-            UpgradeRequest::read(&bytes[..]).unwrap().digest().unwrap(),
+            UpgradeRequest::read_fields(&bytes[..])
+                .unwrap()
+                .digest()
+                .unwrap(),
             good.digest().unwrap()
         );
         let mut bad = serde_json::to_value(&good).unwrap();
         bad["sql"] = serde_json::json!("arbitrary SQL");
-        assert!(UpgradeRequest::read(&serde_json::to_vec(&bad).unwrap()[..]).is_err());
+        assert!(UpgradeRequest::read_fields(&serde_json::to_vec(&bad).unwrap()[..]).is_err());
         for change in [0, 1, 2, 3, 4] {
             let mut bad = good.clone();
             match change {

@@ -6,8 +6,8 @@ use crate::{
         UpstreamProtocol,
     },
     routing::{
-        Attempt, CredentialRef, CreditQuote, CreditRate, PayloadPolicy, PriceQuote, Protocol,
-        ReplayPermission, RouteRequest,
+        Attempt, CredentialRef, CreditQuote, CreditRate, PriceQuote, Protocol, ReplayPermission,
+        RouteRequest,
     },
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -281,7 +281,9 @@ impl RouteProvider for Bridge {
                 }
             }
             if !attempt.is_available()
-                || attempt.payload_policy() != PayloadPolicy::Adapt
+                || !attempt
+                    .payload_policy()
+                    .adapts(protocol, attempt.protocol())
                 || u128::from(attempt.timeout_ms()) < self.total_timeout.as_millis()
             {
                 return Err(RelayError::RouteUnavailable);
@@ -343,6 +345,7 @@ impl RouteProvider for Bridge {
                 secret,
                 attempt.quote().version(),
             )?
+            .with_payload_policy(attempt.payload_policy())
             .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));
             let mut active = self
