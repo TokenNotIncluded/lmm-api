@@ -295,13 +295,16 @@ fn owned_database_name(database: &str) -> &str {
 
 async fn release_pool(pool: PgPool) {
     // close() only waits for connections the pool still tracks. A just-finished
-    // query returns its backend on a spawned task, and that task cannot send
-    // Terminate while this runtime is blocked inside docker. Drop the handle,
-    // then poll, before any blocking probe.
+    // query returns its backend on a spawned task. If another handle still
+    // owns the pool, a task that misses close() puts that backend back in the
+    // idle queue and it stays connected. Callers must drop every other clone
+    // first. Then poll until those tasks finish and drop the inner pool.
     pool.close().await;
     drop(pool);
-    tokio::task::yield_now().await;
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 }
 
 async fn wait_for_no_clients(fixture: &OwnedFixture, database: &str) {
@@ -717,6 +720,7 @@ async fn identity_store_real_key_issuance_and_digest_binding() {
         )
         .await
         .unwrap();
+    drop(store);
 
     assert!(key.id > 0);
     assert!(key.secret.starts_with("lmmk_"));
@@ -766,6 +770,7 @@ async fn offline_writer_plan_and_charging_engine_admission() {
         .unwrap();
 
     let payer = store.authorize(&key.secret).await.unwrap().owner_account_id;
+    drop(store);
 
     let ledger = Ledger::from_pool(pool.clone());
     ledger.open_wallet(payer).await.unwrap();
@@ -783,6 +788,7 @@ async fn offline_writer_plan_and_charging_engine_admission() {
         })
         .await
         .unwrap();
+    drop(ledger);
 
     let secret_hash = format!("{:x}", Sha256::digest(key.secret.as_bytes()));
     let target_receipt = get_target_receipt(&pool).await;
@@ -883,6 +889,7 @@ async fn offline_writer_plan_and_charging_engine_admission() {
         .expect("Reservation within updated remaining capacity must succeed");
     drop(charging);
     runtime_pool.close().await;
+    drop(runtime_pool);
     finish_fixture(pool).await;
 }
 
@@ -924,6 +931,7 @@ async fn refuse_cross_key_and_cross_account_borrowing() {
         .await
         .unwrap()
         .owner_account_id;
+    drop(store);
 
     let ledger = Ledger::from_pool(pool.clone());
     for (uid, payer) in [(5001, payer1), (5002, payer2)] {
@@ -943,6 +951,7 @@ async fn refuse_cross_key_and_cross_account_borrowing() {
             .await
             .unwrap();
     }
+    drop(ledger);
 
     let target_receipt = get_target_receipt(&pool).await;
     let sec1_hash = format!("{:x}", Sha256::digest(key1.secret.as_bytes()));
@@ -1025,6 +1034,7 @@ async fn refuse_cross_key_and_cross_account_borrowing() {
     );
     drop(charging);
     runtime_pool.close().await;
+    drop(runtime_pool);
     finish_fixture(pool).await;
 }
 
@@ -1045,6 +1055,7 @@ async fn finite_unlimited_switching_does_not_clear_consumed_credits() {
         .unwrap();
 
     let payer = store.authorize(&key.secret).await.unwrap().owner_account_id;
+    drop(store);
     let target_receipt = get_target_receipt(&pool).await;
     let sec_hash = format!("{:x}", Sha256::digest(key.secret.as_bytes()));
 
@@ -1156,6 +1167,7 @@ async fn competing_client_rejected_and_strict_replay() {
         .unwrap();
 
     let payer = store.authorize(&key.secret).await.unwrap().owner_account_id;
+    drop(store);
     let target_receipt = get_target_receipt(&pool).await;
     let sec_hash = format!("{:x}", Sha256::digest(key.secret.as_bytes()));
 
@@ -1284,6 +1296,7 @@ async fn injected_failure_marker_rolls_back_every_table_and_sequence() {
         .unwrap();
 
     let payer = store.authorize(&key.secret).await.unwrap().owner_account_id;
+    drop(store);
     let seq_before: (i64, bool) =
         sqlx::query_as("SELECT last_value, is_called FROM core_charging.budgets_id_seq")
             .fetch_one(&pool)
@@ -1389,6 +1402,7 @@ async fn unknown_import_queries_by_original_migration_id() {
         .unwrap();
 
     let payer = store.authorize(&key.secret).await.unwrap().owner_account_id;
+    drop(store);
     let target_receipt = get_target_receipt(&pool).await;
     let sec_hash = format!("{:x}", Sha256::digest(key.secret.as_bytes()));
 
