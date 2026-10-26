@@ -148,10 +148,7 @@ impl Encoder {
         let text = if empty { "" } else { &b.text };
         let status = if empty {
             "in_progress"
-        } else if matches!(
-            self.finish,
-            Some(FinishReason::Length | FinishReason::ContentFilter)
-        ) {
+        } else if self.finish.is_some_and(FinishReason::truncates_output) {
             "incomplete"
         } else {
             "completed"
@@ -174,11 +171,7 @@ impl Encoder {
         item
     }
     fn response(&self, initial: bool) -> Value {
-        let incomplete = !initial
-            && matches!(
-                self.finish,
-                Some(FinishReason::Length | FinishReason::ContentFilter)
-            );
+        let incomplete = !initial && self.finish.is_some_and(FinishReason::truncates_output);
         let status = if initial {
             "in_progress"
         } else if incomplete {
@@ -187,7 +180,7 @@ impl Encoder {
             "completed"
         };
         json!({"id":self.id,"object":"response","created_at":self.created,"status":status,"model":self.model,
-            "error":Value::Null,"incomplete_details":if incomplete {json!({"reason":if self.finish == Some(FinishReason::Length) {"max_output_tokens"} else {"content_filter"}})} else {Value::Null},
+            "error":Value::Null,"incomplete_details":if incomplete {json!({"reason":self.finish.map(FinishReason::responses_incomplete_reason)})} else {Value::Null},
             "output":if initial {vec![]} else {(0..self.blocks.len()).map(|i|self.item(i,false)).collect::<Vec<_>>()},
             "usage":if initial {Value::Null} else {self.usage.wire(ClientProtocol::Responses)},"store":false})
     }
@@ -348,6 +341,17 @@ impl Encoder {
                         json!({"content_details":[{"index":index,"type":"signature_delta","protocol":provider,"signature":value}]})
                     };
                     out.push(self.chat_chunk(delta, None)?);
+                }
+            }
+            Event::ContinuationToken(token) => {
+                // Chat and Responses have no Long Decode field. CONTINUATION is
+                // already `finish_reason=length`; do not invent a token key.
+                if !self.started
+                    || token.is_empty()
+                    || token.len() > self.limits.event_bytes
+                    || token.chars().any(char::is_control)
+                {
+                    return Err(RelayError::Protocol("invalid Gemini continuation token"));
                 }
             }
             Event::StopSequence(sequence) => {
@@ -544,10 +548,7 @@ impl Encoder {
                         json!({"output_index":i,"item":self.item(i,false)}),
                     )?);
                 }
-                let kind = if matches!(
-                    self.finish,
-                    Some(FinishReason::Length | FinishReason::ContentFilter)
-                ) {
+                let kind = if self.finish.is_some_and(FinishReason::truncates_output) {
                     "response.incomplete"
                 } else {
                     "response.completed"
