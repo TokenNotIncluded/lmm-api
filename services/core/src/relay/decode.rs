@@ -26,7 +26,9 @@ pub(crate) struct Decoder {
     finish: Option<FinishReason>,
     blocks: BTreeMap<Key, Slot>,
     max_blocks: usize,
+    event_bytes: usize,
     gemini_calls: u64,
+    continuation_token: Option<String>,
 }
 fn text(v: &Value) -> Result<&str, RelayError> {
     v.as_str()
@@ -272,6 +274,9 @@ fn finish_reason(
         (UpstreamProtocol::Chat, "length")
         | (UpstreamProtocol::Anthropic, "max_tokens")
         | (UpstreamProtocol::Gemini, "MAX_TOKENS") => Ok(FinishReason::Length),
+        // Long Decode stopped at the provider hop limit. OpenAI `length` is the
+        // compatible signal; native Gemini re-emits CONTINUATION with the token.
+        (UpstreamProtocol::Gemini, "CONTINUATION") => Ok(FinishReason::Continuation),
         (UpstreamProtocol::Chat, "content_filter")
         | (UpstreamProtocol::Anthropic, "refusal")
         | (
@@ -344,7 +349,9 @@ impl Decoder {
             finish: None,
             blocks: BTreeMap::new(),
             max_blocks: limits.max_blocks,
+            event_bytes: limits.event_bytes,
             gemini_calls: 0,
+            continuation_token: None,
         }
     }
 
@@ -457,6 +464,25 @@ impl Decoder {
     ) -> Result<(), RelayError> {
         self.block(key, kind, out)?;
         self.delta(key, value, out)
+    }
+    fn continuation(&mut self, token: &str, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        if token.is_empty() {
+            return Ok(());
+        }
+        if token.len() > self.event_bytes || token.chars().any(char::is_control) {
+            return Err(RelayError::Protocol("invalid Gemini continuation token"));
+        }
+        match &self.continuation_token {
+            Some(existing) if existing == token => Ok(()),
+            Some(_) => Err(RelayError::Protocol(
+                "conflicting Gemini continuation token",
+            )),
+            None => {
+                self.continuation_token = Some(token.to_owned());
+                out.push(Event::ContinuationToken(token.to_owned()));
+                Ok(())
+            }
+        }
     }
     fn signature(&self, key: Key, value: &str, out: &mut Vec<Event>) -> Result<(), RelayError> {
         let s = self
@@ -1050,6 +1076,9 @@ impl Decoder {
                         self.signature(key, text(s)?, out)?;
                     }
                 }
+            }
+            if let Some(token) = c.get("continuationToken").filter(|v| !v.is_null()) {
+                self.continuation(text(token)?, out)?;
             }
             if let Some(r) = c.get("finishReason") {
                 self.finish(finish_reason(self.protocol, text(r)?, self.tools())?, out)?;
