@@ -23,6 +23,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StoreIcon } from '@/components/layout/components/store-icon'
+import { LmmPluginLogo } from '@/components/lmm-plugin-logo'
 import { Button } from '@/components/ui/button'
 import {
   InputGroup,
@@ -374,7 +375,10 @@ export function ForgeHome() {
           <div className='lmm-provider-list'>
             <section className='lmm-provider-item'>
               <div className='lmm-provider-heading'>
-                <strong>Pi</strong>
+                <div className='flex items-center gap-2.5'>
+                  <LmmPluginLogo plugin='pi' />
+                  <strong>Pi</strong>
+                </div>
                 <span>OAuth 2.0 / PKCE</span>
               </div>
               <p className='lmm-pi-description'>
@@ -404,7 +408,10 @@ export function ForgeHome() {
 
             <section className='lmm-provider-item'>
               <div className='lmm-provider-heading'>
-                <strong>DSH</strong>
+                <div className='flex items-center gap-2.5'>
+                  <LmmPluginLogo plugin='dsh' />
+                  <strong>DSH</strong>
+                </div>
                 <span>OAuth 2.0 / PKCE</span>
               </div>
               <p className='lmm-pi-description'>{t('Install DSH plugin')}</p>
@@ -432,7 +439,10 @@ export function ForgeHome() {
 
             <section className='lmm-provider-item'>
               <div className='lmm-provider-heading'>
-                <strong>Codewhale</strong>
+                <div className='flex items-center gap-2.5'>
+                  <LmmPluginLogo plugin='codewhale' />
+                  <strong>Codewhale</strong>
+                </div>
                 <span>Companion adapter</span>
               </div>
               <p className='lmm-pi-description'>
