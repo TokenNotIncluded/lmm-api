@@ -346,9 +346,7 @@ impl IdentityStore {
         let user_id = match existing {
             Some(id) => id,
             None => {
-                if !self.registration_enabled {
-                    return Err(IdentityError::Forbidden);
-                }
+                self.require_oauth_registration("google")?;
                 let id = auth::create_user(tx).await?;
                 sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed,email) VALUES ($1,$2,$2,FALSE,$3)")
                     .bind(id).bind(format!("g_{}",&new_secret("")?[..18])).bind(identity.verified_email().unwrap_or("")).execute(&mut *tx).await?;

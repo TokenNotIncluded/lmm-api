@@ -87,9 +87,7 @@ impl BrowserAuth {
         Ok(value)
     }
     pub async fn register(&self, input: &BrowserRegistration<'_>) -> BrowserResult<()> {
-        if !self.store.registration_enabled {
-            return Err(IdentityError::Forbidden.into());
-        }
+        self.store.require_password_registration()?;
         let username = input.username.trim();
         let email = input.email.trim();
         if username.is_empty()

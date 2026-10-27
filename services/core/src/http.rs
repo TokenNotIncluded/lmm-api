@@ -110,7 +110,10 @@ pub struct Capabilities {
 pub struct PublicStatus {
     pub password_login_enabled: bool,
     pub two_factor_enabled: bool,
+    pub registration_enabled: bool,
     pub password_register_enabled: bool,
+    pub oauth_register_enabled: bool,
+    pub oauth_registration_disabled_methods: Vec<String>,
     pub user_agreement_enabled: bool,
     pub privacy_policy_enabled: bool,
     /// Only set after the browser callback, origin and cookie bridge match.
@@ -121,6 +124,13 @@ pub struct PublicStatus {
     pub linuxdo_client_id: Option<String>,
     pub discord_client_id: Option<String>,
     pub telegram_bot_name: Option<String>,
+}
+
+fn oauth_method_enabled(status: &PublicStatus, method: &str) -> bool {
+    !status
+        .oauth_registration_disabled_methods
+        .iter()
+        .any(|disabled| disabled == method)
 }
 
 #[derive(Clone)]
@@ -209,14 +219,20 @@ async fn public_status_response(State(state): State<Readiness>, headers: HeaderM
     let mut data = json!({
             "system_name":"LMM API","version":env!("CARGO_PKG_VERSION"),
             "password_login_enabled":status.password_login_enabled,
-            "register_enabled":status.password_register_enabled,
+            "register_enabled":status.registration_enabled,
             "password_register_enabled":status.password_register_enabled,
+            "oauth_registration_disabled_methods":status.oauth_registration_disabled_methods,
             "user_agreement_enabled":status.user_agreement_enabled,
             "privacy_policy_enabled":status.privacy_policy_enabled,
             "google_oauth":google_enabled,"google_client_id":google_client_id,
             "google_browser_callback":status.google_browser_callback,
             "external_oauth_browser":true,
-            "oauth_register_enabled":(google_enabled || status.github_client_id.is_some() || status.linuxdo_client_id.is_some() || status.discord_client_id.is_some()) && status.password_register_enabled,
+            "oauth_register_enabled":status.registration_enabled && status.oauth_register_enabled && (
+                (google_enabled && oauth_method_enabled(&status, "google"))
+                || (status.github_client_id.is_some() && oauth_method_enabled(&status, "github"))
+                || (status.linuxdo_client_id.is_some() && oauth_method_enabled(&status, "linuxdo"))
+                || (status.discord_client_id.is_some() && oauth_method_enabled(&status, "discord"))
+            ),
             "github_oauth":status.github_client_id.is_some(),"github_client_id":status.github_client_id,
             "discord_oauth":status.discord_client_id.is_some(),"discord_client_id":status.discord_client_id,
             "oidc_enabled":false,"linuxdo_oauth":status.linuxdo_client_id.is_some(),"linuxdo_client_id":status.linuxdo_client_id,
@@ -429,7 +445,11 @@ mod tests {
                 None,
                 PublicStatus {
                     google_client_id: client_id.map(str::to_owned),
+                    github_client_id: Some("public-github-client".to_owned()),
+                    registration_enabled: registration,
                     password_register_enabled: registration,
+                    oauth_register_enabled: registration,
+                    oauth_registration_disabled_methods: vec!["github".to_owned()],
                     ..PublicStatus::default()
                 },
             );
@@ -467,7 +487,13 @@ mod tests {
             let body: Value = serde_json::from_slice(&bytes).unwrap();
             let data = &body["data"];
             assert_eq!(data["google_oauth"], enabled);
+            assert_eq!(data["github_oauth"], true);
+            assert_eq!(data["register_enabled"], registration);
             assert_eq!(data["oauth_register_enabled"], enabled && registration);
+            assert_eq!(
+                data["oauth_registration_disabled_methods"],
+                json!(["github"])
+            );
             assert_eq!(
                 data["google_client_id"],
                 if enabled { client_id.unwrap() } else { "" }

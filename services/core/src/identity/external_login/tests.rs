@@ -433,34 +433,40 @@ async fn callback_is_consumed_once_after_success_provider_rejection_and_network_
 async fn disabled_registration_accepts_known_subject_and_denies_unknown_without_partial_user(
     pool: PgPool,
 ) {
-    let github = ProviderServer::start(ExternalProvider::Github).await;
-    let store = setup(&pool)
-        .await
-        .with_external_oauth(github.config())
-        .unwrap();
-    let original = login(&browser(&store), ExternalProvider::Github, "existing").await;
-    let closed = store.clone().with_registration_enabled(false);
-    let closed_browser = browser(&closed);
-    let known = login(&closed_browser, ExternalProvider::Github, "existing").await;
-    assert_eq!(user(&known), user(&original));
-    let before = counts(&pool).await;
-    let state = begin(&closed_browser, ExternalProvider::Github).await;
-    assert!(matches!(
-        finish(&closed_browser, ExternalProvider::Github, &state, "unknown").await,
-        Err(MfaError::Identity(IdentityError::Forbidden))
-    ));
-    assert_eq!(counts(&pool).await, before);
-    assert!(matches!(
-        finish(
-            &closed_browser,
-            ExternalProvider::Github,
-            &state,
-            "existing"
-        )
-        .await,
-        Err(MfaError::Identity(IdentityError::Unauthorized))
-    ));
-    assert_eq!(github.calls(), (3, 3));
+    let base = setup(&pool).await;
+    for provider in [
+        ExternalProvider::Github,
+        ExternalProvider::LinuxDo,
+        ExternalProvider::Discord,
+    ] {
+        let server = ProviderServer::start(provider).await;
+        let store = base.clone().with_external_oauth(server.config()).unwrap();
+        let original = login(&browser(&store), provider, "existing").await;
+        for closed in [
+            store.clone().with_registration_enabled(false),
+            store.clone().with_oauth_register_enabled(false),
+            store
+                .clone()
+                .with_oauth_registration_disabled_methods(&[provider.slug().to_owned()])
+                .unwrap(),
+        ] {
+            let closed_browser = browser(&closed);
+            let known = login(&closed_browser, provider, "existing").await;
+            assert_eq!(user(&known), user(&original));
+            let before = counts(&pool).await;
+            let state = begin(&closed_browser, provider).await;
+            assert!(matches!(
+                finish(&closed_browser, provider, &state, "unknown").await,
+                Err(MfaError::Identity(IdentityError::Forbidden))
+            ));
+            assert_eq!(counts(&pool).await, before);
+            assert!(matches!(
+                finish(&closed_browser, provider, &state, "existing").await,
+                Err(MfaError::Identity(IdentityError::Unauthorized))
+            ));
+        }
+        assert_eq!(server.calls(), (7, 7));
+    }
 }
 
 #[sqlx::test(migrations = false)]
