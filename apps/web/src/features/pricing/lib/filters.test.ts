@@ -16,7 +16,7 @@ import {
   SORT_OPTIONS,
 } from '../constants'
 import type { PricingModel } from '../types'
-import { filterAndSortModels } from './filters'
+import { filterAndSortModels, sortModels } from './filters'
 
 function model(
   id: number,
@@ -44,6 +44,46 @@ const noOtherFilters = {
 }
 
 describe('pricing model filters', () => {
+  test('price sorting leaves dynamic expressions after scalar prices without using stale legacy fields', () => {
+    const cheap = {
+      ...model(1, 'cheap', 'Alpha', ['all']),
+      quota_type: 1,
+      model_price: 1,
+    }
+    const expensive = {
+      ...model(2, 'expensive', 'Alpha', ['all']),
+      quota_type: 1,
+      model_price: 10,
+    }
+    const fixed = {
+      ...model(3, 'fixed', 'Alpha', ['all']),
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("a", fixed(0))',
+      model_price: 0,
+    }
+    const token = {
+      ...model(4, 'token', 'Alpha', ['all']),
+      quota_type: 1,
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("a", p * 2)',
+      model_price: 100,
+    }
+    const input = [fixed, expensive, token, cheap]
+    assert.deepEqual(sortModels(input, SORT_OPTIONS.PRICE_LOW), [
+      cheap,
+      expensive,
+      fixed,
+      token,
+    ])
+    assert.deepEqual(sortModels(input, SORT_OPTIONS.PRICE_HIGH), [
+      expensive,
+      cheap,
+      fixed,
+      token,
+    ])
+    assert.deepEqual(input, [fixed, expensive, token, cheap])
+  })
+
   test('combines provider and group filters', () => {
     const models = [
       model(1, 'alpha-standard', 'Alpha', ['standard']),

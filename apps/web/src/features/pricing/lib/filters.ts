@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { classifyBillingExpression } from './billing-expr'
 import { getTokenPriceUSD } from './price'
 
 // ----------------------------------------------------------------------------
@@ -77,6 +78,20 @@ export function filterByGroup(
   )
 }
 
+/** Pricing category shared by the quota filter and sidebar counts. */
+export function getModelQuotaType(model: PricingModel): string | undefined {
+  if (model.quota_type === QUOTA_TYPE_VALUES.UPSTREAM_COST) {
+    return QUOTA_TYPES.UPSTREAM_COST
+  }
+  if (model.billing_mode === 'tiered_expr' && model.billing_expr) {
+    const category = classifyBillingExpression(model.billing_expr)
+    if (category !== null) return category
+  }
+  if (model.quota_type === QUOTA_TYPE_VALUES.TOKEN) return QUOTA_TYPES.TOKEN
+  if (model.quota_type === QUOTA_TYPE_VALUES.REQUEST) return QUOTA_TYPES.REQUEST
+  return undefined
+}
+
 /**
  * Filter models by quota type
  */
@@ -85,13 +100,7 @@ export function filterByQuotaType(
   quotaType: string
 ): PricingModel[] {
   if (quotaType === QUOTA_TYPES.ALL) return models
-  const targetType =
-    quotaType === QUOTA_TYPES.UPSTREAM_COST
-      ? QUOTA_TYPE_VALUES.UPSTREAM_COST
-      : quotaType === QUOTA_TYPES.TOKEN
-        ? QUOTA_TYPE_VALUES.TOKEN
-        : QUOTA_TYPE_VALUES.REQUEST
-  return models.filter((m) => m.quota_type === targetType)
+  return models.filter((model) => getModelQuotaType(model) === quotaType)
 }
 
 /**
@@ -111,6 +120,8 @@ export function filterByEndpointType(
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number | null {
+  // Expressions need request context; legacy scalar fields are not a quote.
+  if (model.billing_mode === 'tiered_expr') return null
   const price =
     model.quota_type === 0
       ? getTokenPriceUSD(model, 'input')
