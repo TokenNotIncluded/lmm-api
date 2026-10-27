@@ -34,6 +34,8 @@ pub fn router(store: HistoryStore) -> Router {
         .route("/api/log/stat", get(stats))
         .route("/api/log/token", get(token_logs))
         .route("/api/finance/export", get(export_usage))
+        .route("/api/finance/site-statistics", get(site_statistics))
+        .route("/api/perf-metrics/summary", get(performance_summary))
         .route("/api/mj", get(drawing_admin))
         .route("/api/mj/", get(drawing_admin))
         .route("/api/mj/self", get(drawing_self))
@@ -44,6 +46,65 @@ pub fn router(store: HistoryStore) -> Router {
         .route("/api/task/self/", get(task_self))
         .with_state(store)
         .layer(middleware::from_fn(no_store))
+}
+
+async fn site_statistics(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    statistics_unavailable(
+        store,
+        headers,
+        ReadRoute::Administrator,
+        "SITE_STATISTICS_SOURCE_UNAVAILABLE",
+        "Site statistics require verified historical credit totals and original payment evidence",
+        &[
+            "historical_credit_totals_with_conversion_basis",
+            "historical_top_ups_with_original_currency_paid_and_refunded_amounts",
+        ],
+    )
+    .await
+}
+
+async fn performance_summary(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    statistics_unavailable(
+        store,
+        headers,
+        ReadRoute::SelfSession,
+        "PERFORMANCE_METRICS_SOURCE_UNAVAILABLE",
+        "Performance statistics require imported historical metrics and native performance samples",
+        &["historical_perf_metrics", "native_performance_samples"],
+    )
+    .await
+}
+
+/// Keep missing observations explicit: wallet credits are not payment evidence,
+/// and request settlement records do not establish latency or generation time.
+async fn statistics_unavailable(
+    store: HistoryStore,
+    headers: HeaderMap,
+    route: ReadRoute,
+    code: &'static str,
+    message: &'static str,
+    missing_sources: &'static [&'static str],
+) -> Response {
+    // @context-fold begin authenticated-statistics-source-unavailable
+    let secret = match extract_bearer(&headers) {
+        Ok(secret) => secret,
+        Err(error) => return error_response(error),
+    };
+    if let Err(error) = store.authenticate_category(secret, route).await {
+        return error_response(error);
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "success": false,
+            "code": code,
+            "availability": "unavailable",
+            "message": message,
+            "missing_sources": missing_sources
+        })),
+    )
+        .into_response()
+    // @context-fold end authenticated-statistics-source-unavailable
 }
 
 async fn unavailable_category(
@@ -319,3 +380,7 @@ async fn export_usage(
         Err(e) => error_response(e),
     }
 }
+
+#[cfg(test)]
+#[path = "history_http/statistics_tests.rs"]
+mod statistics_tests;
