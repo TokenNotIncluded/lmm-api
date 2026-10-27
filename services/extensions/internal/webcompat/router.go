@@ -85,9 +85,13 @@ func Mount(host *modules.Host, auth *Authenticator, catalogue StoreService, supp
 		}
 		defer release()
 		if len(optional) == 1 {
-			if plugin := webPluginName(r.URL.Path); plugin != "" && !store.Missing(optional[0].Plugins) && !optional[0].Plugins.IsEnabled(plugin) {
-				Respond(w, nil, store.ErrUnavailable)
-				return
+			if manager := optional[0].Plugins; !store.Missing(manager) {
+				plugin := webPluginName(r.URL.Path)
+				if (plugin != "" && !manager.IsEnabled(plugin)) ||
+					(strings.HasPrefix(r.URL.Path, "/api/store/support/") && !manager.IsEnabled("support")) {
+					Respond(w, nil, store.ErrUnavailable)
+					return
+				}
 			}
 		}
 		mux.ServeHTTP(w, r)
