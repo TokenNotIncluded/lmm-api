@@ -46,6 +46,12 @@ def route_patterns(source, bundle):
         escaped = re.escape(route.rstrip('/'))
         escaped = re.sub(r'\\\$[A-Za-z_][A-Za-z_0-9]*', '[^/?]+', escaped)
         patterns.append('^' + (escaped + '/?' if route != '/' else '/') + r'(?:\?.*)?$')
+    # Match resolveLegacyRoute: exact aliases and the console subtree, including
+    # its fallback for removed console pages. The browser performs the redirect.
+    patterns.extend([
+        r'^/(?:login|forbidden|api-keys|settings|developer-access)/*(?:\?.*)?$',
+        r'^/console(?:/[^?]*)?(?:\?.*)?$',
+    ])
     return patterns
 
 def metadata(template, path, origin):
@@ -104,7 +110,7 @@ def build(index, routes, bundle, output, remote_root, origin='https://api.lmm.be
     (output / 'sitemap.xml').write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + ''.join(f'  <url><loc>{origin}{p}</loc></url>\n' for p in PAGES) + '</urlset>\n')
     script = (Path(__file__).with_name('metadata.js')).read_text()
     (output / 'site-seo.js').write_text(script.replace('/* PAGE_CATALOG */ {}', json.dumps(PAGES, ensure_ascii=True)).replace('/* PUBLIC_ORIGIN */ ""', json.dumps(origin)))
-    (output / 'manifest.json').write_text(json.dumps({'original_html_sha256': hashlib.sha256(index.encode()).hexdigest(), 'route_catalog_sha256': hashlib.sha256(routes.encode()).hexdigest(), 'installed_bundle_sha256': hashlib.sha256(bundle.encode()).hexdigest(), 'verified_route_count': len(patterns), 'origin': origin, 'public_pages': list(PAGES)}, indent=2) + '\n')
+    (output / 'manifest.json').write_text(json.dumps({'original_html_sha256': hashlib.sha256(index.encode()).hexdigest(), 'route_catalog_sha256': hashlib.sha256(routes.encode()).hexdigest(), 'installed_bundle_sha256': hashlib.sha256(bundle.encode()).hexdigest(), 'verified_route_count': len(patterns) - 2, 'legacy_pattern_count': 2, 'origin': origin, 'public_pages': list(PAGES)}, indent=2) + '\n')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
