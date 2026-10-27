@@ -82,44 +82,46 @@ function PluginInventory({ scope }: { scope: NativeUsersScope }) {
             {t('No data available')}
           </p>
         )}
-        {query.data.map((plugin) => (
-          <article
-            key={plugin.name}
-            className='min-w-0 space-y-3 rounded-lg border p-4'
-          >
-            <h3 className='font-semibold [overflow-wrap:anywhere]'>
-              {plugin.name}
-            </h3>
-            <dl className='grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3'>
-              <div>
-                <dt className='text-muted-foreground'>{t('Version')}</dt>
-                <dd className='[overflow-wrap:anywhere]'>{plugin.version}</dd>
+        <div className='divide-y border-y'>
+          {query.data.map((plugin) => (
+            <article
+              key={plugin.name}
+              className='grid min-w-0 gap-3 py-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)] lg:items-center lg:gap-6'
+            >
+              <div className='min-w-0'>
+                <h3 className='font-semibold [overflow-wrap:anywhere]'>
+                  {plugin.name}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-xs [overflow-wrap:anywhere] tabular-nums'>
+                  {t('Version')} {plugin.version} · {t('API version')}{' '}
+                  {plugin.api_version}
+                </p>
               </div>
-              <div>
-                <dt className='text-muted-foreground'>{t('API version')}</dt>
-                <dd>{plugin.api_version}</dd>
-              </div>
-              <div>
-                <dt className='text-muted-foreground'>
-                  {t('Module availability')}
-                </dt>
-                <dd>{plugin.available ? t('Available') : t('Unavailable')}</dd>
-              </div>
-              <div>
-                <dt className='text-muted-foreground'>
-                  {t('Installation status')}
-                </dt>
-                <dd>
-                  {plugin.installed ? t('Installed') : t('Not installed')}
-                </dd>
-              </div>
-              <div>
-                <dt className='text-muted-foreground'>{t('Status')}</dt>
-                <dd>{plugin.enabled ? t('Enabled') : t('Disabled')}</dd>
-              </div>
-            </dl>
-          </article>
-        ))}
+              <dl className='grid min-w-0 grid-cols-2 gap-3 text-sm sm:grid-cols-3'>
+                <div>
+                  <dt className='text-muted-foreground'>
+                    {t('Module availability')}
+                  </dt>
+                  <dd>
+                    {plugin.available ? t('Available') : t('Unavailable')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className='text-muted-foreground'>
+                    {t('Installation status')}
+                  </dt>
+                  <dd>
+                    {plugin.installed ? t('Installed') : t('Not installed')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className='text-muted-foreground'>{t('Status')}</dt>
+                  <dd>{plugin.enabled ? t('Enabled') : t('Disabled')}</dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
       </section>
       <p className='text-muted-foreground text-sm'>
         {t('Capability details are not reported by this API.')}
