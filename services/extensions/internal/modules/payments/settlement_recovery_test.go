@@ -5,6 +5,144 @@ import (
 	"testing"
 )
 
+// dispatchRecoveryCore can lose access to registration independently of the
+// read-only receipt endpoint. It never contacts a provider or a real Core.
+type dispatchRecoveryCore struct {
+	Core
+	lookupErr         error
+	registrationCalls int
+}
+
+func (c *dispatchRecoveryCore) BeginRefundDispatch(context.Context, int64, string, string) (Receipt, error) {
+	c.registrationCalls++
+	return Receipt{}, ErrUnavailable
+}
+
+func (c *dispatchRecoveryCore) Receipt(ctx context.Context, intent int64, key string) (Receipt, error) {
+	if c.lookupErr != nil {
+		return Receipt{}, c.lookupErr
+	}
+	return c.Core.Receipt(ctx, intent, key)
+}
+
+func TestRefundDispatchRecoveryReadsOriginalReceiptBeforeRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		lookupErr        error
+		wantRegistration int
+		wantProvider     int64
+	}{
+		{name: "committed registration", wantProvider: 1},
+		{name: "unknown receipt", lookupErr: ErrUnavailable},
+		{name: "conflicting receipt", lookupErr: ErrConflict},
+		{name: "missing receipt", lookupErr: ErrNotFound, wantRegistration: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setup(t)
+			o := h.paid()
+			r, err := h.s.RequestRefund(context.Background(), "user", o.ID, "dispatch_recovery_0001", 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.c.lose["dispatch"] = true
+			h.work()
+			if h.a.refundCalls.Load() != 0 || h.c.count("dispatch") != 1 {
+				t.Fatal("fixture must lose registration ACK before provider dispatch")
+			}
+			core := &dispatchRecoveryCore{Core: h.c, lookupErr: tc.lookupErr}
+			h.s.core = core
+			h.advance()
+			h.work()
+			if core.registrationCalls != tc.wantRegistration || h.a.refundCalls.Load() != tc.wantProvider {
+				t.Fatalf("registration calls=%d provider calls=%d", core.registrationCalls, h.a.refundCalls.Load())
+			}
+			last := h.get(o.ID)
+			if last.Refunds[r.ID].HoldReceipt != r.HoldReceipt || h.c.count("hold") != 1 || h.c.count("release") != 0 || h.c.count("commit") != 0 {
+				t.Fatal("registration recovery changed funds or the original hold")
+			}
+			job := last.Jobs[stableKey("submit", r.ID)]
+			if tc.wantProvider == 1 {
+				if job.Kind != "refund_submit" || job.State != "done" || last.Refunds[r.ID].DispatchReceipt == "" {
+					t.Fatal("original registration receipt did not recover the send-once job")
+				}
+				h.advance()
+				h.work()
+				if h.a.refundCalls.Load() != 1 {
+					t.Fatal("recovered refund was dispatched twice")
+				}
+			} else if job.Kind != "refund_dispatch" || job.State == "done" || last.Refunds[r.ID].DispatchReceipt != "" {
+				t.Fatal("unresolved registration was treated as accepted")
+			}
+		})
+	}
+}
+
+type failFirstDispatchCore struct {
+	Core
+	calls int
+	keys  []string
+}
+
+func (c *failFirstDispatchCore) BeginRefundDispatch(ctx context.Context, intent int64, key, hold string) (Receipt, error) {
+	c.calls++
+	c.keys = append(c.keys, key)
+	if c.calls == 1 {
+		return Receipt{}, ErrUnavailable // This synthetic failure occurs before commit.
+	}
+	return c.Core.BeginRefundDispatch(ctx, intent, key, hold)
+}
+
+type checkDispatchPersistedAdapter struct {
+	Adapter
+	store    Store
+	refundID string
+	t        *testing.T
+}
+
+func (a *checkDispatchPersistedAdapter) Refund(ctx context.Context, o Order, r Refund, key string) (RefundResult, error) {
+	stored, err := a.store.Get(ctx, o.ID)
+	if err != nil {
+		return RefundResult{}, err
+	}
+	job := stored.Jobs[key]
+	if job.Kind != "refund_submit" || job.State != "running" || stored.Refunds[a.refundID].DispatchReceipt == "" || stored.Refunds[a.refundID].Dispatch != DispatchUnknown {
+		a.t.Error("registration and send-once claim must be persisted before provider call")
+		return RefundResult{}, ErrConflict
+	}
+	return a.Adapter.Refund(ctx, o, r, key)
+}
+
+func TestRefundDispatchMissingReceiptRegistersOriginalKeyOnce(t *testing.T) {
+	h := setup(t)
+	o := h.paid()
+	r, err := h.s.RequestRefund(context.Background(), "user", o.ID, "dispatch_missing_0001", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := &failFirstDispatchCore{Core: h.c}
+	h.s.core = core
+	h.s.adapters[o.ChannelID] = &checkDispatchPersistedAdapter{Adapter: h.a, store: h.m, refundID: r.ID, t: t}
+	h.work()
+	key := stableKey("submit", r.ID)
+	if core.calls != 1 || h.a.refundCalls.Load() != 0 || h.get(o.ID).Jobs[key].State != "pending" {
+		t.Fatal("failed first registration must remain pending before provider IO")
+	}
+	h.advance()
+	h.work()
+	last := h.get(o.ID)
+	if core.calls != 2 || core.keys[0] != key || core.keys[1] != key || h.c.count("lookup") != 1 || h.c.count("dispatch") != 1 {
+		t.Fatal("missing receipt must retry original registration key exactly once")
+	}
+	if last.Jobs[key].Kind != "refund_submit" || last.Jobs[key].State != "done" || last.Refunds[r.ID].DispatchReceipt == "" || last.Refunds[r.ID].HoldReceipt != r.HoldReceipt || h.a.refundCalls.Load() != 1 {
+		t.Fatal("successful registration did not persist and dispatch exactly once")
+	}
+	h.advance()
+	h.work()
+	if h.a.refundCalls.Load() != 1 || core.calls != 2 || h.c.count("hold") != 1 || h.c.count("release") != 0 || h.c.count("commit") != 0 {
+		t.Fatal("recovery repeated dispatch or changed the hold")
+	}
+}
+
 func withoutPaymentAdapters(t *testing.T, h *harness) {
 	t.Helper()
 	s, err := New(h.m, h.c)
