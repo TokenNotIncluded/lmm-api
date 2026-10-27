@@ -422,7 +422,7 @@ export function UserAuthForm({
         <HumanGrantButton
           configured={
             capabilitiesReady
-              ? status?.data?.configured_components?.humangrant
+              ? status?.configured_components?.humangrant
               : false
           }
           disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
