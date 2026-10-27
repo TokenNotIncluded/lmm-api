@@ -65,7 +65,15 @@ with tempfile.TemporaryDirectory(prefix='lmm-seo-check-') as temp:
             assert status == 200 and headers['X-Robots-Tag'] == 'noindex, follow', path
             assert b'rel="canonical"' not in body, path
             assert headers.get_content_type() == 'text/html', path
-        for path in ['/v111', '/does-not-exist', '/oauth/a/b/c', '/%EF%BC%8C%E5%B9%B6%E4%BD%BF%E7%94%A8%E5%90%88%E9%80%82%E7%9A%84']:
+        # Compatibility entries load the private SPA; its router performs redirects.
+        for path in ['/login?redirect=%2Fkeys', '/forbidden/', '/api-keys/', '/settings',
+                     '/developer-access', '/console', '/console/', '/console/models',
+                     '/console/setting?tab=payment', '/console/chat/42', '/console/removed/nested']:
+            status, headers, body = get(path)
+            assert status == 200 and headers['X-Robots-Tag'] == 'noindex, follow', path
+            assert b'rel="canonical"' not in body and headers.get_content_type() == 'text/html', path
+        for path in ['/v111', '/does-not-exist', '/login/extra', '/api-keys/unknown',
+                     '/settings-else', '/console-other', '/oauth/a/b/c', '/%EF%BC%8C%E5%B9%B6%E4%BD%BF%E7%94%A8%E5%90%88%E9%80%82%E7%9A%84']:
             assert get(path)[0] == 404, path
         status, headers, body = get('/guide/?ref=test')
         assert status == 308 and headers['Location'] == 'https://api.lmm.best/guide?ref=test'
