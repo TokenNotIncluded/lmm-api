@@ -179,7 +179,7 @@ def main():
  with x.heavy_lock.open('a')as lock:
   fcntl.flock(lock,fcntl.LOCK_EX)
   with (x.output/'compile.private.log').open('w')as log:
-   build=subprocess.run(['go','build','-p=1','-mod=readonly','-o',str(x.output/'source-export'),'./cmd/trust-source-export'],cwd=c,env=env,stdout=log,stderr=subprocess.STDOUT)
+   build=subprocess.run(['go','build','-buildvcs=false','-p=1','-mod=readonly','-o',str(x.output/'source-export'),'./cmd/trust-source-export'],cwd=c,env=env,stdout=log,stderr=subprocess.STDOUT)
   require(build.returncode==0,'SOURCE_ADAPTER_BUILD_FAILED')
  require(all(sha(c/p)==d for p,d in original.items()),'ORIGINAL_SOURCE_DRIFT')
  require(re.fullmatch('[a-z_][a-z_0-9]*',r['source']['schema'])is not None,'SOURCE_NAMESPACE_INVALID')
