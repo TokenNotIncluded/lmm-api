@@ -9,16 +9,14 @@
   <p><a href="README.md">简体中文</a> · <a href="README_EN.md">English</a></p>
 </div>
 
-**LMM 帮你把各种大语言模型统一管理起来** —— 身份认证、权限控制、计费账本、模型路由，一个网关全部搞定；商店、工具市场、助手、运营和支付适配则交给可插拔的扩展模块。**LMM 全称 Language Model Mesh（语言模型网络）**，Mesh 的含义正是多模型路由、渠道共享和组件之间的协作。
+**LMM 是 Language Model Mesh，「语言模型网络」。** 简单说，它是一个模型网关：你的账号、权限、余额和模型调用都从这里走；商店、工具市场、助手、运营和支付这些生意上的东西，则交给可插拔的扩展。之所以叫 Mesh，是因为我们希望多个模型、多条渠道和多个组件能像网一样互相连通，而不是绑死在一处。
 
 > [!WARNING]
-> **这是我们正在精心打造的下一代微服务架构（WIP），目前还不能替代现有网站。**
-> 各模块的单元测试已经通过，但整站调用、支付和资金链路的端到端联通仍在推进中。历史资金、订阅和 API Key 的迁移正在隔离副本中逐步对账，尚未最终验收。
-> 程序设计上不会连接旧业务库、不会自动升级表结构，也不会回退到旧单体，请放心。剩余工作和详细状态请参阅[架构与状态](docs/core-migration.md)。
+> **先说清楚：这个分支是一次推倒重来的微服务重构，还在施工中（WIP），现在还不能替代线上网站。**
+> 模块测试通过了，并不代表整站的调用、支付和资金链路已经串起来。历史资金、订阅和 API Key 的迁移还在隔离副本里一笔笔对账，没有验收。
+> 新程序不会连接旧业务库，不会偷偷升级表结构，也不会悄悄退回旧单体。还剩哪些活，写在[架构与状态](docs/core-migration.md)里。
 
-## 三个程序
-
-LMM 由三个独立的程序协作完成工作：
+## 它由三个程序组成
 
 ```text
 lmm 客户端 / Web 控制台
@@ -29,20 +27,22 @@ lmm 客户端 / Web 控制台
         └──► lmm-extensions（Go）───► 扩展自己的 PostgreSQL
 ```
 
-| 程序 | 源码 | 职责 |
+| 程序 | 源码 | 它负责什么 |
 | --- | --- | --- |
-| `lmm` | `apps/cli` | 用户客户端，连接服务并调用已提供的功能 |
-| `lmm-core` | `services/core` | 身份、权限、计费、账本与模型路由；`init-db`、`bootstrap-user` 等是它的子命令 |
+| `lmm` | `apps/cli` | 你手里的客户端，连上服务后调用已经提供的功能 |
+| `lmm-core` | `services/core` | 身份、权限、计费、账本和模型路由；`init-db`、`bootstrap-user` 这些都是它的子命令 |
 | `lmm-extensions` | `services/extensions` | 商店、工具、助手、运营与支付适配等业务扩展 |
 
-- 核心不依赖 Go 也能运行；扩展只管理自己的记录，不能直接改核心余额或数据库。
-- `apps/web` 产出静态 Web 包，由 Web 服务器提供，不是额外的可执行程序。
-- `lmm` 客户端独立维护于 [TokenNotIncluded/lmm](https://github.com/TokenNotIncluded/lmm)，这里以 `apps/cli` 子模块固定版本。能力及 Magpie 对齐进度见[客户端说明](https://github.com/TokenNotIncluded/lmm#readme)。
-- `contracts` 保存跨进程契约，`config/legal` 保存可编辑协议草稿，`packaging/distribution.json` 定义各分发包内容。
+我们刻意这样划分，是想让最要紧的东西——钱和权限——只有一个主人：
 
-## 快速开始
+- 核心离开 Go 也能独立跑。扩展只管自己的记录，碰不到核心的余额，也碰不到核心数据库。
+- `apps/web` 只产出一包静态文件，交给 Web 服务器托管，不是又一个要运维的程序。
+- `lmm` 客户端单独维护在 [TokenNotIncluded/lmm](https://github.com/TokenNotIncluded/lmm)，这里通过 `apps/cli` 子模块固定版本。它能做什么、和 Magpie 对齐到哪一步，见[客户端说明](https://github.com/TokenNotIncluded/lmm#readme)。
+- `contracts` 放跨进程契约，`config/legal` 放可以自己改的协议草稿，`packaging/distribution.json` 决定每个分发包里装什么。
 
-准备好了？按照下面的步骤开始吧！工具版本以 [mise.toml](mise.toml) 为准，命令通过 `mise exec --` 执行。按任务只准备需要的工具，详见[开发指南](docs/development.md)。
+## 上手
+
+工具版本统一写在 [mise.toml](mise.toml)，命令都用 `mise exec --` 跑。做什么就准备什么，不用一上来把所有工具装齐，细节见[开发指南](docs/development.md)。
 
 ```sh
 # 需要 CLI 时才初始化客户端子模块
@@ -56,11 +56,11 @@ lmm-core --config /absolute/private/core-owner.toml init-db
 lmm-core --config /absolute/private/core.toml check-db
 ```
 
-隔离的整套环境用 [Docker 开发栈](deployment/docker/README.md)启动。核心与扩展是独立 Compose 项目：更新扩展不应重启核心或其数据库；核心健康接口可响应不代表模型接口已就绪。
+想一次拉起完整的隔离环境，用 [Docker 开发栈](deployment/docker/README.md)。核心和扩展是两个独立的 Compose 项目：更新扩展时不该顺带重启核心或它的数据库。另外提醒一句，核心健康接口有响应，不等于模型接口已经能用了。
 
-## 配置与目录
+## 配置放在哪
 
-新安装统一使用 TOML 格式的配置文件，以下是默认路径一览：`/etc/lmm.conf.d/core.toml` 与 `/etc/lmm.conf.d/extensions.toml`，也可通过 `--config` 显式指定。
+新安装一律使用 TOML：`/etc/lmm.conf.d/core.toml` 和 `/etc/lmm.conf.d/extensions.toml`，也可以用 `--config` 显式指定。
 
 | 内容 | 路径 |
 | --- | --- |
@@ -68,28 +68,28 @@ lmm-core --config /absolute/private/core.toml check-db
 | 持久状态 | `/var/lib/lmm/<服务>/` |
 | 运行时文件 | `/run/lmm/<服务>/` |
 
-完整规则和旧包迁移边界见[配置与文件路径](docs/filesystem-layout.md)。统一路径不代表旧安装已自动转换。
+完整规则和旧包迁移的边界见[配置与文件路径](docs/filesystem-layout.md)。路径统一了，不代表旧安装会自动转换过来。
 
-## 文档入口
+## 接下来看什么
 
-不确定从哪里开始？根据你想做的事情选择入口：
-
-| 想做什么 | 入口 |
+| 你想…… | 去这里 |
 | --- | --- |
-| 了解边界与剩余工作 | [架构与状态](docs/core-migration.md) |
-| 启动隔离环境 | [Docker 开发栈](deployment/docker/README.md) |
-| 使用 mise 开发、测试 | [开发指南](docs/development.md) |
-| 统一 TOML 配置、服务目录与升级保留规则 | [配置与文件路径](docs/filesystem-layout.md) |
-| 配置用户、隐私、退款协议 | [协议模板](docs/legal/README.md) |
+| 弄清边界和还剩什么没做 | [架构与状态](docs/core-migration.md) |
+| 拉起一套隔离环境 | [Docker 开发栈](deployment/docker/README.md) |
+| 用 mise 开发、跑测试 | [开发指南](docs/development.md) |
+| 配置 TOML、服务目录和升级保留规则 | [配置与文件路径](docs/filesystem-layout.md) |
+| 改用户、隐私、退款协议 | [协议模板](docs/legal/README.md) |
 | 构建和检查分发包 | [打包与分发](docs/release-architecture.md) |
-| 查阅详细接口及历史资料 | [文档目录](docs/README.md) |
+| 翻详细接口和历史资料 | [文档目录](docs/README.md) |
 
-## 分支说明
+## 分支
 
-我们的开发主线是 `wip/rust-core-go-extensions`；旧单体分支 `main` 与 `traditional` 已冻结，不再接受变更。需要注意的是，[主线交接](docs/development-branches.md)并不代表已上线或通过验收。此外，[Extore 商品同步](docs/extore-shop-binding-followup.md)功能尚未完成，目前还不具备部署条件。
+日常开发都在 `wip/rust-core-go-extensions` 上；旧单体的 `main` 和 `traditional` 已经冻结，只作历史留档。[主线交接](docs/development-branches.md)不等于已经上线或验收。[Extore 商品同步](docs/extore-shop-binding-followup.md)还没做完，请不要部署。
 
-## 贡献与许可证
+## 一起参与
 
-欢迎参与贡献！在开始之前，请先阅读[贡献指南](docs/contributing.md)。如果发现安全漏洞，请按[安全指南](.github/SECURITY.md)私下报告，不要公开密钥或用户数据。合并、打包、发布和部署是分开的决定。
+欢迎来帮忙！动手前先看一眼[贡献指南](docs/contributing.md)。发现漏洞请按[安全指南](.github/SECURITY.md)私下告诉我们，别把密钥或用户数据贴到公开的地方。合并、打包、发布和部署是四件不同的事，各自单独决定。
 
-项目基于 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 发展，按 [AGPL-3.0](LICENSE) 发布。保留 [NOTICE](NOTICE)、[分支来源与归属](docs/fork.md) 和[第三方许可证](THIRD-PARTY-LICENSES.md)。[线上服务](https://api.lmm.best)与本分支的实现状态不同。
+## 致谢与许可证
+
+这个项目站在 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 的肩膀上发展而来，感谢上游作者和所有贡献者。代码按 [AGPL-3.0](LICENSE) 发布；请保留 [NOTICE](NOTICE)、[分支来源与归属](docs/fork.md) 和[第三方许可证](THIRD-PARTY-LICENSES.md)。[线上服务](https://api.lmm.best)和本分支的实现进度并不一样。
