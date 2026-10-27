@@ -381,7 +381,12 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             public_status = lmm_core::http::PublicStatus {
                 password_login_enabled: true,
                 two_factor_enabled: store.mfa_enabled(),
-                password_register_enabled: config.registration_enabled,
+                registration_enabled: store.registration_enabled(),
+                password_register_enabled: store.password_register_enabled(),
+                oauth_register_enabled: store.oauth_register_enabled(),
+                oauth_registration_disabled_methods: store
+                    .oauth_registration_disabled_methods()
+                    .to_vec(),
                 user_agreement_enabled: config.user_agreement_enabled,
                 privacy_policy_enabled: config.privacy_policy_enabled,
                 google_client_id: config.auth.google_client_id(&store).map(str::to_owned),

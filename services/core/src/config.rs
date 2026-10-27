@@ -130,6 +130,9 @@ struct IdentityFile {
     humangrant_enabled: bool,
     humangrant_smtp_file: Option<PathBuf>,
     registration_enabled: bool,
+    password_register_enabled: Option<bool>,
+    oauth_register_enabled: Option<bool>,
+    registration_disabled_methods: Option<Vec<String>>,
     password_slots: u32,
     api_key_encryption_key_file: Option<PathBuf>,
     mfa: Option<MfaFile>,
@@ -147,6 +150,9 @@ impl Default for IdentityFile {
             humangrant_enabled: false,
             humangrant_smtp_file: None,
             registration_enabled: false,
+            password_register_enabled: None,
+            oauth_register_enabled: None,
+            registration_disabled_methods: None,
             password_slots: one(),
             api_key_encryption_key_file: None,
             mfa: None,
@@ -357,8 +363,19 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
     if file.version != 1 {
         return Err(invalid_config("unsupported core configuration version"));
     }
+    validate_registration_policy(
+        file.identity.registration_enabled,
+        file.identity.password_register_enabled,
+        file.identity.oauth_register_enabled,
+        file.identity.registration_disabled_methods.as_deref(),
+    )?;
     if file.database.is_none()
         && (file.identity.registration_enabled
+            || file
+                .identity
+                .registration_disabled_methods
+                .as_ref()
+                .is_some_and(|methods| !methods.is_empty())
             || file.identity.web.is_some()
             || file.identity.google.is_some()
             || file.identity.github.is_some()
@@ -431,6 +448,19 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         "LMM_CORE_REGISTRATION_ENABLED",
         file.identity.registration_enabled.to_string(),
     );
+    if let Some(enabled) = file.identity.password_register_enabled {
+        put("LMM_CORE_PASSWORD_REGISTER_ENABLED", enabled.to_string());
+    }
+    if let Some(enabled) = file.identity.oauth_register_enabled {
+        put("LMM_CORE_OAUTH_REGISTER_ENABLED", enabled.to_string());
+    }
+    if let Some(methods) = &file.identity.registration_disabled_methods {
+        put(
+            "LMM_CORE_REGISTRATION_DISABLED_METHODS",
+            serde_json::to_string(methods)
+                .map_err(|_| invalid_config("invalid registration disabled methods"))?,
+        );
+    }
     put("LMM_CORE_CONSOLE_ENABLED", file.console.enabled.to_string());
     let mut paths = Vec::new();
     if let Some(db) = file.database {
@@ -862,6 +892,27 @@ pub fn identity_auth(
         }
         store
     };
+    let password_enabled = optional_bool_setting("LMM_CORE_PASSWORD_REGISTER_ENABLED")?;
+    let oauth_enabled = optional_bool_setting("LMM_CORE_OAUTH_REGISTER_ENABLED")?;
+    let disabled_methods = match setting("LMM_CORE_REGISTRATION_DISABLED_METHODS") {
+        Ok(value) => Some(
+            serde_json::from_str::<Vec<String>>(&value)
+                .map_err(|_| invalid_config("invalid registration disabled methods"))?,
+        ),
+        Err(env::VarError::NotPresent) => None,
+        Err(_) => return Err(invalid_config("invalid registration disabled methods")),
+    };
+    validate_registration_policy(
+        store.registration_enabled(),
+        password_enabled,
+        oauth_enabled,
+        disabled_methods.as_deref(),
+    )?;
+    store = store
+        .with_password_register_enabled(password_enabled.unwrap_or(false))
+        .with_oauth_register_enabled(oauth_enabled.unwrap_or(false))
+        .with_oauth_registration_disabled_methods(disabled_methods.as_deref().unwrap_or_default())
+        .map_err(|_| invalid_config("unknown registration disabled method"))?;
     if setting_os("LMM_CORE_TELEGRAM_BOT_NAME").is_some()
         || setting_os("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE").is_some()
     {
@@ -953,6 +1004,33 @@ pub fn identity_auth(
             .map_err(|_| invalid_config("invalid MFA keyring configuration"))?;
     }
     Ok(store)
+}
+
+fn optional_bool_setting(name: &'static str) -> io::Result<Option<bool>> {
+    match setting(name) {
+        Ok(value) => value
+            .parse()
+            .map(Some)
+            .map_err(|_| invalid_config("invalid registration policy flag")),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(_) => Err(invalid_config("invalid registration policy flag")),
+    }
+}
+
+fn validate_registration_policy(
+    enabled: bool,
+    password_enabled: Option<bool>,
+    oauth_enabled: Option<bool>,
+    disabled_methods: Option<&[String]>,
+) -> io::Result<()> {
+    if enabled
+        && (password_enabled.is_none() || oauth_enabled.is_none() || disabled_methods.is_none())
+    {
+        return Err(invalid_config(
+            "enabled registration requires explicit password_register_enabled, oauth_register_enabled and registration_disabled_methods",
+        ));
+    }
+    Ok(())
 }
 
 pub fn ingress() -> io::Result<Option<crate::lifecycle::ingress::IngressAcks>> {
@@ -2873,6 +2951,59 @@ pub async fn humangrant(
 mod tests {
     use super::*;
     #[test]
+    fn identity_registration_disabled_methods_are_loaded_from_core_config() {
+        let parsed = parse_core_file(
+            br#"
+                version = 1
+                [database]
+                url_file = "/nonexistent-test/database-url"
+                [identity]
+                registration_enabled = true
+                password_register_enabled = false
+                oauth_register_enabled = true
+                registration_disabled_methods = ["discord", "github", "linuxdo", "oidc", "telegram", "wechat"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(parsed["LMM_CORE_PASSWORD_REGISTER_ENABLED"], "false");
+        assert_eq!(parsed["LMM_CORE_OAUTH_REGISTER_ENABLED"], "true");
+        assert_eq!(
+            parsed
+                .get("LMM_CORE_REGISTRATION_DISABLED_METHODS")
+                .and_then(|value| value.to_str()),
+            Some(r#"["discord","github","linuxdo","oidc","telegram","wechat"]"#)
+        );
+    }
+
+    #[test]
+    fn enabled_registration_rejects_missing_explicit_subpolicy() {
+        // @context-fold begin required-registration-subpolicy-cases
+        let base = "version=1\n[database]\nurl_file='/nonexistent-test/database-url'\n[identity]\nregistration_enabled=true\n";
+        let fields = [
+            "password_register_enabled=false\n",
+            "oauth_register_enabled=true\n",
+            "registration_disabled_methods=['github','linuxdo']\n",
+        ];
+        for omitted in 0..=fields.len() {
+            let document = format!(
+                "{base}{}",
+                fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| omitted < fields.len() && *index != omitted)
+                    .map(|(_, field)| *field)
+                    .collect::<String>()
+            );
+            let error = parse_core_file(document.as_bytes()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("requires explicit"));
+        }
+        assert!(parse_core_file(format!("{base}{}", fields.concat()).as_bytes()).is_ok());
+        assert!(parse_core_file(b"version=1\n[identity]\nregistration_enabled=false\n").is_ok());
+        // @context-fold end required-registration-subpolicy-cases
+    }
+
+    #[test]
     fn edge_proof_disabled_does_not_read_service_files() {
         assert!(
             checked_edge_access_config(None, &[PathBuf::from("/missing-service-token")])
@@ -3083,8 +3214,12 @@ mod tests {
     #[test]
     fn typed_toml_maps_all_supported_capabilities_without_environment_mutation() {
         let document = b"version=1\n[server]\nlisten='127.0.0.1:8000'\nworker_threads=2\nmax_inflight=8\ndrain_timeout_seconds=15\n[database]\nurl_file='/nonexistent-lmm-test/database'\nmax_connections=3\nacquire_timeout_seconds=7\ncheck_timeout_seconds=60\n[identity]\nregistration_enabled=true\npassword_slots=2\napi_key_encryption_key_file='/nonexistent-lmm-test/api-key'\n[identity.web]\norigin='https://api.example.test'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\nuser_agreement_enabled=false\nprivacy_policy_enabled=true\n[identity.google]\nclient_id='public-client-id'\nclient_secret_file='/nonexistent-lmm-test/google'\nredirect_uri='https://api.example.test/core/v1/auth/oauth/google/callback'\n[rpc]\nsocket='/nonexistent-lmm-test/core.sock'\ntoken_file='/nonexistent-lmm-test/rpc'\nshared_group_id=65534\n[console]\nenabled=true\n[model]\nconfig_file='/nonexistent-lmm-test/model.toml'\nlocal_http=true\n[payments]\nconfig_file='/nonexistent-lmm-test/payments.toml'\ntoken_file='/nonexistent-lmm-test/payments-token'\n[commerce]\nconfig_file='/nonexistent-lmm-test/commerce.toml'\ntoken_file='/nonexistent-lmm-test/commerce-token'\n[ingress]\nack_url='http://127.0.0.1:3000/__ack'\ntoken_file='/nonexistent-lmm-test/ingress'\ninstance='core-test'\n";
-        let parsed = parse_core_file(document).unwrap();
-        assert_eq!(parsed.len(), 33);
+        let document = String::from_utf8(document.to_vec()).unwrap().replace(
+            "registration_enabled=true\n",
+            "registration_enabled=true\npassword_register_enabled=true\noauth_register_enabled=true\nregistration_disabled_methods=[]\n",
+        );
+        let parsed = parse_core_file(document.as_bytes()).unwrap();
+        assert_eq!(parsed.len(), 36);
         assert_eq!(parsed["LMM_CORE_HUMANGRANT_ENABLED"], "false");
         for (key, expected) in [
             ("LMM_CORE_WORKER_THREADS", "2"),

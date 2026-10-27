@@ -95,6 +95,9 @@ type Result<T> = std::result::Result<T, IdentityError>;
 pub struct IdentityStore {
     pool: PgPool,
     registration_enabled: bool,
+    password_register_enabled: bool,
+    oauth_register_enabled: bool,
+    oauth_registration_disabled_methods: Vec<String>,
     password_slots: std::sync::Arc<tokio::sync::Semaphore>,
     google: Option<std::sync::Arc<GoogleOAuth>>,
     external: std::collections::BTreeMap<ExternalProvider, std::sync::Arc<ExternalOAuth>>,
@@ -410,6 +413,9 @@ impl IdentityStore {
         Self {
             pool,
             registration_enabled: false,
+            password_register_enabled: true,
+            oauth_register_enabled: true,
+            oauth_registration_disabled_methods: Vec::new(),
             password_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             google: None,
             external: std::collections::BTreeMap::new(),

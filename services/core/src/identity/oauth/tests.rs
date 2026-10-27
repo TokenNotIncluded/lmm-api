@@ -913,28 +913,35 @@ async fn google_browser_signed_routes_cookie_refresh_replay_policy_and_registrat
         assert_eq!(before, identity_counts(&pool).await);
         sqlx::query(undo).bind(user).execute(&pool).await.unwrap();
     }
-    let closed = store.clone().with_registration_enabled(false);
-    let closed_app = web_app(closed.clone());
-    for (subject, expected) in [
-        ("browser-subject", StatusCode::SEE_OTHER),
-        ("closed-new-subject", StatusCode::FORBIDDEN),
+    for closed in [
+        store.clone().with_registration_enabled(false),
+        store.clone().with_oauth_register_enabled(false),
+        store
+            .clone()
+            .with_oauth_registration_disabled_methods(&["google".to_owned()])
+            .unwrap(),
     ] {
-        let (cookie, state, code) = web_flow(&closed_app, &closed, &mock, subject).await;
-        let before = identity_counts(&pool).await;
-        assert_eq!(
-            web_call(
+        let closed_app = web_app(closed.clone());
+        for (subject, expected) in [
+            ("browser-subject", StatusCode::SEE_OTHER),
+            ("closed-new-subject", StatusCode::FORBIDDEN),
+        ] {
+            let (cookie, state, code) = web_flow(&closed_app, &closed, &mock, subject).await;
+            let before = identity_counts(&pool).await;
+            let response = web_call(
                 &closed_app,
                 "GET",
                 &format!("/api/oauth/google/callback?state={state}&code={code}"),
                 Some(&cookie),
-                None
+                None,
             )
-            .await
-            .0,
-            expected
-        );
-        if expected == StatusCode::FORBIDDEN {
-            assert_eq!(before, identity_counts(&pool).await);
+            .await;
+            assert_eq!(response.0, expected);
+            if expected == StatusCode::FORBIDDEN {
+                assert_eq!(response.2["success"], false);
+                assert_eq!(response.2["code"], "AUTH_FORBIDDEN");
+                assert_eq!(before, identity_counts(&pool).await);
+            }
         }
     }
     // Different one-time states for the same new subject may both log in,

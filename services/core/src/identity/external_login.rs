@@ -83,9 +83,7 @@ impl IdentityStore {
         if let Some(user) = existing {
             return Ok(user);
         }
-        if !self.registration_enabled {
-            return Err(IdentityError::Forbidden);
-        }
+        self.require_oauth_registration(identity.provider().slug())?;
         let user = auth::create_user(tx).await?;
         let username = format!("{}_{}", identity.provider().slug(), &new_secret("")?[..12]);
         sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed) VALUES ($1,$2,$2,FALSE)")

@@ -20,6 +20,10 @@ max_connections = 2
 
 [identity]
 registration_enabled = false
+# All three settings below must be explicit before registration_enabled=true.
+password_register_enabled = false
+oauth_register_enabled = false
+registration_disabled_methods = ["discord", "github", "linuxdo", "oidc", "telegram", "wechat"]
 password_slots = 1
 # Optional recoverable API Key encryption: a stable, independently generated
 # exact 32-byte raw key. Never regenerate it on startup or use the Web key.

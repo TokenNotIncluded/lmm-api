@@ -136,6 +136,63 @@ impl IdentityStore {
         self.registration_enabled = enabled;
         self
     }
+    pub fn with_password_register_enabled(mut self, enabled: bool) -> Self {
+        self.password_register_enabled = enabled;
+        self
+    }
+    pub fn with_oauth_register_enabled(mut self, enabled: bool) -> Self {
+        self.oauth_register_enabled = enabled;
+        self
+    }
+    pub fn registration_enabled(&self) -> bool {
+        self.registration_enabled
+    }
+    pub fn password_register_enabled(&self) -> bool {
+        self.password_register_enabled
+    }
+    pub fn oauth_register_enabled(&self) -> bool {
+        self.oauth_register_enabled
+    }
+    pub fn with_oauth_registration_disabled_methods(mut self, methods: &[String]) -> Result<Self> {
+        let mut methods: Vec<_> = methods
+            .iter()
+            .map(|method| method.trim().to_ascii_lowercase())
+            .collect();
+        if methods.iter().any(|method| {
+            !matches!(
+                method.as_str(),
+                "google" | "github" | "linuxdo" | "discord" | "telegram" | "oidc" | "wechat"
+            )
+        }) {
+            return Err(IdentityError::Invalid);
+        }
+        methods.sort();
+        methods.dedup();
+        self.oauth_registration_disabled_methods = methods;
+        Ok(self)
+    }
+    pub fn oauth_registration_disabled_methods(&self) -> &[String] {
+        &self.oauth_registration_disabled_methods
+    }
+    pub(super) fn require_oauth_registration(&self, method: &str) -> Result<()> {
+        if !self.registration_enabled
+            || !self.oauth_register_enabled
+            || self
+                .oauth_registration_disabled_methods
+                .iter()
+                .any(|disabled| disabled == method)
+        {
+            return Err(IdentityError::Forbidden);
+        }
+        Ok(())
+    }
+    pub(super) fn require_password_registration(&self) -> Result<()> {
+        if self.registration_enabled && self.password_register_enabled {
+            Ok(())
+        } else {
+            Err(IdentityError::Forbidden)
+        }
+    }
     /// Limit simultaneous Argon2 jobs without reducing password hash strength.
     /// Each active job allocates about 19 MiB with the current Argon2 policy.
     pub fn with_password_slots(mut self, slots: usize) -> Result<Self> {
@@ -227,9 +284,7 @@ impl IdentityStore {
         .map_err(|_| IdentityError::Storage)?
     }
     pub async fn register(&self, request: &LoginRequest) -> Result<IssuedCredential> {
-        if !self.registration_enabled {
-            return Err(IdentityError::Forbidden);
-        }
+        self.require_password_registration()?;
         let name = normalize_login(&request.login_name)?;
         password_policy(&request.password)?;
         let hash = self.hash_password(request.password.clone()).await?;
@@ -630,6 +685,85 @@ mod tests {
                 .verify_password(b"bad password", &dummy)
                 .is_err()
         );
+    }
+    #[tokio::test]
+    async fn oauth_registration_policy_is_normalized_and_enforced() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .unwrap();
+        let methods = vec![" GitHub ".to_owned(), "LINUXDO".to_owned()];
+        let store = IdentityStore::from_pool(pool)
+            .with_registration_enabled(true)
+            .with_oauth_registration_disabled_methods(&methods)
+            .unwrap();
+
+        assert_eq!(
+            store.oauth_registration_disabled_methods(),
+            &["github".to_owned(), "linuxdo".to_owned()]
+        );
+        assert_eq!(
+            store.require_oauth_registration("github"),
+            Err(IdentityError::Forbidden)
+        );
+        assert!(store.require_oauth_registration("google").is_ok());
+        assert!(
+            store
+                .clone()
+                .with_password_register_enabled(false)
+                .require_oauth_registration("google")
+                .is_ok()
+        );
+        for closed in [
+            store.clone().with_registration_enabled(false),
+            store.clone().with_oauth_register_enabled(false),
+        ] {
+            assert_eq!(
+                closed.require_oauth_registration("google"),
+                Err(IdentityError::Forbidden)
+            );
+        }
+        assert!(matches!(
+            store.with_oauth_registration_disabled_methods(&["custom-provider".to_owned()]),
+            Err(IdentityError::Invalid)
+        ));
+    }
+    #[tokio::test]
+    async fn password_registration_requires_both_switches() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .unwrap();
+        let store = IdentityStore::from_pool(pool)
+            .with_registration_enabled(true)
+            .with_password_register_enabled(false);
+        for closed in [
+            store.clone(),
+            store
+                .with_password_register_enabled(true)
+                .with_registration_enabled(false),
+        ] {
+            assert!(matches!(
+                closed
+                    .register(&LoginRequest {
+                        login_name: "blocked-user".into(),
+                        password: "test-only long passphrase".into(),
+                    })
+                    .await,
+                Err(IdentityError::Forbidden)
+            ));
+            let browser = super::super::browser::BrowserAuth::new(closed, &[43; 32]).unwrap();
+            assert!(matches!(
+                browser
+                    .register(&super::super::browser::BrowserRegistration {
+                        username: "blocked-user",
+                        password: "test-only pass",
+                        email: "",
+                    })
+                    .await,
+                Err(super::super::browser::BrowserAuthError::Identity(
+                    IdentityError::Forbidden
+                ))
+            ));
+        }
     }
     async fn password_change_fixture(pool: PgPool) -> (IdentityStore, IssuedCredential) {
         let store = IdentityStore::from_pool(pool).with_registration_enabled(true);
