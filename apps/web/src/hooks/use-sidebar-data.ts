@@ -259,6 +259,12 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('Plugin management'),
+            url: '/extensions/plugins',
+            icon: Box,
+            requiredRole: ROLE.ADMIN,
+          },
+          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
