@@ -337,6 +337,7 @@ impl Billing for Bridge {
                     op.oauth_issuer.clone(),
                 )
             };
+            let mut stage = "report";
             let result = async {
                 let price = selected.price.clone();
                 let upstream_cost = price.upstream_cost_group_ppm.is_some();
@@ -346,6 +347,7 @@ impl Billing for Bridge {
                 {
                     return Err(RelayError::Conflict);
                 }
+                stage = "usage";
                 let (usage, outcome) = if !report.upstream_attempted {
                     (
                         Usage {
@@ -361,6 +363,7 @@ impl Billing for Bridge {
                         return Err(RelayError::SettlementPending);
                     }
                     if upstream_cost {
+                        stage = "provider_policy";
                         self.provider_policy.validate_usage(
                             &selected.attempt,
                             &report.usage,
@@ -370,6 +373,7 @@ impl Billing for Bridge {
                         if usage.upstream_cost_atto_usd.is_none() {
                             return Err(RelayError::SettlementPending);
                         }
+                        stage = "usage_bound";
                         if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
@@ -387,11 +391,13 @@ impl Billing for Bridge {
                         // and the original frozen absence-zero contract.
                         let mut policy_usage = report.usage;
                         policy_usage.input_tokens = Some(usage.input as u64);
+                        stage = "provider_policy";
                         self.provider_policy.validate_usage(
                             &selected.attempt,
                             &policy_usage,
                             false,
                         )?;
+                        stage = "usage_bound";
                         if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
@@ -399,6 +405,7 @@ impl Billing for Bridge {
                         }
                         // The legacy ledger must agree with the captured exact quote.
                         // Never reinterpret a price or a missing receipt at settlement.
+                        stage = "quote";
                         let quoted = if let Some(tariff) = &selected.price.tiered {
                             selected.quote.charge_tiered_usage(
                                 crate::routing::TieredUsage {
@@ -477,6 +484,7 @@ impl Billing for Bridge {
                 // transaction. The checkpoint records the provider observation.
                 // Both finalization stages share one start window; neither stage
                 // cancels an in-flight transaction or replays an unknown commit.
+                stage = "provider_checkpoint";
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
                 retry_finalize(
                     deadline,
@@ -489,6 +497,7 @@ impl Billing for Bridge {
                 )
                 .await
                 .map_err(error)?;
+                stage = "settle";
                 let settlement =
                     retry_finalize(deadline, &reservation.id, FinalizeStage::Settle, || {
                         self.charging
@@ -534,10 +543,14 @@ impl Billing for Bridge {
                 && report.upstream_attempted
             {
                 eprintln!(
-                    "core_model_finalize_failure code={} upstream_status={} provider_complete={}",
+                    "core_model_finalize_failure code={} upstream_status={} provider_complete={} stage={} usage={:?} input_ceiling={} output_ceiling={}",
                     failure.code(),
                     report.upstream_status.unwrap_or(0),
                     report.provider_complete,
+                    stage,
+                    report.usage,
+                    selected.input_token_ceiling,
+                    output_ceiling,
                 );
             }
             if result.is_err() && report.upstream_attempted {
