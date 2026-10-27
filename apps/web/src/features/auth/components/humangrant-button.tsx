@@ -22,10 +22,20 @@ import { Button } from '@/components/ui/button'
 
 import { watchHumanGrantAvailability } from '../lib/humangrant'
 
-export function HumanGrantButton({ disabled = false }: { disabled?: boolean }) {
+export function HumanGrantButton({
+  configured,
+  disabled = false,
+}: {
+  configured?: boolean
+  disabled?: boolean
+}) {
   const [available, setAvailable] = useState(false)
 
   useEffect(() => {
+    if (configured === false) {
+      setAvailable(false)
+      return
+    }
     const watcher = watchHumanGrantAvailability(setAvailable)
     const refresh = () => {
       void watcher.refresh()
@@ -36,7 +46,7 @@ export function HumanGrantButton({ disabled = false }: { disabled?: boolean }) {
       watcher.dispose()
       window.removeEventListener('focus', refresh)
     }
-  }, [])
+  }, [configured])
 
   if (!available) return null
   return (

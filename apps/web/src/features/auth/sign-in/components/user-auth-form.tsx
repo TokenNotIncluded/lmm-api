@@ -95,7 +95,7 @@ export function UserAuthForm({
   const legalConsentErrorMessage = t('Please agree to the legal terms first')
   const loginFailedMessage = t('Login failed')
 
-  const { status } = useStatus()
+  const { status, capabilitiesReady } = useStatus()
   const passkeyLoginEnabled = Boolean(
     status?.passkey_login ?? status?.data?.passkey_login
   )
@@ -420,6 +420,11 @@ export function UserAuthForm({
         {...props}
       >
         <HumanGrantButton
+          configured={
+            capabilitiesReady
+              ? status?.data?.configured_components?.humangrant
+              : false
+          }
           disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
         />
         {hasAlternativeLogin && alternativeLoginMethods}
