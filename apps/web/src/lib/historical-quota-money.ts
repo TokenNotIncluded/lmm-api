@@ -2,6 +2,7 @@
 Copyright (C) 2026 LIghtJUNction
 */
 import { z } from 'zod'
+import { toIntlLocale } from '@/i18n/languages'
 
 const nativeSettledAmountsSchema = z.object({
   billing_basis: z.literal('net_consumption'),
@@ -40,7 +41,10 @@ export function formatHistoricalRawQuota(
   } else {
     return '—'
   }
-  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(exact)} ${unit}`
+  return `${new Intl.NumberFormat(
+    typeof locale === 'string' ? toIntlLocale(locale) : locale,
+    { maximumFractionDigits: 0 }
+  ).format(exact)} ${unit}`
 }
 
 /** An absent stored amount is not evidence of a real zero-credit entry. */
