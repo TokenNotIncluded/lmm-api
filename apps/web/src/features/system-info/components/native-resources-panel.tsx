@@ -142,11 +142,11 @@ export function NativeResourcesPanel() {
               </div>
               <ProcessCard
                 label={t('Core process')}
-                process={query.data.processes.core}
+                process={query.data.processes['lmm-core']}
               />
               <ProcessCard
                 label={t('Extensions process')}
-                process={query.data.processes.extensions}
+                process={query.data.processes['lmm-extensions']}
               />
             </div>
           </div>
