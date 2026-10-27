@@ -25,14 +25,63 @@ const SOURCE_CLAIM: i64 = 9_007_199_254_740_995;
 const ARCHIVE: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const MAPPING: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
+fn is_private_fixture_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    // SQLx accepts connection overrides (including percent-encoded names) in
+    // query parameters. Reject every query, including an empty one, instead of
+    // validating one authority and then passing a different effective target.
+    url.scheme() == "postgresql"
+        && url.host_str() == Some("127.0.0.1")
+        && url
+            .port()
+            .is_some_and(|port| port >= 1024 && ![18080, 18081, 50837, 47399].contains(&port))
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && !url.username().is_empty()
+        && url.path().len() > 1
+}
+
 fn private_fixture_url(name: &str) -> String {
     let value = env::var(name).expect("owned fixture URL is required");
-    let url = reqwest::Url::parse(&value).expect("invalid owned fixture URL");
-    assert_eq!(url.scheme(), "postgresql");
-    assert_eq!(url.host_str(), Some("127.0.0.1"));
-    let port = url.port().expect("explicit random fixture port required");
-    assert!(port >= 1024 && ![18080, 18081, 50837, 47399].contains(&port));
+    assert!(is_private_fixture_url(&value), "invalid owned fixture URL");
     value
+}
+
+#[test]
+fn private_fixture_url_rejects_connection_target_overrides() {
+    let base = "postgresql://synthetic@127.0.0.1:55474/fresh_synthetic";
+    assert!(is_private_fixture_url(base));
+    for suffix in [
+        "?host=production.invalid",
+        "?host=/var/run/postgresql",
+        "?hostaddr=192.0.2.1",
+        "?port=5432",
+        "?dbname=existing_database",
+        "?database=existing_database",
+        "?user=other_owner",
+        "?%68ost=production.invalid",
+        "?%70ort=5432",
+        "?%64bname=existing_database",
+        "?host=127.0.0.1&host=production.invalid",
+        "?application_name=synthetic&port=5432",
+        "?options=-csearch_path%3Dpublic",
+        "?sslmode=disable",
+        "?",
+        "#ignored-fragment",
+    ] {
+        assert!(!is_private_fixture_url(&format!("{base}{suffix}")));
+    }
+    for url in [
+        "postgresql://synthetic@production.invalid:55474/fresh_synthetic",
+        "postgresql://synthetic@127.0.0.1/fresh_synthetic",
+        "postgresql://synthetic@127.0.0.1:18080/fresh_synthetic",
+        "postgresql://synthetic@127.0.0.1:55474/",
+        "postgresql://127.0.0.1:55474/fresh_synthetic",
+    ] {
+        assert!(!is_private_fixture_url(url));
+    }
 }
 
 async fn owner_pool() -> PgPool {
@@ -258,6 +307,165 @@ fn assert_business_rejection(receipt: &Receipt, code: &str) {
     assert_eq!(receipt.status, "rejected");
     assert_eq!(receipt.code.as_deref(), Some(code));
     assert!(receipt.journal_id.is_none());
+}
+
+// Opt-in handoff for the Go client -> separately started Core -> PG check.
+// These entrypoints only accept the owned loopback fixture URLs above. They do
+// not install a runtime backdoor or copy credentials from another database.
+const GO_MIGRATION: &str = "go-core-interop-v1";
+
+fn go_fixture_root() -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let root = PathBuf::from(env::var("LMM_ESCROW_OUTPUT").expect("private output required"));
+    assert!(root.is_absolute());
+    assert_eq!(root.canonicalize().unwrap(), root, "no symlink components");
+    let metadata = std::fs::symlink_metadata(&root).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.mode() & 0o777, 0o700);
+    assert_eq!(
+        metadata.uid(),
+        std::fs::metadata("/proc/self").unwrap().uid()
+    );
+    root
+}
+
+#[tokio::test]
+#[ignore = "requires a new owned schema and private LMM_ESCROW_OUTPUT; never production"]
+async fn seed_go_interop_sessions() {
+    let root = go_fixture_root();
+    assert!(!root.join("go-interop.private.json").exists());
+    assert!(!root.join("go-interop-claim.json").exists());
+    let owner = owner_pool().await;
+    let owned: bool = sqlx::query_scalar(
+        "SELECT current_user=r.rolname AND NOT r.rolcanlogin FROM pg_database d \
+         JOIN pg_roles r ON r.oid=d.datdba WHERE d.datname=current_database()",
+    )
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert!(owned, "fixture requires the actual NOLOGIN database owner");
+    lmm_core::core_schema::check(&owner).await.unwrap();
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM core_identity.users")
+        .fetch_one(&owner)
+        .await
+        .unwrap();
+    let journals: i64 = sqlx::query_scalar("SELECT count(*) FROM core_billing.ledger_journals")
+        .fetch_one(&owner)
+        .await
+        .unwrap();
+    assert_eq!(
+        (users, journals),
+        (0, 0),
+        "refuse an existing identity/funds fixture"
+    );
+    let identity = IdentityStore::from_pool(owner.clone());
+    let publisher = identity.bootstrap_user(101, 1).await.unwrap();
+    let participant = identity.bootstrap_user(202, 1).await.unwrap();
+    let stranger = identity.bootstrap_user(404, 1).await.unwrap();
+    let payer = identity.authorize(&publisher.secret).await.unwrap();
+    let receiver = identity.authorize(&participant.secret).await.unwrap();
+    for actor in [&payer, &receiver] {
+        assert_eq!(
+            actor.credential_kind,
+            lmm_core::identity::CredentialKind::Session
+        );
+    }
+    let api = identity
+        .issue_key(
+            &participant.secret,
+            receiver.owner,
+            FundingPolicy::new_personal_key(),
+            3600,
+        )
+        .await
+        .unwrap();
+    let now: i64 = sqlx::query_scalar("SELECT extract(epoch from clock_timestamp())::bigint")
+        .fetch_one(&owner)
+        .await
+        .unwrap();
+    for (account, user, units) in [
+        (payer.owner_account_id, 101, 100),
+        (receiver.owner_account_id, 202, 0),
+    ] {
+        let mut body = opening(account, user, units, now);
+        body["migration_id"] = GO_MIGRATION.into();
+        owner_import(&owner, "import_opening_balance", &body)
+            .await
+            .unwrap();
+    }
+    owner_import(&owner, "import_legacy_escrow_batch", &serde_json::json!({
+        "migration_id":GO_MIGRATION,"source_archive_sha256":ARCHIVE,"mapping_sha256":MAPPING,
+        "review_proof_sha256":"77".repeat(32),"unit":"credit_500k_usd","observed_at":now,
+        "projects":[frozen_project(SOURCE_PROJECT,101,payer.owner_account_id,20,
+            vec![frozen_claim(SOURCE_CLAIM,202,receiver.owner_account_id,7,"accepted",0)],vec![])]
+    })).await.unwrap();
+    let claim: Value = sqlx::query_scalar("SELECT to_jsonb(c) FROM core_billing.legacy_escrow_claims c WHERE migration_id=$1 AND source_challenge_id=$2")
+        .bind(GO_MIGRATION).bind(SOURCE_CLAIM).fetch_one(&owner).await.unwrap();
+    receipt("go-interop-claim.json", &claim);
+    receipt(
+        "go-interop.private.json",
+        &serde_json::json!({
+            "format":"synthetic-go-escrow-v1", "migration_id":GO_MIGRATION,
+            "source_project_id":SOURCE_PROJECT,"source_challenge_id":SOURCE_CLAIM,
+            "owner":publisher.secret,"participant":participant.secret,"stranger":stranger.secret,
+            "participant_api_key":api.secret,"payer_account_id":payer.owner_account_id,
+            "recipient_account_id":receiver.owner_account_id
+        }),
+    );
+    ledger_readback(&owner).await;
+    owner.close().await;
+}
+
+#[tokio::test]
+#[ignore = "run only after TestLegacyEscrowRealCoreSyntheticFixture against this owned database"]
+async fn verify_go_interop_ledger() {
+    let root = go_fixture_root();
+    let fixture: Value =
+        serde_json::from_slice(&std::fs::read(root.join("go-interop.private.json")).unwrap())
+            .unwrap();
+    assert_eq!(fixture["format"], "synthetic-go-escrow-v1");
+    let owner = owner_pool().await;
+    let ledger = Ledger::from_pool(owner.clone());
+    let payer = ledger
+        .balance(fixture["payer_account_id"].as_i64().unwrap())
+        .await
+        .unwrap();
+    let receiver = ledger
+        .balance(fixture["recipient_account_id"].as_i64().unwrap())
+        .await
+        .unwrap();
+    assert_eq!((payer.available_units, payer.reserved_units), (113, 0));
+    assert_eq!((receiver.available_units, receiver.reserved_units), (7, 0));
+    let state: (i64, i64, bool) = sqlx::query_as("SELECT remaining_units,revision,closed FROM core_billing.legacy_escrow_state WHERE migration_id=$1 AND source_project_id=$2")
+        .bind(GO_MIGRATION).bind(SOURCE_PROJECT).fetch_one(&owner).await.unwrap();
+    assert_eq!(state, (0, 4, true));
+    let operations: Vec<(String, i64)> = sqlx::query_as("SELECT kind,actor_user_id FROM core_billing.legacy_escrow_operations WHERE migration_id=$1 ORDER BY kind")
+        .bind(GO_MIGRATION).fetch_all(&owner).await.unwrap();
+    assert_eq!(
+        operations,
+        vec![
+            ("close".into(), 101),
+            ("payout".into(), 101),
+            ("submit".into(), 202)
+        ]
+    );
+    let before: Value =
+        serde_json::from_slice(&std::fs::read(root.join("go-interop-claim.json")).unwrap())
+            .unwrap();
+    let after: Value = sqlx::query_scalar("SELECT to_jsonb(c) FROM core_billing.legacy_escrow_claims c WHERE migration_id=$1 AND source_challenge_id=$2")
+        .bind(GO_MIGRATION).bind(SOURCE_CLAIM).fetch_one(&owner).await.unwrap();
+    assert_eq!(
+        before, after,
+        "Go operations must preserve imported source facts"
+    );
+    ledger_readback(&owner).await;
+    receipt(
+        "go-interop-ledger-verified.json",
+        &serde_json::json!({"status":"PASS","synthetic":true,
+        "payer_available":113,"recipient_available":7,"reserved":0,"operations":3,
+        "source_claim_unchanged":true,"balanced_journals_and_projections":true}),
+    );
+    owner.close().await;
 }
 
 fn native_request(key: &str, action: Action) -> Request {

@@ -705,6 +705,126 @@ async fn sixteen_protocol_streaming_and_json_round_trips_use_real_tcp() {
     }
 }
 
+#[tokio::test]
+async fn gemini_multiple_sse_frames_in_one_chunk_preserve_trailing_finish_and_usage() {
+    let frames = vec![
+        data(
+            json!({"responseId":"up_962","candidates":[{"index":0,"content":{"parts":[{"text":"鲸"}]}}]}),
+        ),
+        data(
+            json!({"responseId":"up_962","candidates":[{"index":0,"content":{"parts":[{"text":"鱼"}]}}]}),
+        ),
+        data(json!({"responseId":"up_962","candidates":[{"index":0,"finishReason":"STOP"}]})),
+        data(
+            json!({"responseId":"up_962","usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"thoughtsTokenCount":2,"cachedContentTokenCount":3}}),
+        ),
+    ];
+    let wire = cat(frames.clone());
+    let layouts = [
+        ("coalesced", vec![wire.clone()]),
+        ("per_frame", frames),
+        (
+            "bytewise",
+            wire.chunks(1).map(|bytes| bytes.to_vec()).collect(),
+        ),
+    ];
+    let mut baseline = None;
+    for (layout, chunks) in layouts {
+        let expected_chunks = chunks.len();
+        let mut script = Script::sse(Vec::new());
+        script.steps = chunks.into_iter().map(Step::Data).collect();
+        let upstream = Upstream::start(script).await;
+        let money = Arc::new(Money::default());
+        let limits = Limits::default();
+        let relay = relay(
+            &upstream,
+            UpstreamProtocol::Gemini,
+            limits.clone(),
+            money.clone(),
+        );
+        let (head, body, done) = collect(
+            relay
+                .start(request(ClientProtocol::Chat, true, &limits), context())
+                .unwrap(),
+        )
+        .await;
+        let head = head.unwrap();
+        assert_eq!(head.status, 200, "{layout}");
+        assert_eq!(
+            head.content_type.split(';').next().unwrap().trim(),
+            "text/event-stream",
+            "{layout}"
+        );
+        assert!(done.error.is_none(), "{layout}: {:?} {body}", done.error);
+        assert_eq!(done.settlement, Settlement::Confirmed, "{layout}");
+        assert_eq!(done.report.outcome, Outcome::Completed, "{layout}");
+        assert!(done.report.provider_complete, "{layout}");
+        assert_eq!(
+            done.report.finish_reason,
+            Some(FinishReason::Stop),
+            "{layout}"
+        );
+        assert_eq!(done.report.usage.input_tokens, Some(10), "{layout}");
+        assert_eq!(done.report.usage.output_tokens, Some(5), "{layout}");
+        assert_eq!(done.report.usage.cached_input_tokens, Some(3), "{layout}");
+        assert_eq!(
+            done.report.usage.reasoning_output_tokens,
+            Some(2),
+            "{layout}"
+        );
+        assert_eq!(done.report.attempts, 1, "{layout}");
+        assert_eq!(done.report.upstream_bytes, wire.len(), "{layout}");
+        assert_eq!(upstream.observed.hits.load(Ordering::SeqCst), 1, "{layout}");
+        assert_eq!(
+            upstream.observed.chunks.load(Ordering::SeqCst),
+            expected_chunks,
+            "{layout}"
+        );
+        let finals = money.finals.lock().unwrap();
+        assert_eq!(finals.len(), 1, "{layout}");
+        assert_eq!(finals[0].usage, done.report.usage, "{layout}");
+        assert_eq!(
+            finals[0].finish_reason,
+            Some(FinishReason::Stop),
+            "{layout}"
+        );
+        assert!(finals[0].provider_complete, "{layout}");
+        assert_eq!(finals[0].outcome, Outcome::Completed, "{layout}");
+        drop(finals);
+
+        assert!(body.ends_with("data: [DONE]\n\n"), "{layout}: {body}");
+        assert_eq!(body.matches("data: [DONE]\n\n").count(), 1, "{layout}");
+        let mut output = packets(&body);
+        let text: String = output
+            .iter()
+            .filter_map(|packet| packet["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        assert_eq!(text, "鲸鱼", "{layout}");
+        let finishes: Vec<_> = output
+            .iter()
+            .filter_map(|packet| packet["choices"][0]["finish_reason"].as_str())
+            .collect();
+        assert_eq!(finishes, ["stop"], "{layout}");
+        let usage = output.last().unwrap();
+        assert_eq!(usage["choices"], json!([]), "{layout}");
+        assert_eq!(usage["usage"], openai_usage(true), "{layout}");
+        assert_eq!(
+            output[output.len() - 2]["choices"][0]["finish_reason"],
+            "stop"
+        );
+        // Request IDs and creation times differ between sessions; payloads must not.
+        for packet in &mut output {
+            let packet = packet.as_object_mut().unwrap();
+            packet.remove("id");
+            packet.remove("created");
+        }
+        if let Some(expected) = &baseline {
+            assert_eq!(&output, expected, "{layout}");
+        } else {
+            baseline = Some(output);
+        }
+    }
+}
 fn first_text(text: &str) -> Vec<u8> {
     data(json!({"id":"live_1","choices":[{"index":0,"delta":{"role":"assistant","content":text}}]}))
 }
