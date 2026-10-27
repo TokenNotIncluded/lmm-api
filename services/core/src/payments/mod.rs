@@ -43,13 +43,26 @@ pub struct Channel {
     pub max_amount_minor: i64,
 }
 impl Channel {
-    /// First supported policy: USD cents, exactly 5000 integer credits per cent.
+    /// Test policy: USD cents, exactly 5000 integer credits per cent.
     pub fn stripe_test(id: i64, merchant: String, secret: String, maximum: i64) -> Self {
+        Self::stripe_usd(id, merchant, secret, maximum, "test")
+    }
+    /// Live direct-account policy with a separately provisioned endpoint secret.
+    pub fn stripe_live(id: i64, merchant: String, secret: String, maximum: i64) -> Self {
+        Self::stripe_usd(id, merchant, secret, maximum, "live")
+    }
+    fn stripe_usd(
+        id: i64,
+        merchant: String,
+        secret: String,
+        maximum: i64,
+        environment: &str,
+    ) -> Self {
         Self {
             id,
             provider: "stripe".into(),
             merchant,
-            environment: "test".into(),
+            environment: environment.into(),
             currency: "USD".into(),
             webhook_secrets: vec![secret],
             credits_per_minor: 5000,
@@ -61,7 +74,7 @@ impl Channel {
             && self.provider == "stripe"
             && valid_id(&self.merchant)
             && self.merchant.starts_with("acct_")
-            && self.environment == "test"
+            && matches!(self.environment.as_str(), "test" | "live")
             && self.currency == "USD"
             && self.credits_per_minor == 5000
             && self.max_amount_minor > 0

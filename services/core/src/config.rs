@@ -1631,7 +1631,7 @@ struct PaymentPermissions {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TestPaymentChannel {
+struct PaymentChannel {
     id: i64,
     merchant: String,
     webhook_secret_file: PathBuf,
@@ -1642,10 +1642,24 @@ struct TestPaymentChannel {
 #[serde(deny_unknown_fields)]
 struct PaymentConfig {
     version: u32,
-    // Only the explicitly named synthetic/test provider is supported here.
+    // Explicit mode selects the fixed direct-account USD policy.
     provider: String,
-    channels: Vec<TestPaymentChannel>,
+    channels: Vec<PaymentChannel>,
     permissions: PaymentPermissions,
+}
+impl PaymentConfig {
+    fn validate(&self) -> io::Result<()> {
+        if self.version != 1
+            || !matches!(self.provider.as_str(), "stripe-test" | "stripe-live")
+            || self.channels.is_empty()
+            || self.channels.len() > 16
+        {
+            return Err(invalid_config(
+                "payments require bounded explicitly configured Stripe direct USD channels",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -1719,21 +1733,18 @@ pub async fn financial_rpcs(url: &str, control_token: &[u8]) -> io::Result<Finan
     )?;
     let payments = if let Some((document, token)) = payments {
         let config: PaymentConfig = parse_document(&document)
-            .map_err(|_| invalid_config("invalid test payment configuration"))?;
-        if config.version != 1
-            || config.provider != "stripe-test"
-            || config.channels.is_empty()
-            || config.channels.len() > 16
-        {
-            return Err(invalid_config(
-                "payments require bounded explicitly configured Stripe test channels",
-            ));
-        }
+            .map_err(|_| invalid_config("invalid payment configuration"))?;
+        config.validate()?;
         let mut channels = Vec::new();
         for channel in config.channels {
             let secret = String::from_utf8(private_file(&channel.webhook_secret_file, 4096)?)
                 .map_err(|_| invalid_config("invalid private payment verification key"))?;
-            channels.push(crate::payments::Channel::stripe_test(
+            let constructor = match config.provider.as_str() {
+                "stripe-test" => crate::payments::Channel::stripe_test,
+                "stripe-live" => crate::payments::Channel::stripe_live,
+                _ => return Err(invalid_config("unsupported payment provider")),
+            };
+            channels.push(constructor(
                 channel.id,
                 channel.merchant,
                 secret.trim().to_owned(),
@@ -1753,7 +1764,7 @@ pub async fn financial_rpcs(url: &str, control_token: &[u8]) -> io::Result<Finan
         };
         let store =
             crate::payments::PaymentsStore::new(bounded_database_pool(url, 2).await?, channels)
-                .map_err(|_| invalid_config("invalid test payment channel configuration"))?;
+                .map_err(|_| invalid_config("invalid payment channel configuration"))?;
         let rpc = crate::payments::rpc::PaymentsRpc::new(store, &token, permissions)
             .map_err(|_| invalid_config("invalid payment RPC configuration"))?;
         if rpc.features().is_empty() {
@@ -3196,6 +3207,28 @@ mod tests {
         );
         assert!(parse_document::<CommerceConfig>(b"version=1\ntransfer=true\n").is_err());
         assert!(parse_document::<PaymentConfig>(b"version=1\nprovider='stripe-test'\nchannels=[]\n[permissions]\nrelease_refund=true\n").is_err());
+    }
+    #[test]
+    fn payment_configuration_requires_explicit_direct_usd_mode() {
+        let base = "version=1\nprovider='stripe-live'\n[[channels]]\nid=7\nmerchant='acct_synthetic'\nwebhook_secret_file='/synthetic/secret'\nmax_usd_cents=100\n[permissions]\nprepare=true\n";
+        for provider in ["stripe-test", "stripe-live"] {
+            let raw = base.replace("stripe-live", provider);
+            let config: PaymentConfig = parse_document(raw.as_bytes()).unwrap();
+            assert!(config.validate().is_ok(), "provider {provider}");
+        }
+        for provider in ["stripe", "live", "stripe-isolated-test", "epay"] {
+            let raw = base.replace("stripe-live", provider);
+            let config: PaymentConfig = parse_document(raw.as_bytes()).unwrap();
+            assert!(config.validate().is_err(), "provider {provider}");
+        }
+        for field in [
+            "environment='test'",
+            "currency='CNY'",
+            "credits_per_minor=1",
+        ] {
+            let raw = base.replace("id=7", &format!("{field}\nid=7"));
+            assert!(parse_document::<PaymentConfig>(raw.as_bytes()).is_err());
+        }
     }
     #[test]
     fn isolated_oauth2_requires_explicit_profile_private_registry_and_exact_listener() {

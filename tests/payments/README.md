@@ -44,7 +44,7 @@ Navigation: `markref context payments.process-recovery`.
 Freeze `verify_process.sources()` before compiling target `payments_process`
 and Go `go test -c ./internal/modules/payments`; pass that JSON as
 `--compiled-inputs`. Build is owned separately; this runner never builds.
-Run through agcc with output, process and cache roots. Required flags:
+Run directly with the required output and process roots. Required flags:
 `--output-root` (new repo/.local-tests directory), `--process-root` (new private
 absolute directory at most 35 bytes), `--core-binding` (release source-binding
 JSON), `--core-build-receipt` (successful release-build.json binding the exact
@@ -124,15 +124,10 @@ tools, cached crates/modules and the pinned PostgreSQL image are prerequisites.
 Prepare existing, owned 0700 absolute output and short socket directories without
 symlink components. Set `PAYMENT_STATUS_OUTPUT`, `PAYMENT_STATUS_SOCKET_ROOT` and
 `PAYMENT_STATUS_CORE_REVISION` to those directories and an immutable Core commit.
-Track the real Cargo cache, shared target and selected output/socket roots with
-agcc. The runner keeps its temporary and Go/mise caches under the output root:
+The runner keeps its temporary and Go/mise caches under the output root:
 
 ```sh
-agcc run --agent payment-web-status --root services/core/target \
-  --root "$HOME/.cargo" --root "$HOME/go/pkg/mod" --root /tmp/lmm-delegate \
-  --root "${PAYMENT_STATUS_OUTPUT:?Set an existing private absolute output root}" \
-  --root "${PAYMENT_STATUS_SOCKET_ROOT:?Set an existing private short socket root}" -- \
-  env MISE_DISABLE_TOOLS=rust MISE_AUTO_INSTALL=false RUSTUP_TOOLCHAIN=1.99.0 \
+env MISE_DISABLE_TOOLS=rust MISE_AUTO_INSTALL=false RUSTUP_TOOLCHAIN=1.99.0 \
   PYTHONDONTWRITEBYTECODE=1 MISE_CACHE_DIR="$PAYMENT_STATUS_OUTPUT/cache/mise" \
   mise exec -- python3 -B tests/payments/verify_web_status.py \
   --output "$PAYMENT_STATUS_OUTPUT" --socket-root "$PAYMENT_STATUS_SOCKET_ROOT" \
