@@ -98,7 +98,8 @@ Go 拒绝 `SQL_DSN`、`DATABASE_URL`、`LMM_CORE_DATABASE_URL` 等旧单体/核�
 
 ## 验证与分发
 
-按[检查选择表](agent-workflows.md)执行受影响检查。鉴权、资金、持久化和通信变化
+按[检查选择表](agent-workflows.md)执行受影响检查，并遵守其[适度与停止](agent-workflows.md#适度与停止)：
+只测本次改动，检查跑一次，通过即交付。鉴权、资金、持久化和通信变化
 需要对应真实进程或隔离数据库；Go 的嵌套 `pgtest` 模块需单独测试。不要把示例替身
 通过写成真实资金链路通过。
 
