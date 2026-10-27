@@ -22,11 +22,50 @@ import { afterEach, test } from 'node:test'
 import { api } from '@/lib/api'
 
 import {
+  getChannelOps,
+  getChannels,
+  searchChannels,
   type ChannelBalanceRefreshResponse,
   updateAllChannelsBalance,
 } from './api'
 
 const originalGet = api.get
+
+test('channel capabilities reject failed reads and preserve read-only unknown metrics', async () => {
+  for (const payload of [
+    { success: false, message: 'Capabilities unavailable' },
+    { success: true },
+  ]) {
+    api.get = (async () => ({ data: payload })) as typeof api.get
+    await assert.rejects(getChannelOps())
+  }
+  const payload = {
+    success: true,
+    data: { read_only: true, retry_times: null },
+  }
+  api.get = (async () => ({ data: payload })) as typeof api.get
+  assert.deepEqual(await getChannelOps(), payload)
+})
+
+for (const [name, read] of [
+  ['list', () => getChannels()],
+  ['search', () => searchChannels({ keyword: 'model' })],
+] as const) {
+  test(`channel ${name} rejects failed or incomplete envelopes instead of showing an empty list`, async () => {
+    for (const payload of [
+      { success: false, message: 'routing unavailable' },
+      { success: true },
+      { success: true, data: [] },
+      { success: true, data: { items: [], total: '21' } },
+    ]) {
+      api.get = (async () => ({ data: payload })) as typeof api.get
+      await assert.rejects(read())
+    }
+    const payload = { success: true, data: { items: [], total: 0 } }
+    api.get = (async () => ({ data: payload })) as typeof api.get
+    assert.deepEqual(await read(), payload)
+  })
+}
 
 afterEach(() => {
   api.get = originalGet

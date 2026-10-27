@@ -12,6 +12,27 @@ afterEach(() => {
 })
 const params = { start_timestamp: 0, end_timestamp: 10 }
 
+test('administrator usage preserves incomplete historical coverage and all-accounts scope', async () => {
+  const payload = {
+    success: true,
+    availability: 'partial',
+    coverage: {
+      scope: 'administrator_all_accounts',
+      native_requests: true,
+      historical_imports: false,
+      complete: false,
+    },
+    data: [
+      { created_at: 1, quota: 10, usage_scope: 'administrator_all_accounts' },
+    ],
+  }
+  api.get = (async (url: string) => {
+    assert.equal(url, '/api/data')
+    return { data: payload }
+  }) as typeof api.get
+  assert.deepEqual(await getUserQuotaDates(params, true), payload)
+})
+
 test('dashboard validates bucket data and keeps explicit successful legacy null empty', async () => {
   api.get = (async () => ({
     data: { success: true, data: null },

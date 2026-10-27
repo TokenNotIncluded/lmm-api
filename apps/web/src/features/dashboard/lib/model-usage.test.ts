@@ -54,6 +54,15 @@ test('native image-only models retain null tokens and exact image/consumption co
   assert.ok(record.endsWith(',"2","settled_text_requests"'))
 })
 
+test('model aggregation retains administrator scope instead of relabeling personal usage', () => {
+  const [row] = summarizeModelUsage([
+    nativeBucket({ usage_scope: 'administrator_all_accounts' }),
+  ])
+  assert.equal(row.usage_scope, 'administrator_all_accounts')
+  assert.equal(row.quota_raw, '100')
+  assert.equal(row.tokens, null)
+})
+
 test('a model with text and images keeps known text tokens and separates sponsored consumption', () => {
   const [row] = summarizeModelUsage([
     nativeBucket(),

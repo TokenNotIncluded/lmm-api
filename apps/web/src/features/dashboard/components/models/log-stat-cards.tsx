@@ -78,6 +78,7 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [partialAdminUsage, setPartialAdminUsage] = useState(false)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [timeRangeMinutes, setTimeRangeMinutes] = useState(0)
@@ -88,6 +89,7 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setError(false)
+    setPartialAdminUsage(false)
     onDataUpdate?.([], true)
 
     const timeRange = computeTimeRange(
@@ -109,7 +111,15 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
         if (!res?.success) throw new Error('Usage request failed')
         const data = res.data ?? []
         if (!Array.isArray(data)) throw new Error('Invalid usage response')
-        setStats(calculateDashboardStats(data))
+        const partial =
+          res.coverage?.scope === 'administrator_all_accounts' &&
+          (res.availability === 'partial' ||
+            res.coverage.complete === false ||
+            res.coverage.historical_imports === false)
+        setPartialAdminUsage(partial)
+        setStats(
+          partial && data.length === 0 ? null : calculateDashboardStats(data)
+        )
         setUpdatedAt(new Date())
         onDataUpdate?.(data, false)
       })
@@ -198,10 +208,20 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
           {t('failed', { ns: 'dashboardUsage' })}
         </div>
       )}
+      {!loading && !error && partialAdminUsage && (
+        <p className='text-muted-foreground text-sm' role='status'>
+          {t(
+            'Partial usage across all accounts: only native Core requests are included; imported historical usage is unavailable.'
+          )}
+        </p>
+      )}
       <dl className='dashboard-stats__grid'>
         {statCardsConfig.map((config) => {
           const Icon = config.icon
-          const rawValue = config.getValue(adaptedStats, timeRangeMinutes)
+          const rawValue =
+            stats === null
+              ? null
+              : config.getValue(adaptedStats, timeRangeMinutes)
           const unavailable = rawValue === null
           const formatted = unavailable
             ? { displayValue: '—', fullValue: t('Unavailable') }

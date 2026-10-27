@@ -32,7 +32,12 @@ export type SystemOptionsResponse = {
   success: boolean
   message: string
   data: SystemOption[]
-  capabilities?: { model_price_locks?: boolean; trust_level_benefits?: boolean }
+  capabilities?: {
+    read_only?: boolean
+    partial?: boolean
+    model_price_locks?: boolean
+    trust_level_benefits?: boolean
+  }
 }
 
 export type UpdateOptionRequest = {
