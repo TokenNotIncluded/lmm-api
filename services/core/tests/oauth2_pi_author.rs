@@ -340,6 +340,106 @@ async fn actual_core_tcp_pi_chat_responses_json_stream_and_native_control(pool: 
 }
 
 #[sqlx::test(migrations = false)]
+async fn inventory_http_requires_live_catalog_authority_and_rejects_queries(pool: PgPool) {
+    with_fixture(pool, true, |f| async move {
+        let token = f.token(100).await;
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/inventory", f.base))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(inventory["inventory_schema_version"], 1);
+        assert_eq!(inventory["scope"], "router_routes_and_aliases");
+        let encoded = inventory.to_string().to_ascii_lowercase();
+        for secret in [
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "secret",
+            "password",
+        ] {
+            assert!(!encoded.contains(secret), "inventory exposed {secret}");
+        }
+
+        // The existing v1 model catalog remains reachable with the same grant.
+        let response = f
+            .client
+            .get(format!("{}/v1/models", f.base))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let v1: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(v1["data"][0]["id"], "provider-model");
+
+        // The separate grant family avoids narrowing the catalog token used above.
+        let balance_family = f.token(100).await;
+        let balance_only = f
+            .refresh(
+                &balance_family.refresh_token,
+                Some("balance:read group:YWxsb3dlZA".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(balance_only.scope, "balance:read group:YWxsb3dlZA");
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/balance", f.base))
+            .bearer_auth(&balance_only.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/inventory", f.base))
+            .bearer_auth(&balance_only.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/inventory?unexpected=1", f.base))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/inventory", f.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        f.issuer
+            .revoke_for_client("lmm-pi", &token.access_token)
+            .await
+            .unwrap();
+        let response = f
+            .client
+            .get(format!("{}/api/oauth2/inventory", f.base))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(f.provider.hits.load(Ordering::SeqCst), 0);
+    })
+    .await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn malformed_double_or_foreign_oauth_source_cannot_enter_financial_records(pool: PgPool) {
     with_fixture(pool,true,|f|async move{
         let token=f.token(200).await;let charge=f.reserve(&token.access_token,&f.spec("pi-source-original",50),&[1;32]).await.unwrap();

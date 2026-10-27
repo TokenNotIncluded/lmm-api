@@ -25,6 +25,7 @@ pub fn router(issuer: LmmIssuer) -> Router {
         .route("/api/oauth2/token", post(token))
         .route("/api/oauth2/revoke", post(revoke))
         .route("/api/oauth2/catalog", get(catalog))
+        .route("/api/oauth2/inventory", get(inventory))
         .route("/api/oauth2/balance", get(balance))
         .route("/api/oauth2/usage", get(usage))
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024))
@@ -200,6 +201,23 @@ fn read_error(error: ReadError) -> Response {
         )
             .into_response(),
         ReadError::Identity(e) => protocol_error(e),
+    }
+}
+async fn inventory(
+    State(issuer): State<LmmIssuer>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    if uri.query().is_some() {
+        return read_error(ReadError::Identity(IdentityError::Unauthorized));
+    }
+    let access = match bearer(&headers) {
+        Ok(v) => v,
+        Err(e) => return read_error(ReadError::Identity(e)),
+    };
+    match issuer.inventory(access).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => read_error(e),
     }
 }
 async fn catalog(
