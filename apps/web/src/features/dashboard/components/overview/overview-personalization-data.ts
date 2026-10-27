@@ -115,9 +115,12 @@ export function buildOverviewUsage(
   end: number,
   locale: string,
   otherLabel: string,
-  unknownLabel: string
+  unknownLabel: string,
+  { includeUnreportedDays = true } = {}
 ) {
+  // @context-fold begin overview-usage-aggregation
   const days = new Map<string, { label: string; value: number }>()
+  const reportedDays = new Set<string>()
   const cursor = new Date(start * 1000)
   cursor.setHours(0, 0, 0, 0)
   const formatter = new Intl.DateTimeFormat(toIntlLocale(locale), {
@@ -182,8 +185,12 @@ export function buildOverviewUsage(
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new Error('Usage metric unavailable')
     }
-    const bucket = days.get(localDay(new Date(row.created_at * 1000)))
-    if (bucket) bucket.value += value
+    const day = localDay(new Date(row.created_at * 1000))
+    const bucket = days.get(day)
+    if (bucket) {
+      bucket.value += value
+      reportedDays.add(day)
+    }
     const name = row.model_name || unknownLabel
     models.set(name, (models.get(name) ?? 0) + value)
   }
@@ -195,7 +202,10 @@ export function buildOverviewUsage(
       sorted.slice(5).reduce((total, row) => total + row[1], 0),
     ])
   }
-  const values = [...days.values()]
+  // Missing days in partial coverage are unknown, not zero measurements.
+  const values = [...days]
+    .filter(([day]) => includeUnreportedDays || reportedDays.has(day))
+    .map(([, bucket]) => bucket)
   return {
     labels: values.map((row) => row.label),
     values: values.map((row) => row.value),
@@ -206,4 +216,5 @@ export function buildOverviewUsage(
     outputImageCount,
     excludedImageCount,
   }
+  // @context-fold end overview-usage-aggregation
 }
