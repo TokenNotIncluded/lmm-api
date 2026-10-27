@@ -21,6 +21,7 @@ pub enum CatalogError {
 /// Opaque server-injected proof. Only ModelGateway can create a serving surface.
 /// No URL, credential material, raw release, or NativePrincipal is serialized.
 pub struct CatalogSurface {
+    inventory_router: Arc<Router>,
     trust_pricing_enabled: std::sync::atomic::AtomicBool,
     state: SurfaceState,
 }
@@ -148,7 +149,8 @@ impl CatalogSurface {
         credentials: &BTreeMap<(u64, u64), String>,
         total_timeout: Duration,
     ) -> Self {
-        Self::load(router, credentials, total_timeout, None).unwrap_or(Self {
+        Self::load(router.clone(), credentials, total_timeout, None).unwrap_or(Self {
+            inventory_router: router,
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         })
@@ -161,12 +163,13 @@ impl CatalogSurface {
         reserved_input_tokens: i64,
     ) -> Self {
         Self::load(
-            router,
+            router.clone(),
             credentials,
             total_timeout,
             Some((policy, reserved_input_tokens)),
         )
         .unwrap_or(Self {
+            inventory_router: router,
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         })
@@ -298,6 +301,7 @@ impl CatalogSurface {
             return Err(CatalogError::Unavailable);
         }
         Ok(Self {
+            inventory_router: router.clone(),
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Ready {
                 router,
@@ -306,6 +310,106 @@ impl CatalogSurface {
                 models,
             },
         })
+    }
+
+    /// Authorized Router configuration inventory, not invocation or price authority.
+    /// Independent image-service models are explicitly outside this version's scope.
+    pub(crate) fn project_inventory(
+        &self,
+        authorized_groups: &[String],
+        resource: &str,
+        observed_at: u64,
+    ) -> Result<serde_json::Value, CatalogError> {
+        if resource.is_empty()
+            || resource.len() > 2048
+            || observed_at == 0
+            || authorized_groups.is_empty()
+        {
+            return Err(CatalogError::Unavailable);
+        }
+        let document = self
+            .inventory_router
+            .catalog_document()
+            .map_err(|_| CatalogError::Unavailable)?;
+        let version = ReleaseVersion {
+            routing: document.routing.version,
+            pricing: document.pricing.version,
+        };
+        let allowed: std::collections::BTreeSet<_> = authorized_groups.iter().collect();
+        let enabled: std::collections::BTreeSet<_> = document
+            .routing
+            .groups
+            .iter()
+            .filter(|g| g.enabled && allowed.contains(&g.name))
+            .map(|g| g.name.as_str())
+            .collect();
+        let mut groups = Vec::new();
+        for group in &enabled {
+            let id = URL_SAFE_NO_PAD.encode(group.as_bytes());
+            groups.push(serde_json::json!({"id":id,"name":group,"scope":format!("group:{id}")}));
+        }
+        let mut aliases: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+        for alias in &document.routing.aliases {
+            aliases
+                .entry((&alias.group, &alias.model))
+                .or_default()
+                .push(&alias.alias);
+        }
+        let mut rows = Vec::new();
+        for route in document
+            .routing
+            .routes
+            .iter()
+            .filter(|r| r.enabled && enabled.contains(r.group.as_str()))
+        {
+            let group_id = URL_SAFE_NO_PAD.encode(route.group.as_bytes());
+            for name in std::iter::once(route.model.as_str()).chain(
+                aliases
+                    .get(&(route.group.as_str(), route.model.as_str()))
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            ) {
+                // Bound temporary allocation as well as the final response. Never truncate.
+                if rows.len() >= 20_000 {
+                    return Err(CatalogError::Unavailable);
+                }
+                rows.push((
+                    route.group.clone(),
+                    name.to_owned(),
+                    serde_json::json!({
+                        "id":format!("lmm:{group_id}:{}", URL_SAFE_NO_PAD.encode(name.as_bytes())),
+                        "group_id":group_id,"group":route.group,"public_model":name,
+                        "canonical_model":route.model,"speeds":route.speeds,
+                        "metadata_status":"unknown",
+                        "context_window":null,"max_input_tokens":null,"max_output_tokens":null,
+                        "capabilities":null
+                    }),
+                ));
+            }
+        }
+        rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        let models: Vec<_> = rows.into_iter().map(|(_, _, row)| row).collect();
+        let result = serde_json::json!({
+            "inventory_schema_version":1,"scope":"router_routes_and_aliases",
+            "includes_independent_image_service_models":false,
+            "resource":resource,"observed_at":observed_at,
+            "routing_version":version.routing,"pricing_version":version.pricing,
+            "groups":groups,"models":models
+        });
+        if serde_json::to_vec(&result)
+            .map_err(|_| CatalogError::Unavailable)?
+            .len()
+            > MAX_CATALOG_BYTES
+            || self
+                .inventory_router
+                .version()
+                .map_err(|_| CatalogError::Unavailable)?
+                != version
+        {
+            return Err(CatalogError::Unavailable);
+        }
+        Ok(result)
     }
 
     /// groups must come from issuer ReadAuthority: token/family consent/current
@@ -622,6 +726,97 @@ mod tests {
     }
 
     #[test]
+    fn router_inventory_keeps_aliases_without_callable_v1_apis() {
+        let (mut r, p) = fixture("model");
+        r.routes[0].targets[0].upstream_model = "mapped-upstream".into();
+        r.aliases.push(ModelAlias {
+            group: "synthetic".into(),
+            alias: "alias".into(),
+            model: "model".into(),
+        });
+        let (_, s) = surface(r, p);
+        assert!(view(&s).models.is_empty());
+        let inventory = s
+            .project_inventory(
+                &["synthetic".into()],
+                "https://synthetic.invalid/api/oauth2",
+                123,
+            )
+            .unwrap();
+        let rows = inventory["models"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["public_model"], "alias");
+        assert_eq!(rows[0]["canonical_model"], "model");
+        assert!(rows[0]["context_window"].is_null());
+        assert_eq!(
+            inventory["includes_independent_image_service_models"],
+            false
+        );
+        let wire = inventory.to_string();
+        assert!(!wire.contains("mapped-upstream"));
+        assert!(!wire.contains("127.0.0.1"));
+        assert!(!wire.contains("synthetic-only-not-a-provider-key"));
+        let denied = s
+            .project_inventory(
+                &["other".into()],
+                "https://synthetic.invalid/api/oauth2",
+                123,
+            )
+            .unwrap();
+        assert!(denied["models"].as_array().unwrap().is_empty());
+        assert!(denied["groups"].as_array().unwrap().is_empty());
+        let disabled = CatalogSurface {
+            inventory_router: s.inventory_router.clone(),
+            trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
+            state: SurfaceState::Disabled,
+        };
+        assert_eq!(
+            disabled
+                .project_inventory(
+                    &["synthetic".into()],
+                    "https://synthetic.invalid/api/oauth2",
+                    123
+                )
+                .unwrap(),
+            inventory
+        );
+    }
+
+    #[test]
+    fn router_inventory_keeps_fast_only_and_filters_disabled_routes() {
+        let (mut r, mut p) = fixture("model");
+        r.routes[0].speeds = vec![Speed::Fast];
+        r.routes[0].targets[0].speeds = vec![Speed::Fast];
+        p.rules[0].speed = Speed::Fast;
+        let (_, s) = surface(r.clone(), p.clone());
+        assert!(view(&s).models.is_empty());
+        let inventory = s
+            .project_inventory(
+                &["synthetic".into()],
+                "https://synthetic.invalid/api/oauth2",
+                123,
+            )
+            .unwrap();
+        assert_eq!(
+            inventory["models"][0]["speeds"],
+            serde_json::json!(["fast"])
+        );
+        r.routes[0].enabled = false;
+        let (_, s) = surface(r, p);
+        assert!(
+            s.project_inventory(
+                &["synthetic".into()],
+                "https://synthetic.invalid/api/oauth2",
+                123
+            )
+            .unwrap()["models"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn configured_rates_are_exact_and_group_price_is_not_multiplied_twice() {
         let (r, p) = fixture("model");
         let (_, s) = surface(r, p);
@@ -835,6 +1030,7 @@ mod tests {
         assert!(v.models.is_empty());
         assert!(v.groups.is_empty());
         let disabled = CatalogSurface {
+            inventory_router: s.inventory_router.clone(),
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         };

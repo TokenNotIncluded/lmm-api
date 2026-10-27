@@ -100,6 +100,35 @@ impl LmmIssuer {
         tx.commit().await?;
         Ok(result)
     }
+    /// Inventory is read authority only, never model invocation authority.
+    pub async fn inventory(
+        &self,
+        access: &str,
+    ) -> std::result::Result<serde_json::Value, ReadError> {
+        let mut tx = transaction(&self.identity.pool).await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await?;
+        let actor = self.authorize_read(&mut tx, access, "catalog:read").await?;
+        let surface = self
+            .catalog_surface
+            .as_ref()
+            .ok_or(ReadError::Unavailable)?;
+        let observed_at: i64 =
+            sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                .fetch_one(&mut *tx)
+                .await?;
+        let result = surface
+            .project_inventory(
+                &actor.groups,
+                self.profile.resource(),
+                u64::try_from(observed_at).map_err(|_| ReadError::Unavailable)?,
+            )
+            .map_err(|_| ReadError::Unavailable)?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
     pub async fn catalog(
         &self,
         access: &str,
