@@ -20,6 +20,7 @@ use lmm_core::{
     routing::*,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{
     collections::BTreeMap,
@@ -638,4 +639,261 @@ async fn systemone_independent_supplier_errors_and_disconnected_caller_never_rep
             .unwrap(),
         (4134, 5866, false)
     );
+}
+
+/// R1 behavior regression without SDK dependencies. Both HTTP hops use actual
+/// numeric-loopback TCP; the provider response and image are synthetic. This is
+/// not an official supplier result or independent acceptance sign-off.
+#[sqlx::test(migrations = false)]
+async fn systemone_prepared_json_and_zstd_multipart_tcp_capture_once(pool: PgPool) {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    #[derive(Clone)]
+    struct WireCapture {
+        pool: PgPool,
+        seen: Arc<Mutex<Vec<(String, String, Vec<u8>)>>>,
+    }
+    async fn capture_wire(
+        State(state): State<WireCapture>,
+        request: Request<Body>,
+        next: Next,
+    ) -> Response {
+        assert!(!request.headers().contains_key("content-encoding"));
+        let content_type = request.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let (parts, body) = request.into_parts();
+        let body = to_bytes(body, 2 * 1024 * 1024).await.unwrap();
+        let wire_sha256 = format!("{:x}", Sha256::digest(&body));
+        // A separate connection must observe the committed hold and BOTH
+        // matching proof records before the synthetic supplier can reply.
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT r.id FROM core_charging.requests r \
+             JOIN core_charging.usage_events p ON p.request_id=r.id AND p.event_id='reservation-contract:v1' \
+             JOIN core_charging.usage_events a ON a.request_id=r.id AND a.event_id='reservation-admission:v1' \
+             JOIN core_charging.ledger_holds h ON h.request_id=r.id \
+             WHERE p.detail->>'wire_sha256'=$1 AND r.state='streaming' \
+             AND r.reserved=1377 AND r.settled=0 AND h.reserved=1377 AND h.captured=0 AND NOT h.closed \
+             AND p.detail->>'prepared_sha256'=a.detail->>'prepared_sha256' \
+             AND p.detail->>'admission_spec_sha256'=a.detail->>'admission_spec_sha256' \
+             AND p.detail->>'frozen_price_sha256'=a.detail->>'frozen_price_sha256'",
+        )
+        .bind(wire_sha256)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(ids.len(), 1, "actual wire lacks one durable prepared hold");
+        state
+            .seen
+            .lock()
+            .unwrap()
+            .push((ids[0].clone(), content_type, body.to_vec()));
+        next.run(Request::from_parts(parts, Body::from(body))).await
+    }
+
+    let (_identity, ledger, _session, key, key_id, account) =
+        model_fixture::fixture(&pool, 10000).await;
+    sqlx::query("INSERT INTO core_identity.user_routing_groups(user_id,group_name,enabled,source_reference) VALUES(7,'allowed',TRUE,'synthetic-r1-systemone-prepared')")
+        .execute(&pool).await.unwrap();
+    let supplier_state = Supplier {
+        hits: Arc::new(AtomicUsize::new(0)),
+        seen: Arc::new(Mutex::new(Vec::new())),
+        images: Arc::new(Mutex::new(Vec::new())),
+    };
+    let capture = WireCapture {
+        pool: pool.clone(),
+        seen: Arc::new(Mutex::new(Vec::new())),
+    };
+    let supplier_server = serve(
+        Router::new()
+            .route("/v1/systemone", post(supplier))
+            .with_state(supplier_state.clone())
+            .layer(middleware::from_fn_with_state(
+                capture.clone(),
+                capture_wire,
+            )),
+    )
+    .await;
+    let gateway = build_gateway(&pool, &format!("{}/v1", supplier_server.base), key_id, 0);
+    let core = serve(gateway.router()).await;
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    // The same valid 280x280 synthetic PNG used by the native unit fixture.
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAARgAAAEYCAYAAACHjumMAAACqklEQVR42u3UMQ0AAAzDsPIn3YKY9tkQciQFeBIJAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYAAMBjAYwGAADAYwGMBgAAwGMBjAYAAMBjAYwGAADAYwGMBgAAwGMBjAYAAMBjAYwGAADAYwGMBgAAwGMBjAYAAMBjAYAIMBDAYwGACDAQwGMBgAgwEMBjAYAIMBDAYwGACDAQwGMBgAgwEMBjAYAIMBDAYwGACDAQwGMBgAgwEMBjAYAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAADAYwGMBgAAwGMBjAYAAMBjAYwGAADAYwGMBgAAwGMBjAYAAMBjAYwGAADAYwGMBgAAwGMBjAYAAMBjAYwGAADAYwGACDAQwGMBgAgwEMBjAYAIMBDAYwGACDAQwGMBgAgwEMBjAYAIMBDAYwGACDAQwGMBgAgwEMBjAYAIMBDAYwGACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQwGwGAAgwEMBsBgAIMBDAbAYACDAQxGAsBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBMBjAYACDATAYwGAAgwEwGMBgAIMBuBlknX59IehThQAAAABJRU5ErkJggg==").unwrap();
+    for (index, multipart) in [false, true].into_iter().enumerate() {
+        let operation = if multipart {
+            "synthetic-r1-systemone-multipart"
+        } else {
+            "synthetic-r1-systemone-json"
+        };
+        let mut wire = json!({
+            "model":"jev-1.14.0",
+            "state":{"scenario":operation,"decimal":0.3},
+            "questions":{"n":{"type":"noul"}},
+        });
+        let (content_type, body) = if multipart {
+            wire["state"]["camera"] = json!("synthetic-camera-reference");
+            wire["assets"] = json!({"synthetic-camera-reference":{"part":"camera"}});
+            wire["questions"]["b"] = json!({"type":"box"});
+            let form = reqwest::multipart::Form::new()
+                .part(
+                    "request",
+                    reqwest::multipart::Part::text(wire.to_string())
+                        .mime_str("application/json")
+                        .unwrap(),
+                )
+                .part(
+                    "camera",
+                    reqwest::multipart::Part::bytes(png.clone())
+                        .file_name("synthetic-camera.png")
+                        .mime_str("image/png")
+                        .unwrap(),
+                );
+            let mut request = http
+                .post(format!("{}/v1/systemone", core.base))
+                .multipart(form)
+                .build()
+                .unwrap();
+            let content_type = request.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let body = request.body_mut().take().unwrap();
+            let raw = to_bytes(Body::new(body), 2 * 1024 * 1024).await.unwrap();
+            (
+                content_type,
+                zstd::stream::encode_all(raw.as_ref(), 3).unwrap(),
+            )
+        } else {
+            (
+                "application/json".into(),
+                serde_json::to_vec(&wire).unwrap(),
+            )
+        };
+        if multipart {
+            assert!(body.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]));
+        }
+        let make_request = || {
+            let mut request = http
+                .post(format!("{}/v1/systemone", core.base))
+                .bearer_auth(&key)
+                .header("idempotency-key", operation)
+                .header("content-type", &content_type)
+                .body(body.clone());
+            if multipart {
+                request = request
+                    .header("content-encoding", "zstd")
+                    .header("typesafe-danger-zone-images", "true");
+            }
+            request
+        };
+        let response = make_request().send().await.unwrap();
+        let status = response.status();
+        let id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let output: Value = response.json().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{output}");
+        assert_eq!(
+            output["usage"],
+            json!({"input_tokens":120,"output_tokens":456789})
+        );
+        assert_eq!(output["answers"]["n"]["noul"], json!(0.3));
+        if multipart {
+            assert_eq!(output["answers"]["b"]["type"], "box");
+        }
+        let (seen_id, seen_type, actual_wire) = capture.seen.lock().unwrap()[index].clone();
+        assert_eq!(seen_id, id);
+        assert_eq!(seen_type.starts_with("multipart/form-data;"), multipart);
+        assert_eq!(supplier_state.seen.lock().unwrap()[index], wire);
+        let (state, reserved, settled, input, out, price, proof, marker, fingerprint, spec):
+            (String, i64, i64, i64, i64, Value, Value, Value, String, String) = sqlx::query_as(
+                "SELECT r.state,r.reserved,r.settled,r.input_tokens,r.output_tokens,r.price,p.detail,a.detail,encode(r.fingerprint,'hex'),encode(r.spec_digest,'hex') \
+                 FROM core_charging.requests r \
+                 JOIN core_charging.usage_events p ON p.request_id=r.id AND p.event_id='reservation-contract:v1' \
+                 JOIN core_charging.usage_events a ON a.request_id=r.id AND a.event_id='reservation-admission:v1' WHERE r.id=$1",
+            ).bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            (state.as_str(), reserved, settled, input, out),
+            ("settled", 1377, 3, 120, 456789)
+        );
+        assert_eq!(price["input_per_million"], 21000);
+        assert_eq!(price["cached_per_million"], 0);
+        assert_eq!(price["output_per_million"], 0);
+        let typed_price: lmm_core::billing::charging::Price =
+            serde_json::from_value(price).unwrap();
+        assert_eq!(proof["mode"], "systemone_native_v1");
+        assert_eq!(
+            proof["wire_sha256"],
+            format!("{:x}", Sha256::digest(&actual_wire))
+        );
+        assert_eq!(proof["request_fingerprint"], fingerprint);
+        assert_eq!(proof["admission_spec_sha256"], spec);
+        assert_eq!(
+            proof["frozen_price_sha256"],
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&typed_price).unwrap())
+            )
+        );
+        assert_eq!(
+            proof["bounds"],
+            json!({"model_input_max":65536,"input":65536,"requested_output":0,"output":u32::MAX})
+        );
+        assert_eq!(proof["semantics"]["output"], "unpriced_systemone_metadata");
+        assert_eq!(
+            proof["binding"]["generation_url"],
+            format!("{}/v1/systemone", supplier_server.base)
+        );
+        assert_eq!(
+            proof["binding"]["credential_ref"],
+            json!({"id":7,"revision":1})
+        );
+        for field in [
+            "prepared_sha256",
+            "admission_spec_sha256",
+            "frozen_price_sha256",
+        ] {
+            assert_eq!(marker[field], proof[field]);
+        }
+        let hold: (i64, i64, bool) = sqlx::query_as(
+            "SELECT reserved,captured,closed FROM core_charging.ledger_holds WHERE request_id=$1",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(hold, (1377, 3, true));
+        let finals: i64 = sqlx::query_scalar("SELECT count(*) FROM core_charging.usage_events WHERE request_id=$1 AND event_id='final'")
+            .bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(finals, 1);
+        let balance = ledger.balance(account).await.unwrap();
+        assert_eq!(
+            (balance.available_units, balance.reserved_units),
+            (10000 - 3 * (index as i64 + 1), 0)
+        );
+        let replay = make_request().send().await.unwrap();
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+        assert_eq!(supplier_state.hits.load(Ordering::SeqCst), index + 1);
+        assert_eq!(capture.seen.lock().unwrap().len(), index + 1);
+        assert_eq!(ledger.balance(account).await.unwrap(), balance);
+        let counts: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM core_charging.requests), \
+             (SELECT count(*) FROM core_billing.ledger_journals WHERE kind='capture'), \
+             (SELECT count(*) FROM core_charging.ledger_commands)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            counts,
+            (index as i64 + 1, index as i64 + 1, 2 * (index as i64 + 1))
+        );
+    }
+    assert_eq!(*supplier_state.images.lock().unwrap(), vec![png]);
 }

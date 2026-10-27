@@ -182,8 +182,25 @@ impl Billing for Bridge {
         route: &'a Route,
         request: &'a Request,
     ) -> RelayFuture<'a, Reservation> {
+        // @context-fold begin encode-context-max-reservation
         Box::pin(async move {
-            let (secret, worker, fingerprint, selected, peer, oauth_issuer) = {
+            let body = request.upstream_body(route)?;
+            self.reserve_prepared(context, route, request, &body, None)
+                .await
+        })
+        // @context-fold end encode-context-max-reservation
+    }
+
+    fn reserve_prepared<'a>(
+        &'a self,
+        context: &'a RequestContext,
+        route: &'a Route,
+        request: &'a Request,
+        body: &'a [u8],
+        observation: Option<&'a crate::relay::input_count::CountObservation>,
+    ) -> RelayFuture<'a, Reservation> {
+        Box::pin(async move {
+            let (secret, worker, fingerprint, selected, output_ceiling, peer, oauth_issuer) = {
                 let active = self
                     .active
                     .lock()
@@ -196,15 +213,63 @@ impl Billing for Bridge {
                     op.worker,
                     op.fingerprint,
                     op.selected.clone().ok_or(RelayError::RouteUnavailable)?,
+                    op.output_token_ceiling,
                     op.peer,
                     op.oauth_issuer.clone(),
                 )
             };
+            let protocol = match selected.attempt.protocol() {
+                crate::routing::Protocol::OpenAiChat => crate::relay::UpstreamProtocol::Chat,
+                crate::routing::Protocol::OpenAiResponses => {
+                    crate::relay::UpstreamProtocol::Responses
+                }
+                crate::routing::Protocol::AnthropicMessages => {
+                    crate::relay::UpstreamProtocol::Anthropic
+                }
+                crate::routing::Protocol::Gemini => crate::relay::UpstreamProtocol::Gemini,
+                crate::routing::Protocol::SystemOne => return Err(RelayError::RouteUnavailable),
+            };
+            let reference = selected.attempt.credential_ref();
+            let credential = self
+                .credentials
+                .get(&(reference.id, reference.revision))
+                .ok_or(RelayError::RouteUnavailable)?;
+            let expected_route = Route::new(
+                selected.route_id.clone(),
+                protocol,
+                super::routing::operation_endpoint(
+                    selected.attempt.endpoint(),
+                    protocol,
+                    selected.attempt.upstream_model(),
+                    request.stream,
+                )?
+                .as_str(),
+                selected.attempt.upstream_model().to_owned(),
+                credential,
+                selected.attempt.quote().version(),
+            )?;
+            let count_plan = self.provider_policy.count_plan(&selected.attempt)?;
             if selected.route_id != route.id
                 || selected.attempt.quote().version() != route.price_version
+                || route.protocol != expected_route.protocol
+                || route.model != expected_route.model
+                || route.endpoint != expected_route.endpoint
+                || route.credential != expected_route.credential
+                || route.payload_policy != selected.attempt.payload_policy()
+                || route.cache_creation_mode
+                    != selected
+                        .price
+                        .tiered
+                        .as_ref()
+                        .and_then(|t| t.cache_creation_mode)
+                || route.count_plan != count_plan
+                || request.max_output_tokens != output_ceiling
                 || !selected.attempt.is_available()
             {
                 return Err(RelayError::RouteUnavailable);
+            }
+            if body != request.upstream_body(route)?.as_slice() {
+                return Err(RelayError::Conflict);
             }
             // Only the numeric-loopback synthetic contract budgets UTF-8 bytes
             // plus framing as tokens. External models use the frozen supplier
@@ -219,6 +284,82 @@ impl Billing for Bridge {
             {
                 return Err(RelayError::Limit("local model input budget"));
             }
+            // @context-fold begin gateway-prepared-contract
+            use charging::contract::{
+                self, CounterEvidence, PreparedReservation, ReservationBinding, ReservationBounds,
+            };
+            let wire_sha256 = contract::digest(body);
+            let input_bound = match (&count_plan, observation) {
+                (crate::relay::input_count::CountPlan::ContextMax, None) => {
+                    selected.input_token_ceiling as u64
+                }
+                (
+                    crate::relay::input_count::CountPlan::OpenAiResponsesExactV1(_),
+                    Some(counted),
+                ) if contract::hex_digest(&counted.wire_sha256) == wire_sha256
+                    && counted.requested_output == request.max_output_tokens
+                    && u64::from(counted.input_tokens) <= selected.input_token_ceiling as u64 =>
+                {
+                    u64::from(counted.input_tokens)
+                }
+                _ => return Err(RelayError::Conflict),
+            };
+            let (revision, semantics) = self
+                .provider_policy
+                .reservation_metadata(&selected.attempt)?;
+            let binding = ReservationBinding {
+                route_id: route.id.clone(),
+                target_id: selected.attempt.target_id(),
+                upstream_id: selected.attempt.upstream_id(),
+                protocol: match route.protocol {
+                    crate::relay::UpstreamProtocol::Chat => "chat",
+                    crate::relay::UpstreamProtocol::Responses => "responses",
+                    crate::relay::UpstreamProtocol::Anthropic => "anthropic",
+                    crate::relay::UpstreamProtocol::Gemini => "gemini",
+                }
+                .into(),
+                model_snapshot: route.model.clone(),
+                generation_url: route.endpoint.as_str().into(),
+                credential_ref: selected.attempt.credential_ref(),
+                payload_policy_sha256: contract::typed_digest(&selected.attempt.payload_policy())
+                    .map_err(error)?,
+                provider_contract_revision: revision,
+                projection_revision: observation
+                    .map_or("context-max-v1", |o| o.projection_revision)
+                    .into(),
+                quote_version: route.price_version,
+            };
+            let bounds = ReservationBounds {
+                model_input_max: selected.input_token_ceiling as u64,
+                input: input_bound,
+                requested_output: u64::from(request.max_output_tokens),
+                output: u64::from(request.max_output_tokens),
+            };
+            let prepared = if let Some(counted) = observation {
+                PreparedReservation::exact(
+                    contract::hex_digest(&fingerprint),
+                    binding,
+                    wire_sha256,
+                    CounterEvidence {
+                        api: counted.api.into(),
+                        input_tokens: u64::from(counted.input_tokens),
+                        request_sha256: contract::hex_digest(&counted.request_sha256),
+                        response_sha256: contract::hex_digest(&counted.response_sha256),
+                    },
+                    bounds,
+                    semantics,
+                )
+            } else {
+                PreparedReservation::context_max(
+                    contract::hex_digest(&fingerprint),
+                    binding,
+                    wire_sha256,
+                    bounds,
+                    semantics,
+                )
+            }
+            .map_err(error)?;
+            // @context-fold end gateway-prepared-contract
             let reserve = if selected.price.upstream_cost_group_ppm.is_some() {
                 let mut conservative = selected.price.clone();
                 conservative.input_per_million = conservative
@@ -229,7 +370,7 @@ impl Billing for Bridge {
                         cache_creation: None,
                         image: None,
                         upstream_cost_atto_usd: Some(crate::upstream_cost::ATTO_USD),
-                        input: selected.input_token_ceiling,
+                        input: input_bound as i64,
                         cached: 0,
                         output: i64::from(request.max_output_tokens),
                     })
@@ -237,10 +378,7 @@ impl Billing for Bridge {
             } else {
                 let reserve = selected
                     .quote
-                    .reservation_ceiling(
-                        selected.input_token_ceiling as u64,
-                        u64::from(request.max_output_tokens),
-                    )
+                    .reservation_ceiling(input_bound, u64::from(request.max_output_tokens))
                     .map_err(|_| RelayError::BillingUnavailable)?;
                 i64::try_from(reserve.0).map_err(|_| RelayError::BillingUnavailable)?
             };
@@ -250,7 +388,7 @@ impl Billing for Bridge {
                 }
             } else {
                 charging::ReservationBasis::Tokens {
-                    input: selected.input_token_ceiling as u64,
+                    input: input_bound,
                     output: u64::from(request.max_output_tokens),
                 }
             };
@@ -263,19 +401,27 @@ impl Billing for Bridge {
                 maximum_seconds: self.policy.lease_seconds,
             };
             let charge = retry_reserve(|| async {
-                if let Some(issuer) = &oauth_issuer {
+                self.charging
+                    .reserve_prepared_model_with_context(
+                        &secret,
+                        &spec,
+                        &worker,
+                        peer,
+                        oauth_issuer.as_ref(),
+                        basis,
+                        &prepared,
+                    )
+                    .await
+            })
+            .await;
+            let charge = match charge {
+                Err(charging::Error::CommitUnknown) => {
                     self.charging
-                        .reserve_model_oauth_with_context(
-                            issuer, &secret, &spec, &worker, peer, basis,
-                        )
-                        .await
-                } else {
-                    self.charging
-                        .reserve_model_with_context(&secret, &spec, &worker, peer, basis)
+                        .resolve_prepared_model(&spec, &worker, basis, &prepared)
                         .await
                 }
-            })
-            .await
+                other => other,
+            }
             .map_err(|cause| {
                 let reason = match &cause {
                     charging::Error::NoFunds => Some("wallet"),
@@ -309,8 +455,14 @@ impl Billing for Bridge {
                     self.charging.start(&spec.id, &worker).await
                 }
             })
-            .await
-            .map_err(error)?;
+            .await;
+            let started = match started {
+                Err(charging::Error::CommitUnknown) => {
+                    let _ = self.charging.resolve(&spec.id).await;
+                    return Err(RelayError::SettlementPending);
+                }
+                result => result.map_err(error)?,
+            };
             if !started {
                 return Err(RelayError::Conflict);
             }
@@ -351,26 +503,40 @@ impl Billing for Bridge {
             };
             let mut stage = "report";
             let result = async {
-                let price = selected.price.clone();
-                let upstream_cost = price.upstream_cost_group_ppm.is_some();
                 if reservation.id != report.request_id
                     || report.route_id.as_deref() != Some(selected.route_id.as_str())
                     || report.price_version != Some(selected.quote.price().version())
                 {
                     return Err(RelayError::Conflict);
                 }
+                let frozen = self.charging.reservation_contract(&reservation.id).await;
                 if report.upstream_attempted && report.provider_complete {
                     stage = "provider_observation";
+                    // A broken proof cannot erase the supplier's raw terminal
+                    // evidence. Without a readable proof only the original
+                    // selected model ceiling is known; this audit record never
+                    // authorizes a checkpoint, settlement or recovery.
+                    let input_ceiling = frozen
+                        .as_ref()
+                        .map_or(selected.input_token_ceiling, |(_, contract)| {
+                            contract.bounds().0 as i64
+                        });
                     self.persist_provider_observation(
                         &reservation.id,
                         &worker,
                         &selected.route_id,
                         report.usage,
-                        selected.input_token_ceiling,
+                        input_ceiling,
                         output_ceiling,
                     )
                     .await?;
                 }
+                let (frozen, contract) = frozen.map_err(|_| RelayError::SettlementPending)?;
+                if frozen.price != selected.price {
+                    return Err(RelayError::SettlementPending);
+                }
+                let price = frozen.price.clone();
+                let upstream_cost = price.upstream_cost_group_ppm.is_some();
                 stage = "usage";
                 let (usage, outcome) = if !report.upstream_attempted {
                     (
@@ -388,12 +554,13 @@ impl Billing for Bridge {
                     }
                     if upstream_cost {
                         stage = "provider_policy";
-                        self.provider_policy.validate_usage(
-                            &selected.attempt,
-                            &report.usage,
-                            true,
-                        )?;
-                        let usage = complete_usage(report.usage, true)?;
+                        contract
+                            .check_usage(
+                                &frozen,
+                                frozen_priced_usage(&contract, &frozen, report.usage)?,
+                            )
+                            .map_err(|_| RelayError::SettlementPending)?;
+                        let usage = frozen_priced_usage(&contract, &frozen, report.usage)?;
                         if usage.upstream_cost_atto_usd.is_none() {
                             return Err(RelayError::SettlementPending);
                         }
@@ -405,22 +572,14 @@ impl Billing for Bridge {
                         }
                         (usage, Outcome::Completed)
                     } else {
-                        let usage = if let Some(tariff) = &selected.price.tiered {
-                            complete_tiered_usage(report.usage, tariff)?
-                        } else {
-                            complete_usage(report.usage, false)?
-                        };
+                        let usage = frozen_priced_usage(&contract, &frozen, report.usage)?;
                         // This input is either the original inclusive receipt
                         // or a checked reconstruction from actual Anthropic P
                         // and the original frozen absence-zero contract.
-                        let mut policy_usage = report.usage;
-                        policy_usage.input_tokens = Some(usage.input as u64);
                         stage = "provider_policy";
-                        self.provider_policy.validate_usage(
-                            &selected.attempt,
-                            &policy_usage,
-                            false,
-                        )?;
+                        contract
+                            .check_usage(&frozen, usage)
+                            .map_err(|_| RelayError::SettlementPending)?;
                         stage = "usage_bound";
                         if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
@@ -644,6 +803,117 @@ fn local_input_bound(request: &Request) -> Result<u64, RelayError> {
 /// cache reads retain its existing zero-default semantics; this is not a
 /// normalization policy for external providers. Missing input/output totals
 /// and cache creation unsupported by the ledger must retain the original hold.
+/// All acceptance paths normalize using the persisted contract and price, never live configuration.
+pub(super) fn frozen_priced_usage(
+    contract: &charging::contract::ReservationContract,
+    charge: &charging::Charge,
+    mut observed: crate::relay::Usage,
+) -> Result<Usage, RelayError> {
+    // @context-fold begin frozen-priced-usage
+    validate_frozen_observation(contract, charge, observed)?;
+    if observed.cached_input_tokens.is_none() && !contract.semantics().missing_cached_tokens_is_zero
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    if observed.cached_input_tokens.is_none() {
+        observed.cached_input_tokens = Some(0);
+    }
+    if let Some(tariff) = &charge.price.tiered
+        && tariff
+            .tariff
+            .compile()
+            .map_err(|_| RelayError::SettlementPending)?
+            .requires_cache_creation()
+        && observed.cache_creation_input_tokens.is_none()
+        && !contract.semantics().missing_cache_creation_tokens_is_zero
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    let usage = if let Some(tariff) = &charge.price.tiered {
+        complete_tiered_usage(observed, tariff)?
+    } else {
+        complete_usage(observed, charge.price.upstream_cost_group_ppm.is_some())?
+    };
+    contract
+        .check_usage(charge, usage)
+        .map_err(|_| RelayError::SettlementPending)?;
+    Ok(usage)
+    // @context-fold end frozen-priced-usage
+}
+
+pub(super) fn validate_frozen_observation(
+    contract: &charging::contract::ReservationContract,
+    charge: &charging::Charge,
+    observed: crate::relay::Usage,
+) -> Result<(), RelayError> {
+    // @context-fold begin frozen-observation-bounds
+    contract
+        .validate(charge)
+        .map_err(|_| RelayError::SettlementPending)?;
+    observed
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    let (input, output) = contract.bounds();
+    // TTL buckets are disjoint subsets; totals and cached tokens are not added
+    // twice. Anthropic's uncached counter is disjoint from both cached classes.
+    let add = |a: u64, b: u64| a.checked_add(b).ok_or(RelayError::SettlementPending);
+    let cache_creation = observed
+        .cache_creation_input_tokens
+        .unwrap_or(0)
+        .max(
+            observed
+                .cache_creation_details
+                .map(|details| {
+                    add(
+                        details.ephemeral_5m_input_tokens.unwrap_or(0),
+                        details.ephemeral_1h_input_tokens.unwrap_or(0),
+                    )
+                })
+                .transpose()?
+                .unwrap_or(0),
+        )
+        .max(
+            observed
+                .openai_cache_write_details
+                .map(|details| {
+                    add(
+                        details.ttl_30m_tokens.unwrap_or(0),
+                        details.ttl_12h_tokens.unwrap_or(0),
+                    )
+                })
+                .transpose()?
+                .unwrap_or(0),
+        );
+    let disjoint = add(observed.cached_input_tokens.unwrap_or(0), cache_creation)?;
+    if disjoint > input
+        || observed.input_tokens.is_some_and(|total| disjoint > total)
+        || add(observed.uncached_input_tokens.unwrap_or(0), disjoint)? > input
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    let known_input = observed.input_tokens.or(observed.uncached_input_tokens);
+    if known_input.is_some_and(|v| v > input)
+        || observed.cached_input_tokens.is_some_and(|v| v > input)
+        || observed
+            .cache_creation_input_tokens
+            .is_some_and(|v| v > input)
+        || observed.cache_creation_details.is_some_and(|v| {
+            v.ephemeral_5m_input_tokens.is_some_and(|v| v > input)
+                || v.ephemeral_1h_input_tokens.is_some_and(|v| v > input)
+        })
+        || observed.openai_cache_write_details.is_some_and(|v| {
+            v.ttl_30m_tokens.is_some_and(|v| v > input)
+                || v.ttl_12h_tokens.is_some_and(|v| v > input)
+        })
+        || observed.output_tokens.is_some_and(|v| v > output)
+        || observed.reasoning_output_tokens.is_some_and(|v| v > output)
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(())
+    // @context-fold end frozen-observation-bounds
+}
+
 pub(super) fn complete_usage(
     observed: crate::relay::Usage,
     upstream_cost: bool,

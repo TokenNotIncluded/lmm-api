@@ -719,6 +719,7 @@ pub(crate) mod tests {
                     max_output_tokens: 1000,
                     contract_revision: "synthetic-context-without-supplier-budget".into(),
                     missing_cached_tokens_is_zero: true,
+                    reservation: Default::default(),
                     missing_cache_creation_tokens_is_zero: false,
                 })
                 .collect()
@@ -1132,6 +1133,7 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    reservation: Default::default(),
                     missing_cache_creation_tokens_is_zero: false,
                     upstream_id: upstream.id,
                     upstream_model: target.upstream_model.clone(),

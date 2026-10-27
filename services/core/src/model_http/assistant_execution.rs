@@ -543,6 +543,7 @@ mod usage_tests {
                 max_output_tokens: 5,
                 contract_revision: "synthetic-assistant-cache-v2".into(),
                 missing_cached_tokens_is_zero: false,
+                reservation: Default::default(),
                 missing_cache_creation_tokens_is_zero: missing_creation_is_zero,
             }],
             100,

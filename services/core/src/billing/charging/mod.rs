@@ -1,6 +1,7 @@
 //! Transactional charging for a fresh PostgreSQL core. No HTTP/Go write API.
 //! The host must supply task 02's transactional ledger adapter before forwarding.
 mod authority;
+pub(crate) mod contract;
 mod engine;
 mod limits;
 mod types;

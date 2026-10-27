@@ -163,7 +163,7 @@ pub(super) fn credit_price(
 
 /// Keep provider base prefixes and encode model identifiers as one segment.
 /// Only Gemini's streaming switch can add a query, always server-derived.
-fn operation_endpoint(
+pub(super) fn operation_endpoint(
     base: &str,
     protocol: UpstreamProtocol,
     model: &str,
@@ -345,6 +345,7 @@ impl RouteProvider for Bridge {
                 secret,
                 attempt.quote().version(),
             )?
+            .with_count_plan(self.provider_policy.count_plan(&attempt)?)
             .with_payload_policy(attempt.payload_policy())
             .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));

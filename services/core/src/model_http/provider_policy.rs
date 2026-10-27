@@ -4,11 +4,30 @@ use crate::{
     relay::{
         RelayError,
         honeypot_network::{literal_ip, validate_base_url},
+        input_count::{CountPlan, ResponsesCountProfile},
     },
     routing::{Attempt, Protocol},
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
+
+/// Host-only reservation policy. Omission preserves the full reviewed context.
+// @context-fold begin strict-reservation-profile
+#[derive(Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReservationProfile {
+    ContextMax {},
+    OpenaiResponsesExactV1 {
+        count_timeout_ms: std::num::NonZeroU64,
+    },
+}
+
+impl Default for ReservationProfile {
+    fn default() -> Self {
+        Self::ContextMax {}
+    }
+}
+// @context-fold end strict-reservation-profile
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +50,8 @@ pub struct ExternalModelContext {
     /// means zero. This is independent of the cache-read absence convention.
     #[serde(default)]
     pub missing_cache_creation_tokens_is_zero: bool,
+    #[serde(default)]
+    pub reservation: ReservationProfile,
 }
 
 #[derive(Clone, Default)]
@@ -38,6 +59,61 @@ pub struct ProviderPolicy {
     contexts: BTreeMap<(u64, String), ExternalModelContext>,
 }
 impl ProviderPolicy {
+    pub(crate) fn count_plan(&self, attempt: &Attempt) -> Result<CountPlan, RelayError> {
+        // @context-fold begin provider-reservation-count-plan
+        let endpoint = validate_base_url(attempt.endpoint(), true)?;
+        if literal_ip(&endpoint).is_some_and(|ip| ip.is_loopback()) {
+            return Ok(CountPlan::ContextMax);
+        }
+        let context = self
+            .contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
+            .ok_or(RelayError::RouteUnavailable)?;
+        if context.protocol != attempt.protocol() || context.endpoint != endpoint.as_str() {
+            return Err(RelayError::RouteUnavailable);
+        }
+        context.count_plan()
+        // @context-fold end provider-reservation-count-plan
+    }
+
+    pub(super) fn reservation_metadata(
+        &self,
+        attempt: &Attempt,
+    ) -> Result<
+        (
+            String,
+            crate::billing::charging::contract::ReservationSemantics,
+        ),
+        RelayError,
+    > {
+        // @context-fold begin provider-reservation-metadata
+        let endpoint = validate_base_url(attempt.endpoint(), true)?;
+        let local = literal_ip(&endpoint).is_some_and(|ip| ip.is_loopback());
+        let context = self
+            .contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()));
+        if !local
+            && context
+                .is_none_or(|c| c.protocol != attempt.protocol() || c.endpoint != endpoint.as_str())
+        {
+            return Err(RelayError::RouteUnavailable);
+        }
+        Ok((
+            context
+                .map_or("synthetic-loopback-v1", |c| c.contract_revision.as_str())
+                .to_owned(),
+            crate::billing::charging::contract::ReservationSemantics {
+                input: "inclusive".into(),
+                output: "includes_reasoning".into(),
+                missing_cached_tokens_is_zero: local
+                    || context.is_some_and(|c| c.missing_cached_tokens_is_zero),
+                missing_cache_creation_tokens_is_zero: local
+                    || context.is_some_and(|c| c.missing_cache_creation_tokens_is_zero),
+            },
+        ))
+        // @context-fold end provider-reservation-metadata
+    }
+
     pub(crate) fn missing_cache_creation_is_zero(&self, attempt: &Attempt) -> bool {
         self.contexts
             .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
@@ -68,6 +144,7 @@ impl ProviderPolicy {
                 return Err(RelayError::Invalid("invalid provider context policy"));
             }
             context.endpoint = endpoint.to_string();
+            context.count_plan()?;
             if result
                 .contexts
                 .insert(
@@ -207,6 +284,29 @@ impl ProviderPolicy {
 }
 
 impl ExternalModelContext {
+    fn count_plan(&self) -> Result<CountPlan, RelayError> {
+        // @context-fold begin external-model-count-profile
+        match self.reservation {
+            ReservationProfile::ContextMax {} => Ok(CountPlan::ContextMax),
+            ReservationProfile::OpenaiResponsesExactV1 { count_timeout_ms } => {
+                if self.protocol != Protocol::OpenAiResponses {
+                    return Err(RelayError::Invalid(
+                        "exact count requires official Responses",
+                    ));
+                }
+                ResponsesCountProfile::new(
+                    &self.endpoint,
+                    self.upstream_model.clone(),
+                    self.max_input_tokens,
+                    self.max_output_tokens,
+                    count_timeout_ms,
+                )
+                .map(CountPlan::OpenAiResponsesExactV1)
+            }
+        }
+        // @context-fold end external-model-count-profile
+    }
+
     fn validate_usage(
         &self,
         usage: &crate::relay::Usage,
@@ -385,6 +485,7 @@ mod tests {
 
     fn context() -> ExternalModelContext {
         ExternalModelContext {
+            reservation: ReservationProfile::default(),
             missing_cache_creation_tokens_is_zero: false,
             upstream_id: 1,
             upstream_model: "bounded-model".into(),

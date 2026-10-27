@@ -3,6 +3,9 @@ mod market_oauth_config;
 pub use market_oauth_config::{market_oauth_configured, market_oauth_issuer, market_oauth_profile};
 use serde::Deserialize;
 #[cfg(test)]
+#[path = "config_reservation_tests.rs"]
+mod reservation_tests;
+#[cfg(test)]
 #[path = "config_telegram_tests.rs"]
 mod telegram_tests;
 use std::{
@@ -2389,6 +2392,7 @@ struct ModelConfig {
     #[serde(default)]
     local_streaming: bool,
     #[serde(default)]
+    // Each host contract carries its strict reservation profile; omission is context_max.
     external_models: Vec<crate::model_http::ExternalModelContext>,
     #[serde(default)]
     image_prices: Option<crate::model_http::image_price::ImagePriceConfig>,
