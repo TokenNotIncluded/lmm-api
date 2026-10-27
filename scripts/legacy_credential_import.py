@@ -400,7 +400,7 @@ def native_users_sql() -> str:
 
 def snapshot_sql(inventory: dict, migration_id: str) -> str:
     contract = IDENTITY.current_contract()
-    return "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL timezone='UTC';\nSELECT jsonb_build_object(" + \
+    return "\\set ON_ERROR_STOP on\nBEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL timezone='UTC';\nSELECT jsonb_build_object(" + \
         "'instance',(" + FIN.instance_sql() + "),'catalog_fingerprint_sha256',(" + IDENTITY.catalog_hash_sql(contract) + ")," + \
         "'ownership_sha256',(" + FIN.ownership_sql() + "),'component_fingerprints'," + \
         "(SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract)," + \
@@ -571,7 +571,9 @@ COMMIT;
 SELECT jsonb_build_object('status','COMMITTED','migration_id',{literal(material['migration_id'])},
  'material_sha256',{literal(digest(material))});
 """
-    return _seal_sql(sql)
+    # Keep generated files safe when run directly with psql -f as well as
+    # through run_sql, whose command line independently sets ON_ERROR_STOP.
+    return "\\set ON_ERROR_STOP on\n" + _seal_sql(sql)
 
 
 def build_verify_sql(material: dict, application_name: str) -> str:
@@ -579,7 +581,7 @@ def build_verify_sql(material: dict, application_name: str) -> str:
     require(type(application_name) is str and re.fullmatch(r"lmm-credential-[0-9a-f]{32}", application_name),
             "credential_original_attempt_invalid")
     state = FIN.state_sql(material["before_state"]["inventory"], material["migration_id"])
-    return _seal_sql(_start(readonly=True) + f"""
+    return "\\set ON_ERROR_STOP on\n" + _seal_sql(_start(readonly=True) + f"""
 DO $lmm_credential$
 DECLARE m jsonb := {literal(material)}::jsonb; previous core_migration.import_runs%ROWTYPE; actual jsonb;
 BEGIN

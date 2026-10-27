@@ -998,7 +998,7 @@ def export_source(receipt: dict, output: Path):
     require(REQUIRED_TABLES <= set(selected), "required_financial_source_table_missing")
     identity = parse_json(IDENTITY.psql(reader, "BEGIN READ ONLY;\n" + IDENTITY.IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="source-preflight"))
     IDENTITY.verify_instance(identity, reader, receipt.get("source_instance_identity", {}), source=True)
-    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL row_security=off;\n"
+    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL timezone='UTC';\nSET LOCAL row_security=off;\n"
     sql += "SELECT json_build_object('kind','identity','row',(" + IDENTITY.IDENTITY_SQL.removesuffix(";").removeprefix("SELECT ") + "));\n"
     sql += f"SELECT json_build_object('kind','schema','row',json_build_object('schema',nspname,'schema_owner',pg_get_userbyid(nspowner))) FROM pg_namespace WHERE nspname={IDENTITY.sql_literal(schema)};\n"
     for table in selected:
