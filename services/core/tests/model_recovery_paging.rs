@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+#[path = "common/reservation_contract.rs"]
+mod reservation_contract;
+
 struct Fixture {
     gateway: ModelGateway,
     charging: Charging,
@@ -133,6 +136,9 @@ async fn seed(pool: &PgPool, fixture: &Fixture, id: &str, usage: Value, terminal
         .reserve(&fixture.key, &request, &worker)
         .await
         .unwrap();
+    // Synthetic v1 proof for this recovery reader test; the real gateway tests
+    // separately verify atomic reserve/proof creation. Existing money stays put.
+    reservation_contract::install_synthetic_recovery_contract(pool, id, 100, 20).await;
     assert!(fixture.charging.start(id, &worker).await.unwrap());
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")

@@ -359,7 +359,7 @@ async fn execute(
     if request.flags().long_context {
         builder = builder.header("typesafe-danger-zone-long-context", "true");
     }
-    let upstream_request = if request.uploads().is_empty() {
+    let mut upstream_request = if request.uploads().is_empty() {
         let encoded =
             serde_json::to_vec(&upstream).map_err(|_| RelayError::Invalid("System One request"))?;
         if encoded.len() > compression::MAX_BODY {
@@ -389,6 +389,20 @@ async fn execute(
     {
         return Err(RelayError::Limit("System One outbound body"));
     }
+    // Freeze the actual JSON or multipart bytes (including its one boundary)
+    // before the financial transaction. Dispatch reuses this same request.
+    let outbound_body = upstream_request
+        .body_mut()
+        .take()
+        .ok_or(RelayError::Invalid("missing System One outbound body"))?;
+    let outbound_body = tokio::time::timeout(
+        Duration::from_secs(5),
+        to_bytes(Body::new(outbound_body), compression::MAX_BODY),
+    )
+    .await
+    .map_err(|_| RelayError::Timeout(relay::Phase::Read))?
+    .map_err(|_| RelayError::Limit("System One outbound body"))?;
+    *upstream_request.body_mut() = Some(outbound_body.clone().into());
     let reserve = i64::try_from(
         quote
             .reservation_ceiling(input_token_ceiling as u64, 0)
@@ -421,6 +435,31 @@ async fn execute(
         attempt.target_id(),
         attempt.upstream_id()
     );
+    let (provider_revision, semantics) = gateway
+        .bridge
+        .provider_policy
+        .reservation_metadata(&attempt)?;
+    let prepared = charging::contract::PreparedReservation::systemone_input_only(
+        charging::contract::hex_digest(&fingerprint),
+        charging::contract::ReservationBinding {
+            route_id: route_id.clone(),
+            target_id: attempt.target_id(),
+            upstream_id: attempt.upstream_id(),
+            protocol: "systemone".into(),
+            model_snapshot: attempt.upstream_model().to_owned(),
+            generation_url: upstream_request.url().as_str().into(),
+            credential_ref: reference,
+            payload_policy_sha256: charging::contract::typed_digest(&attempt.payload_policy())
+                .map_err(billing::error)?,
+            provider_contract_revision: provider_revision,
+            projection_revision: "systemone-native-wire-v1".into(),
+            quote_version: attempt.quote().version(),
+        },
+        charging::contract::digest(&outbound_body),
+        input_token_ceiling as u64,
+        semantics,
+    )
+    .map_err(billing::error)?;
     let selected = routing::Selected {
         attempt: attempt.clone(),
         price: price.clone(),
@@ -463,19 +502,26 @@ async fn execute(
         lease_seconds: gateway.bridge.policy.lease_seconds,
         maximum_seconds: gateway.bridge.policy.lease_seconds,
     };
+    let basis = charging::ReservationBasis::Tokens {
+        input: input_token_ceiling as u64,
+        output: 0,
+    };
     let charge = billing::retry(|| {
-        gateway.bridge.charging.reserve_model_with_context(
-            &secret,
-            &spec,
-            &worker,
-            peer,
-            charging::ReservationBasis::Tokens {
-                input: input_token_ceiling as u64,
-                output: 0,
-            },
+        gateway.bridge.charging.reserve_prepared_model_with_context(
+            &secret, &spec, &worker, peer, None, basis, &prepared,
         )
     })
-    .await
+    .await;
+    let charge = match charge {
+        Err(charging::Error::CommitUnknown) => {
+            gateway
+                .bridge
+                .charging
+                .resolve_prepared_model(&spec, &worker, basis, &prepared)
+                .await
+        }
+        result => result,
+    }
     .map_err(billing::error)?;
     if charge.actor_user_id != principal.user_id() || charge.key_id != principal.key_id() {
         return Err(RelayError::Forbidden);
@@ -492,6 +538,10 @@ async fn execute(
         return Err(RelayError::Conflict);
     }
     let observed = tokio::time::timeout(gateway.limits.total_timeout, async {
+        // `start` awaits the ledger commit; recheck revocation before dispatch.
+        if !attempt.is_available() {
+            return Err(RelayError::RouteUnavailable);
+        }
         let mut response = tokio::time::timeout(
             gateway.limits.header_timeout,
             connection.client().execute(upstream_request),

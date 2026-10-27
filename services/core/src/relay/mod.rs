@@ -6,6 +6,7 @@ mod decode;
 mod encode;
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
+pub(crate) mod input_count;
 mod keepalive;
 mod native;
 pub(crate) mod native_anthropic;
@@ -20,6 +21,7 @@ mod types;
 #[cfg(test)]
 pub(crate) use decode::usage as provider_usage;
 pub(crate) use decode::usage_with_cache_creation_mode as provider_usage_with_cache_creation_mode;
+pub use input_count::CountObservation;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
 pub use types::*;
 
@@ -681,18 +683,38 @@ impl Worker {
             .await?;
         self.report.route_id = Some(route.id.clone());
         self.report.price_version = Some(route.price_version);
+        if matches!(
+            route.count_plan,
+            input_count::CountPlan::OpenAiResponsesExactV1(_)
+        ) {
+            self.request.validate_exact_input_count()?;
+        }
         let body = self.request.upstream_body(&route)?;
         if body.len() > self.inner.limits.request_bytes {
             return Err(RelayError::Limit("encoded request"));
         }
+        // @context-fold begin prepare-reservation-count
+        let counted = input_count::execute(
+            &route,
+            &body,
+            &self.inner.limits,
+            &self.inner.provider_transport,
+            &self.gate,
+        )
+        .await?;
+        // @context-fold end prepare-reservation-count
         // Do not cancel a reserve future just because the client disconnected:
         // first obtain its committed handle, then finalize without sending HTTP.
         self.reserve_ambiguous = true;
         let reservation = timeout(
             self.inner.limits.hook_timeout,
-            self.inner
-                .billing
-                .reserve(&self.context, &route, &self.request),
+            self.inner.billing.reserve_prepared(
+                &self.context,
+                &route,
+                &self.request,
+                &body,
+                counted.as_ref(),
+            ),
         )
         .await
         .map_err(|_| RelayError::Timeout(Phase::Reserve))??;

@@ -22,6 +22,9 @@ use serde_json::json;
 use sqlx::PgPool;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+#[path = "common/reservation_contract.rs"]
+mod reservation_contract;
+
 struct Fixture {
     gateway: ModelGateway,
     charging: Charging,
@@ -145,6 +148,14 @@ async fn seed_terminal_with_price(
         maximum_seconds: 300,
     };
     f.charging.reserve(&f.key, &request, &worker).await.unwrap();
+    // Recovery-reader fixture only; real prepared admission atomicity is covered
+    // by the gateway tests. Keep this hold and its original price unchanged.
+    let input = if request.price.upstream_cost_group_ppm.is_some() {
+        100_000
+    } else {
+        62_498 // 62_498 * 10 input credits + 1 * 20 output credits = 625_000.
+    };
+    reservation_contract::install_synthetic_recovery_contract(pool, id, input, 1).await;
     assert!(f.charging.start(id, &worker).await.unwrap());
     let mut usage_json = json!({
         "input_tokens": 1,
@@ -347,6 +358,8 @@ async fn test_a07_paged_recovery_advances_past_holds_without_starvation(pool: Pg
             maximum_seconds: 300,
         };
         f.charging.reserve(&f.key, &request, &worker).await.unwrap();
+        reservation_contract::install_synthetic_recovery_contract(&pool, &request.id, 100_000, 1)
+            .await;
         assert!(
             f.charging
                 .start(&format!("need-res-{n:03}"), &worker)

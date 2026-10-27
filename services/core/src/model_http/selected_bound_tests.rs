@@ -363,6 +363,7 @@ async fn legacy_openai_gateway_rejects_before_reserve_or_provider(pool: PgPool) 
 struct Fixture {
     pool: PgPool,
     ledger: Ledger,
+    session: String,
     key: String,
     key_id: i64,
     account: i64,
@@ -412,6 +413,7 @@ async fn fixture(pool: PgPool, amount: i64) -> Fixture {
     Fixture {
         pool,
         ledger,
+        session: session.secret,
         key: key.secret,
         key_id: key.id,
         account: principal.owner_account_id,
@@ -425,6 +427,7 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
     ]
     .into_iter()
     .map(|(model, input, output)| ExternalModelContext {
+        reservation: Default::default(),
         missing_cache_creation_tokens_is_zero: false,
         upstream_id: 1,
         upstream_model: model.into(),
@@ -439,6 +442,15 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
 }
 
 fn gateway(f: &Fixture, base: &str, contexts: Vec<ExternalModelContext>) -> ModelGateway {
+    gateway_with_output_rate(f, base, contexts, 0)
+}
+
+fn gateway_with_output_rate(
+    f: &Fixture,
+    base: &str,
+    contexts: Vec<ExternalModelContext>,
+    output_rate: u64,
+) -> ModelGateway {
     let mut config: RoutingConfig = serde_json::from_value(json!({
         "version":1,
         "groups":[{"name":"allowed","enabled":true}],
@@ -474,7 +486,7 @@ fn gateway(f: &Fixture, base: &str, contexts: Vec<ExternalModelContext>) -> Mode
                 // Exactly one Credit per input token, cached or uncached.
                 rates: TokenRates {
                     input: 2_000_000,
-                    output: 0,
+                    output: output_rate.into(),
                     cache_read: 2_000_000,
                     cache_write: 0,
                     request: 0,
@@ -1002,3 +1014,294 @@ async fn selected_bound_recovery_uses_old_terminal_price_after_contract_change(p
     assert_eq!(requests(&f.pool).await, 1);
     assert_balance(&f, 10_000, 0).await;
 }
+
+// @context-fold begin prepared-reservation-pg-tests
+#[sqlx::test(migrations = false)]
+async fn prepared_contract_is_durable_and_binds_wire_before_another_hold(pool: PgPool) {
+    let f = fixture(pool, 2_000_000).await;
+    let g = gateway(&f, EXTERNAL_BASE, contexts(SMALL_INPUT));
+    let (context, request) = admit(&g, &f, "prepared-wire", "small-model", SMALL_OUTPUT).await;
+    let route = g.bridge.select(&context, &request).await.unwrap();
+    let body = request.upstream_body(&route).unwrap();
+    let reservation = g
+        .bridge
+        .reserve_prepared(&context, &route, &request, &body, None)
+        .await
+        .unwrap();
+    let charge = receipt(&g, &reservation.id).await;
+    let detail: serde_json::Value = sqlx::query_scalar(
+        "SELECT detail FROM core_charging.usage_events WHERE request_id=$1 AND event_id='reservation-contract:v1'",
+    ).bind(&charge.id).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(detail["kind"], "model_reservation_contract");
+    assert_eq!(detail["mode"], "context_max");
+    assert_eq!(detail["bounds"]["input"], SMALL_INPUT);
+    assert_eq!(detail["bounds"]["requested_output"], SMALL_OUTPUT);
+    assert!(detail.get("usage").is_none());
+    assert!(detail.get("counter").unwrap().is_null());
+    let (frozen, _) = g
+        .bridge
+        .charging
+        .reservation_contract(&charge.id)
+        .await
+        .unwrap();
+    assert_eq!(frozen.price, charge.price);
+    let mut changed = body.clone();
+    changed.push(b' ');
+    assert!(
+        g.bridge
+            .reserve_prepared(&context, &route, &request, &changed, None)
+            .await
+            .is_err()
+    );
+    assert_eq!(requests(&f.pool).await, 1);
+    assert_balance(&f, 2_000_000 - SMALL_INPUT, SMALL_INPUT).await;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_charging.usage_events WHERE request_id=$1 AND event_id='reservation-contract:v1'")
+        .bind(&charge.id).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(count, 1);
+    // The output is free in this fixture. An amount-only limit would allow it.
+    let worker = g.bridge.active.lock().unwrap()[&reservation.id].worker;
+    let invalid = charging::Usage {
+        output: i64::from(SMALL_OUTPUT) + 1,
+        ..Default::default()
+    };
+    assert!(
+        g.bridge
+            .charging
+            .checkpoint(&charge.id, &worker, "bound-test", invalid)
+            .await
+            .is_err()
+    );
+    assert!(
+        g.bridge
+            .charging
+            .settle(&charge.id, &worker, invalid, charging::Outcome::Completed)
+            .await
+            .is_err()
+    );
+    assert_balance(&f, 2_000_000 - SMALL_INPUT, SMALL_INPUT).await;
+    f.pool.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn prepared_contract_insert_failure_rolls_back_request_budget_and_hold(pool: PgPool) {
+    let f = fixture(pool, 2_000_000).await;
+    let mut setup = f.pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *setup)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_charging.budgets(scope,account_id,issuer_user_id,period,limit_credits) VALUES('account',$1,7,'day',2000000)")
+        .bind(f.account).execute(&mut *setup).await.unwrap();
+    setup.commit().await.unwrap();
+    sqlx::raw_sql("CREATE FUNCTION public.reject_reservation_contract() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_id='reservation-contract:v1' THEN RAISE EXCEPTION 'synthetic contract failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_reservation_contract BEFORE INSERT ON core_charging.usage_events FOR EACH ROW EXECUTE FUNCTION public.reject_reservation_contract();")
+        .execute(&f.pool).await.unwrap();
+    let g = gateway(&f, EXTERNAL_BASE, contexts(SMALL_INPUT));
+    let (context, request) = admit(&g, &f, "prepared-rollback", "small-model", SMALL_OUTPUT).await;
+    let route = g.bridge.select(&context, &request).await.unwrap();
+    assert!(g.bridge.reserve(&context, &route, &request).await.is_err());
+    assert_eq!(requests(&f.pool).await, 0);
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM core_charging.usage_events")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 0);
+    let budget_checks: i64 = sqlx::query_scalar("SELECT count(*) FROM core_charging.budget_checks")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(budget_checks, 0);
+    assert_balance(&f, 2_000_000, 0).await;
+    f.pool.close().await;
+}
+#[sqlx::test(migrations = false)]
+async fn prepared_contract_concurrent_admission_preserves_prior_hold(pool: PgPool) {
+    let f = Arc::new(fixture(pool, 160).await);
+    let old = gateway(&f, EXTERNAL_BASE, contexts(64));
+    let (context, request) = admit(&old, &f, "old-unresolved-hold", "small-model", 8).await;
+    old.bridge.select(&context, &request).await.unwrap();
+    let (worker, spec) = {
+        let active = old.bridge.active.lock().unwrap();
+        let operation = &active[&context.request_id];
+        let selected = operation.selected.as_ref().unwrap();
+        (
+            operation.worker,
+            charging::Request {
+                id: context.request_id.clone(),
+                fingerprint: operation.fingerprint,
+                price: selected.price.clone(),
+                reserve: 64,
+                lease_seconds: 30,
+                maximum_seconds: 30,
+            },
+        )
+    };
+    // Exercise the actual historical path. Never delete a newly created proof
+    // and pretend that the resulting row is a pre-R1 liability.
+    old.bridge
+        .charging
+        .reserve_model_with_context(
+            &f.key,
+            &spec,
+            &worker,
+            None,
+            charging::ReservationBasis::Tokens {
+                input: 64,
+                output: 8,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(old.bridge.charging.start(&spec.id, &worker).await.unwrap());
+    let reservation = relay::Reservation { id: spec.id };
+    old.bridge
+        .charging
+        .mark_unknown(&reservation.id, &worker)
+        .await
+        .unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM core_charging.requests r WHERE id=$1")
+            .bind(&reservation.id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    let original_evidence =
+        prepared_financial_tests::liability_snapshot(&f.pool, &reservation.id).await;
+    let legacy_proofs: i64 = sqlx::query_scalar("SELECT count(*) FROM core_charging.usage_events WHERE request_id=$1 AND event_id='reservation-contract:v1'")
+        .bind(&reservation.id).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(legacy_proofs, 0);
+    assert_balance(&f, 96, 64).await;
+
+    let g = Arc::new(gateway_with_output_rate(
+        &f,
+        EXTERNAL_BASE,
+        contexts(24),
+        2_000_000,
+    ));
+    let mut attempts = tokio::task::JoinSet::new();
+    for index in 0..8 {
+        let g = g.clone();
+        let f = f.clone();
+        attempts.spawn(async move {
+            let id = format!("prepared-concurrent-{index}");
+            let (context, request) = admit(&g, &f, &id, "small-model", 8).await;
+            let route = g.bridge.select(&context, &request).await.unwrap();
+            g.bridge.reserve(&context, &route, &request).await
+        });
+    }
+    let mut successful = 0;
+    while let Some(result) = attempts.join_next().await {
+        let result = result.unwrap();
+        match result {
+            Ok(reservation) => {
+                successful += 1;
+                assert_eq!(receipt(&g, &reservation.id).await.reserved, 32);
+            }
+            Err(error) => assert_eq!(error, RelayError::NoFunds),
+        }
+    }
+    assert_eq!(successful, 3);
+    let (context, request) = admit(&g, &f, "prepared-capacity-exhausted", "small-model", 8).await;
+    let route = g.bridge.select(&context, &request).await.unwrap();
+    assert!(matches!(
+        g.bridge.reserve(&context, &route, &request).await,
+        Err(RelayError::NoFunds)
+    ));
+    assert_eq!(requests(&f.pool).await, 4);
+    let proofs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_charging.usage_events WHERE event_id='reservation-contract:v1' AND request_id LIKE 'prepared-concurrent-%'",
+    ).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(proofs, 3);
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM core_charging.requests r WHERE id=$1")
+            .bind(&reservation.id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        prepared_financial_tests::liability_snapshot(&f.pool, &reservation.id).await,
+        original_evidence
+    );
+    assert_balance(&f, 0, 160).await;
+    f.pool.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn prepared_contract_resolve_waits_for_original_transaction(pool: PgPool) {
+    use charging::contract::PreparedReservation;
+    let f = fixture(pool, 2_000_000).await;
+    let g = gateway(&f, EXTERNAL_BASE, contexts(SMALL_INPUT));
+    let (context, request) =
+        admit(&g, &f, "prepared-wait-commit", "small-model", SMALL_OUTPUT).await;
+    let route = g.bridge.select(&context, &request).await.unwrap();
+    let reservation = g.bridge.reserve(&context, &route, &request).await.unwrap();
+    let charge = receipt(&g, &reservation.id).await;
+    let (worker, fingerprint) = {
+        let active = g.bridge.active.lock().unwrap();
+        let operation = &active[&reservation.id];
+        (operation.worker, operation.fingerprint)
+    };
+    let detail: serde_json::Value = sqlx::query_scalar(
+        "SELECT detail FROM core_charging.usage_events WHERE request_id=$1 AND event_id='reservation-contract:v1'",
+    ).bind(&reservation.id).fetch_one(&f.pool).await.unwrap();
+    let prepared = PreparedReservation::context_max(
+        detail["request_fingerprint"].as_str().unwrap().into(),
+        serde_json::from_value(detail["binding"].clone()).unwrap(),
+        detail["wire_sha256"].as_str().unwrap().into(),
+        serde_json::from_value(detail["bounds"].clone()).unwrap(),
+        serde_json::from_value(detail["semantics"].clone()).unwrap(),
+    )
+    .unwrap();
+    let spec = charging::Request {
+        id: reservation.id.clone(),
+        fingerprint,
+        price: charge.price.clone(),
+        reserve: charge.reserved,
+        lease_seconds: 30,
+        maximum_seconds: 30,
+    };
+    let mut writer = f.pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('core_charging:' || $1,0))")
+        .bind(&reservation.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE core_charging.requests SET state='reconcile',revision=revision+1 WHERE id=$1",
+    )
+    .bind(&reservation.id)
+    .execute(&mut *writer)
+    .await
+    .unwrap();
+    let resolving = g.bridge.charging.resolve_prepared_model(
+        &spec,
+        &worker,
+        charging::ReservationBasis::Tokens {
+            input: SMALL_INPUT as u64,
+            output: u64::from(SMALL_OUTPUT),
+        },
+        &prepared,
+    );
+    tokio::pin!(resolving);
+    tokio::select! {
+        result = &mut resolving => panic!("resolved before original writer committed: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    }
+    writer.commit().await.unwrap();
+    let resolved = tokio::time::timeout(Duration::from_secs(3), &mut resolving)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.state, "reconcile");
+    assert_eq!(resolved.revision, charge.revision + 1);
+    assert_balance(&f, 2_000_000 - SMALL_INPUT, SMALL_INPUT).await;
+    f.pool.close().await;
+}
+// @context-fold end prepared-reservation-pg-tests
+
+#[path = "prepared_financial_tests.rs"]
+mod prepared_financial_tests;

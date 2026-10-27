@@ -274,6 +274,7 @@ pub struct Route {
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
     pub(crate) payload_policy: crate::routing::PayloadPolicy,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    pub(crate) count_plan: super::input_count::CountPlan,
 }
 impl fmt::Debug for Route {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -338,7 +339,13 @@ impl Route {
             cache_creation_mode: None,
             payload_policy: crate::routing::PayloadPolicy::Adapt,
             availability: None,
+            count_plan: super::input_count::CountPlan::ContextMax,
         })
+    }
+
+    pub(crate) fn with_count_plan(mut self, plan: super::input_count::CountPlan) -> Self {
+        self.count_plan = plan;
+        self
     }
 
     /// Captured only from the actual selected Attempt, never caller JSON.
@@ -401,6 +408,26 @@ pub trait Billing: Send + Sync + 'static {
         route: &'a Route,
         request: &'a super::Request,
     ) -> RelayFuture<'a, Reservation>;
+    /// The actual encoded generation bytes and the independent count observation.
+    fn reserve_prepared<'a>(
+        &'a self,
+        context: &'a RequestContext,
+        route: &'a Route,
+        request: &'a super::Request,
+        body: &'a [u8],
+        observation: Option<&'a super::CountObservation>,
+    ) -> RelayFuture<'a, Reservation> {
+        // An older adapter cannot silently accept an exact-count request without
+        // binding and persisting its evidence. Context-max adapters retain their
+        // existing contract; only an explicit implementation can accept a count.
+        if observation.is_some()
+            || !matches!(route.count_plan, super::input_count::CountPlan::ContextMax)
+        {
+            return Box::pin(async { Err(RelayError::BillingUnavailable) });
+        }
+        let _ = body;
+        self.reserve(context, route, request)
+    }
     /// Commit output/usage evidence before output is queued, including an empty
     /// packet for a validated non-stream terminal. Integrations must explicitly
     /// provide their durability policy; the default rejects the observation.

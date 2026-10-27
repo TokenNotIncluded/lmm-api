@@ -324,6 +324,36 @@ fn text_blocks(v: &Value, assistant: bool) -> Result<Vec<InputBlock>, RelayError
 }
 
 impl Request {
+    /// The first counter contract covers only stateless, nonstreaming text.
+    pub(crate) fn validate_exact_input_count(&self) -> Result<(), RelayError> {
+        // @context-fold begin exact-count-request-contract
+        if self.stream
+            || !self.tools.is_empty()
+            || !matches!(self.tool_choice, ToolChoice::Auto)
+            || self.parallel_tool_calls.is_some()
+            || self.prompt_cache_options.is_some()
+            || self.reasoning_effort.is_some()
+            || self.temperature.is_some()
+            || self.top_p.is_some()
+            || !self.stop.is_empty()
+            || self.continuation_token.is_some()
+            || self.image_config.is_some()
+            || !self.compatibility.is_empty()
+            || self.messages.iter().any(|message| {
+                message
+                    .content
+                    .iter()
+                    .any(|block| !matches!(block, InputBlock::Text(_)))
+            })
+        {
+            return Err(RelayError::Unsupported(
+                "exact input count requires stateless text",
+            ));
+        }
+        Ok(())
+        // @context-fold end exact-count-request-contract
+    }
+
     /// Admit only the five legacy fields provisionally. No policy is authorized
     /// until `upstream` receives the immutable route selected by the bridge.
     pub(crate) fn parse_deferred_openai(

@@ -182,7 +182,23 @@ impl Bridge {
             let upstream_cost = original.price.upstream_cost_group_ppm.is_some();
             // A malformed historical receipt must not block the other rows in
             // this bounded batch. Never turn failed decoding into zero usage.
-            let Some(usage) = recovery_priced_usage(value, sequence, &original.price) else {
+            let (frozen, contract) = match self.charging.reservation_contract(&id).await {
+                Ok(value) => value,
+                Err(
+                    charging::Error::Invalid
+                    | charging::Error::Conflict
+                    | charging::Error::NotFound,
+                ) => continue,
+                Err(error) => return Err(super::billing::error(error)),
+            };
+            if frozen.price != original.price || !(1..=65_536).contains(&sequence) {
+                continue;
+            }
+            let Ok(observed) = serde_json::from_value(value) else {
+                continue;
+            };
+            let Ok(usage) = super::billing::frozen_priced_usage(&contract, &frozen, observed)
+            else {
                 continue;
             };
             if upstream_cost && usage.upstream_cost_atto_usd.is_none() {
@@ -254,38 +270,38 @@ impl Bridge {
                     .ok_or(RelayError::RouteUnavailable)?,
             )
         };
+        let frozen = self.charging.reservation_contract(&reservation.id).await;
         if checkpoint.terminal_observed {
+            let input_ceiling = frozen
+                .as_ref()
+                .map_or(selected.input_token_ceiling, |(_, contract)| {
+                    contract.bounds().0 as i64
+                });
             self.persist_provider_observation(
                 &reservation.id,
                 &worker,
                 &selected.route_id,
                 checkpoint.usage,
-                selected.input_token_ceiling,
+                input_ceiling,
                 output_ceiling,
             )
             .await?;
         }
-        let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
-        let tiered_tariff = selected.price.tiered.as_ref();
-        validate_cache_write_dimensions(checkpoint.usage, &selected.price)?;
+        let (frozen, contract) = frozen.map_err(|_| RelayError::SettlementPending)?;
+        if frozen.price != selected.price {
+            return Err(RelayError::SettlementPending);
+        }
+        validate_cache_write_dimensions(checkpoint.usage, &frozen.price)?;
+        super::billing::validate_frozen_observation(&contract, &frozen, checkpoint.usage)?;
         let normalized = if checkpoint.terminal_observed {
-            tiered_tariff
-                .map(|tariff| super::billing::complete_tiered_usage(checkpoint.usage, tariff))
-                .transpose()?
+            Some(super::billing::frozen_priced_usage(
+                &contract,
+                &frozen,
+                checkpoint.usage,
+            )?)
         } else {
             None
         };
-        // A persisted terminal is authority for automatic settlement after an
-        // OS restart. Validate the original provider contract BEFORE writing it,
-        // so recovery cannot turn a rejected receipt into a zero-cache charge.
-        if checkpoint.terminal_observed {
-            let mut policy_usage = checkpoint.usage;
-            if let Some(usage) = normalized {
-                policy_usage.input_tokens = Some(usage.input as u64);
-            }
-            self.provider_policy
-                .validate_usage(&selected.attempt, &policy_usage, upstream_cost)?;
-        }
         checkpoint
             .usage
             .validate()
@@ -360,6 +376,7 @@ impl Bridge {
     }
 }
 
+#[cfg(test)]
 fn recovery_usage(
     value: serde_json::Value,
     sequence: i64,
@@ -372,6 +389,7 @@ fn recovery_usage(
     super::billing::complete_usage(observed, upstream_cost).ok()
 }
 
+#[cfg(test)]
 fn recovery_priced_usage(
     value: serde_json::Value,
     sequence: i64,
@@ -563,7 +581,7 @@ mod a07_recovery_tests {
     }
 
     #[tokio::test]
-    async fn provider_terminal_contract_rejection_precedes_any_persisted_recovery_authority() {
+    async fn unavailable_proof_or_audit_store_blocks_accepted_output() {
         use crate::model_http::{
             ChargePolicy, ExternalModelContext, ModelGateway, ProviderPolicy, UpstreamCredential,
         };
@@ -607,6 +625,7 @@ mod a07_recovery_tests {
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                reservation: Default::default(),
                 missing_cache_creation_tokens_is_zero: false,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),
@@ -620,8 +639,10 @@ mod a07_recovery_tests {
             128,
         )
         .unwrap();
-        // This pool is deliberately unconnected. Reaching SQL is a test failure:
-        // invalid terminals must never enter the recoverable evidence relation.
+        // Audit-only terminal observations now precede billing validation. An
+        // unavailable audit store must block accepted output, not silently drop
+        // the evidence. Real-PG tests separately verify that rejected terminals
+        // never enter the recoverable checkpoint relation.
         let pool = sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(Duration::from_millis(20))
             .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
@@ -689,8 +710,8 @@ mod a07_recovery_tests {
                 )
                 .await;
             assert!(
-                matches!(result, Err(RelayError::SettlementPending)),
-                "invalid terminal reached persistence: {result:?}"
+                matches!(result, Err(RelayError::BillingUnavailable)),
+                "terminal without durable audit was accepted: {result:?}"
             );
         }
         for terminal_observed in [false, true] {
@@ -727,10 +748,12 @@ mod a07_recovery_tests {
                         &checkpoint,
                     )
                     .await;
-                assert!(
-                    matches!(result, Err(RelayError::SettlementPending)),
-                    "unsupported cache subset reached persistence: {terminal_observed}: {result:?}"
-                );
+                let expected = if terminal_observed {
+                    RelayError::BillingUnavailable
+                } else {
+                    RelayError::SettlementPending
+                };
+                assert_eq!(result, Err(expected), "terminal={terminal_observed}");
             }
         }
     }

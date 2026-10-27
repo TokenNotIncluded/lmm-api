@@ -6,7 +6,12 @@ mod cache_evidence;
 mod image;
 #[path = "model_unknown.rs"]
 mod model_unknown;
-use super::{authority, limits, types::*};
+use super::{
+    authority,
+    contract::{self, PreparedReservation, ReservationContract},
+    limits,
+    types::*,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -52,6 +57,28 @@ fn admission_spec(
         hash(request)
     }
 }
+// @context-fold begin prepared-admission-spec
+fn prepared_admission_spec(
+    request: &Request,
+    basis: Option<ReservationBasis>,
+    trusted: bool,
+    prepared: Option<&PreparedReservation>,
+) -> Result<Vec<u8>> {
+    let Some(prepared) = prepared else {
+        return admission_spec(request, basis, trusted);
+    };
+    let basis = basis.ok_or(Error::Conflict)?;
+    prepared.verify_request(request, basis)?;
+    hash(&(
+        "core-charging-prepared-admission-v1",
+        request,
+        basis,
+        prepared.digest(),
+        trusted,
+    ))
+}
+// @context-fold end prepared-admission-spec
+
 fn trust_error(error: crate::billing::trust_pricing::Error) -> Error {
     use crate::billing::trust_pricing::Error as Trust;
     match error {
@@ -498,7 +525,7 @@ impl Charging {
         worker: &[u8; 32],
         peer: Option<IpAddr>,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, None, None)
+        self.reserve_authorized(secret, request, worker, peer, None, None, None)
             .await
     }
     /// A real scoped OAuth access token, not a submitted DTO or a native key.
@@ -510,9 +537,10 @@ impl Charging {
         worker: &[u8; 32],
         peer: Option<IpAddr>,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, Some(issuer), None)
+        self.reserve_authorized(secret, request, worker, peer, Some(issuer), None, None)
             .await
     }
+    #[cfg(test)]
     pub(crate) async fn reserve_model_with_context(
         &self,
         secret: &str,
@@ -521,21 +549,43 @@ impl Charging {
         peer: Option<IpAddr>,
         basis: ReservationBasis,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, None, Some(basis))
+        self.reserve_authorized(secret, request, worker, peer, None, Some(basis), None)
             .await
     }
-    pub(crate) async fn reserve_model_oauth_with_context(
+    /// Gateway-only prepared admission; both key and OAuth paths share the same transaction.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep the existing authority context and immutable financial evidence explicit"
+    )]
+    pub(crate) async fn reserve_prepared_model_with_context(
         &self,
-        issuer: &crate::identity::grants::LmmIssuer,
         secret: &str,
         request: &Request,
         worker: &[u8; 32],
         peer: Option<IpAddr>,
+        issuer: Option<&crate::identity::grants::LmmIssuer>,
         basis: ReservationBasis,
+        prepared: &PreparedReservation,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, Some(issuer), Some(basis))
-            .await
+        // @context-fold begin prepared-model-admission
+        prepared.verify_request(request, basis)?;
+        self.reserve_authorized(
+            secret,
+            request,
+            worker,
+            peer,
+            issuer,
+            Some(basis),
+            Some(prepared),
+        )
+        .await
+        // @context-fold end prepared-model-admission
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One transaction owns authorization, reservation basis and optional durable proof"
+    )]
     async fn reserve_authorized(
         &self,
         secret: &str,
@@ -544,6 +594,7 @@ impl Charging {
         peer: Option<IpAddr>,
         issuer: Option<&crate::identity::grants::LmmIssuer>,
         basis: Option<ReservationBasis>,
+        prepared: Option<&PreparedReservation>,
     ) -> Result<Charge> {
         request.validate()?;
         // A deserialized persisted snapshot is not fresh admission authority.
@@ -580,7 +631,12 @@ impl Charging {
         };
         if let Some(stored) = select_stored(&mut tx, &request.id, true).await? {
             worker_matches(&stored, worker)?;
-            let spec = admission_spec(request, basis, stored.charge.price.user_trust.is_some())?;
+            let spec = prepared_admission_spec(
+                request,
+                basis,
+                stored.charge.price.user_trust.is_some(),
+                prepared,
+            )?;
             if stored.charge.actor_user_id != user
                 || stored.charge.key_id != key
                 || stored.charge.owner_account_id != owner
@@ -589,13 +645,21 @@ impl Charging {
             {
                 return Err(Error::Conflict);
             }
+            if let Some(proof) = prepared {
+                let contract = contract::load(&mut tx, &stored.charge)
+                    .await?
+                    .ok_or(Error::Conflict)?;
+                if contract != proof.freeze(&stored.charge, &contract::hex_digest(&spec))? {
+                    return Err(Error::Conflict);
+                }
+            }
             commit(tx).await?;
             return Ok(stored.charge);
         }
         if self.trust_pricing_enabled() && basis.is_none() {
             return Err(Error::Forbidden);
         }
-        let spec = admission_spec(request, basis, self.trust_pricing_enabled())?;
+        let spec = prepared_admission_spec(request, basis, self.trust_pricing_enabled(), prepared)?;
         let effective_request = if self.trust_pricing_enabled() {
             self.freeze_trust_request(&mut tx, user, request, basis.ok_or(Error::Forbidden)?)
                 .await?
@@ -650,6 +714,10 @@ impl Charging {
                 let attempt = self.hold(&mut tx, &charge, at).await;
                 match attempt {
                     Ok(()) => {
+                        if let Some(proof) = prepared {
+                            contract::insert(&mut tx, &charge, &contract::hex_digest(&spec), proof)
+                                .await?;
+                        }
                         sqlx::query("RELEASE SAVEPOINT funding_candidate")
                             .execute(&mut *tx)
                             .await?;
@@ -713,6 +781,9 @@ impl Charging {
         let stored = load(&mut tx, id).await?;
         worker_matches(&stored, worker)?;
         live(&stored.charge, now(&mut tx).await?)?;
+        // An admitted prepared request cannot dispatch after either immutable
+        // contract record is missing or corrupt. Legacy requests have neither.
+        contract::load(&mut tx, &stored.charge).await?;
         if stored.charge.state == "streaming" {
             commit(tx).await?;
             return Ok(false);
@@ -910,6 +981,9 @@ impl Charging {
         if stored.charge.state != "streaming" {
             return Err(Error::WrongState);
         }
+        if let Some(proof) = contract::load(&mut tx, &stored.charge).await? {
+            proof.check_usage(&stored.charge, usage)?;
+        }
         Self::check_usage(&stored.charge, usage)?;
         if let Some(image) = usage.image {
             sqlx::query("UPDATE core_charging.requests SET input_tokens=$2,cached_tokens=$3,output_tokens=$4,image_usage=$5,revision=revision+1 WHERE id=$1")
@@ -1002,6 +1076,9 @@ impl Charging {
         outcome: Outcome,
         evidence: Option<&str>,
     ) -> Result<Charge> {
+        if let Some(proof) = contract::load(c, &charge).await? {
+            proof.check_usage(&charge, usage)?;
+        }
         let amount = Self::check_usage(&charge, usage)?;
         self.ledger
             .apply(c, command(&charge, "settle", Change::Settle { amount })?)
@@ -1153,6 +1230,74 @@ impl Charging {
         commit(tx).await?;
         Ok(result)
     }
+    pub(crate) async fn reservation_contract(
+        &self,
+        id: &str,
+    ) -> Result<(Charge, ReservationContract)> {
+        // @context-fold begin read-frozen-reservation-contract
+        let mut tx = self.pool.begin().await?;
+        for statement in [
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            "SET LOCAL lock_timeout='2s'",
+            "SET LOCAL statement_timeout='5s'",
+        ] {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
+        lock(&mut tx, id).await?;
+        let stored = select_stored(&mut tx, id, false)
+            .await?
+            .ok_or(Error::NotFound)?;
+        let proof = contract::load(&mut tx, &stored.charge)
+            .await?
+            .ok_or(Error::Invalid)?;
+        commit(tx).await?;
+        Ok((stored.charge, proof))
+        // @context-fold end read-frozen-reservation-contract
+    }
+
+    /// Resolve an unknown reservation ACK without another reserve or a new ID.
+    pub(crate) async fn resolve_prepared_model(
+        &self,
+        request: &Request,
+        worker: &[u8; 32],
+        basis: ReservationBasis,
+        prepared: &PreparedReservation,
+    ) -> Result<Charge> {
+        // @context-fold begin resolve-prepared-reservation
+        // Resolve after any writer holding this ID has committed. A SERIALIZABLE
+        // snapshot taken before waiting can still report a committed row absent.
+        let mut tx = self.pool.begin().await?;
+        for statement in [
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            "SET LOCAL lock_timeout='2s'",
+            "SET LOCAL statement_timeout='5s'",
+        ] {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
+        lock(&mut tx, &request.id).await?;
+        let stored = select_stored(&mut tx, &request.id, false)
+            .await?
+            .ok_or(Error::CommitUnknown)?;
+        worker_matches(&stored, worker)?;
+        let spec = prepared_admission_spec(
+            request,
+            Some(basis),
+            stored.charge.price.user_trust.is_some(),
+            Some(prepared),
+        )?;
+        let proof = contract::load(&mut tx, &stored.charge)
+            .await?
+            .ok_or(Error::Conflict)?;
+        if stored.spec != spec
+            || proof != prepared.freeze(&stored.charge, &contract::hex_digest(&spec))?
+        {
+            return Err(Error::Conflict);
+        }
+        commit(tx).await?;
+        Ok(stored.charge)
+        // @context-fold end resolve-prepared-reservation
+    }
+
     /// Trusted refund service only. The original payer, subscription window and
     /// budget attribution stay fixed, even after key revocation/team removal.
     pub async fn refund(
