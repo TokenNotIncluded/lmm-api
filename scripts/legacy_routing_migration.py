@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
@@ -56,6 +56,21 @@ CHANNEL_FIELDS = {"id", "type", "key", "open_ai_organization", "test_model", "st
                   "settings", "public_relay_contribution_id"}
 SPECIAL_FIELDS = ("open_ai_organization", "other", "model_mapping", "status_code_mapping", "setting",
                   "param_override", "header_override", "settings")
+
+
+def user_binding_hash(user):
+    """Full source row, normalizing only PostgreSQL's timestamptz rendering."""
+    normalized = dict(user)
+    value = normalized.get("deleted_at")
+    if value is not None:
+        require(type(value) is str, "routing_user_timestamp_invalid")
+        try:
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            require(instant.tzinfo is not None, "routing_user_timestamp_invalid")
+            normalized["deleted_at"] = instant.astimezone(timezone.utc).isoformat(timespec="microseconds")
+        except (ValueError, OverflowError):
+            raise MappingError("routing_user_timestamp_invalid") from None
+    return F.digest(normalized)
 
 
 def number(value, code, minimum=1, maximum=MAX_ID):
@@ -280,7 +295,8 @@ def plan(tables, identities, bindings, *, runtime=None, providers=None, credenti
             datetime.fromisoformat(user["deleted_at"].replace("Z", "+00:00"))
         memberships.append({"user_id": uid, "group_name": group,
                             "enabled": user["status"] == 1 and user["deleted_at"] is None,
-                            "source_reference": "legacy.users/" + str(uid), "source_row_sha256": F.digest(user)})
+                            "source_reference": "legacy.users/" + str(uid), "source_row_sha256": F.digest(user),
+                            "source_user_utc_sha256": user_binding_hash(user)})
     ability_groups, seen = defaultdict(list), set()
     assessments = []
     require(type(tables["abilities"]) is list, "routing_source_abilities_invalid")

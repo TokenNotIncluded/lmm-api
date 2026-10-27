@@ -4,11 +4,25 @@
 This emits private psql scripts and a read-only outcome probe; it never connects or applies.
 It copies only each user's original group and source enabled/deleted state. It
 does not activate users, routes, credentials, providers or financial capabilities.
-The existing identity export is sufficient; no financial export reread is needed.
+Requires both frozen identity and financial exports. Plan hashes are integrity
+checks, not signatures; the supplied exports remain the independently preserved
+source inputs. No source query or new export is performed.
+
+Preparation now requires --source-financial-export pointing to the same frozen
+source-financial-export.private.jsonl used by the routing planner, plus its
+--source-receipt and --export-proof. The independently preserved receipt and
+archive are the existing trust anchor, not cryptographic signatures; replacing
+all trusted source inputs is outside this offline integrity contract. Catalog,
+baseline and archive dependencies are frozen and checked again on resolution.
+Existing materials without those inputs cannot be resolved by this version. Preserve them;
+replan from the frozen inputs with this planner and prepare fresh material and
+SQL against a fresh target snapshot, then review those new artifacts. Do not
+edit an old material or its tool hashes to make it pass.
 """
 from __future__ import annotations
 
 import argparse
+import io
 import json
 from pathlib import Path
 import re
@@ -23,7 +37,36 @@ require = IDENTITY.require
 Error = IDENTITY.MappingError
 SCOPE = "legacy-user-routing-group-import-v1"
 TABLE = "core_identity.user_routing_groups"
-INPUTS = ("routing_plan", "identity_manifest", "identity_map", "source_identity_export")
+INPUTS = ("routing_plan", "identity_manifest", "identity_map", "source_identity_export", "source_financial_export",
+          "source_receipt", "export_proof")
+
+
+def financial_source_files(files, plan):
+    """Reuse the planner's receipt/catalog/baseline contract and freeze its dependencies."""
+    require(type(files) is dict and set(files) == set(INPUTS), "routing_source_files_incomplete")
+    data = {name: PRIVATE.private_bytes(Path(item["path"])) for name, item in files.items()}
+    require(all(FIN.sha(data[name]) == files[name]["sha256"] for name in INPUTS), "routing_source_file_changed")
+    receipt = FIN.PLANNER.parse_json(data["source_receipt"].decode("utf-8"))
+    require(type(receipt) is dict and type(receipt.get("archive")) is dict
+            and receipt["archive"].get("sha256") == plan["bindings"]["source_archive_sha256"],
+            "routing_financial_receipt_binding_mismatch")
+    proof_path = Path(files["export_proof"]["path"])
+    raw_path = proof_path.with_name("source-financial-export.private.jsonl")
+    require(raw_path.absolute() == Path(files["source_financial_export"]["path"]).absolute(),
+            "routing_financial_export_path_mismatch")
+    hashes = {Path(item["path"]): item["sha256"] for item in files.values()}
+    try:
+        _, proof, _ = ROUTING.load_routing_export(receipt, proof_path, hashes, retained_tables=("users",))
+    except ROUTING.MappingError as exc:
+        raise Error(str(exc)) from None
+    require(proof["source_export_sha256"] == plan["bindings"]["source_export_sha256"],
+            "routing_financial_export_hash_mismatch")
+    # The loader records the archive, catalog and baseline in addition to the
+    # explicit inputs. Freeze them too so later reads cannot change the receipt's
+    # dependencies while updating an adjacent, unsealed proof file.
+    artifacts = {str(path.absolute()): digest for path, digest in hashes.items()}
+    ROUTING.verify_files(hashes)
+    return artifacts
 
 
 def source_hashes():
@@ -32,8 +75,8 @@ def source_hashes():
     return {name: IDENTITY.sha256_file(Path(__file__).with_name(name)) for name in names}
 
 
-def source_records(plan, manifest, mapping_bytes, export_bytes):
-    """Rebuild grants from the identity source, then compare the independent plan."""
+def source_records(plan, manifest, mapping_bytes, export_bytes, financial_bytes):
+    """Rebuild both source-row hashes from frozen exports, never from plan claims."""
     require(type(plan) is dict and type(plan.get("format_version")) is int and plan["format_version"] == 1
             and plan.get("scope") == "legacy-routing-offline-plan", "routing_plan_contract_invalid")
     require(plan.get("plan_sha256") == FIN.digest({k: v for k, v in plan.items() if k != "plan_sha256"}),
@@ -48,11 +91,32 @@ def source_records(plan, manifest, mapping_bytes, export_bytes):
     require(bindings["identity_map_file_sha256"] == proof["identity_map_file_sha256"]
             and manifest.get("source_export_sha256") == FIN.sha(export_bytes), "routing_identity_source_changed")
     parse_lines = lambda raw: [FIN.PLANNER.parse_json(line) for line in raw.decode("utf-8").splitlines() if line]
+    require(FIN.sha(financial_bytes) == bindings["source_export_sha256"],
+            "routing_financial_export_hash_mismatch")
+    financial_users, financial_framing = {}, {"identity": 0, "schema": 0}
+    for line in io.BytesIO(financial_bytes):
+        if not line.strip():
+            continue
+        tagged = FIN.PLANNER.parse_json(line.decode("utf-8"))
+        require(type(tagged) is dict, "routing_financial_export_shape_invalid")
+        kind, row = tagged.get("kind"), tagged.get("row")
+        require(type(row) is dict, "routing_financial_export_shape_invalid")
+        if kind in financial_framing:
+            require(set(tagged) == {"kind", "row"}, "routing_financial_export_shape_invalid")
+            financial_framing[kind] += 1
+        else:
+            require(kind == "row" and set(tagged) == {"kind", "table", "row"}
+                    and type(tagged["table"]) is str, "routing_financial_export_shape_invalid")
+            if tagged["table"] == "users":
+                uid = FIN.PLANNER.integer(row.get("id"), "routing_financial_user_invalid", minimum=1)
+                require(uid not in financial_users, "routing_financial_user_duplicate")
+                financial_users[uid] = row
+    require(financial_framing == {"identity": 1, "schema": 1}, "routing_financial_export_framing_invalid")
     mapped = parse_lines(mapping_bytes)
     require(all(type(row) is dict and set(row) == {"source_user_id", "target_user_id", "target_personal_account_id"}
                 for row in mapped), "routing_identity_map_invalid")
     identities = FIN.PLANNER.identity_index(mapped)
-    users, counts, framing = {}, [], {"identity": 0, "schema_identity": 0}
+    users, user_hashes, counts, framing = {}, {}, [], {"identity": 0, "schema_identity": 0}
     for tagged in parse_lines(export_bytes):
         require(type(tagged) is dict and set(tagged) == {"kind", "row"}, "routing_identity_export_shape_invalid")
         kind, row = tagged["kind"], tagged["row"]
@@ -66,6 +130,12 @@ def source_records(plan, manifest, mapping_bytes, export_bytes):
                 require(type(row["deleted_at"]) is str, "routing_source_user_state_invalid")
                 deleted = ROUTING.datetime.fromisoformat(row["deleted_at"].replace("Z", "+00:00"))
                 require(deleted.tzinfo is not None, "routing_source_user_state_invalid")
+            require(uid in financial_users, "routing_financial_user_coverage_mismatch")
+            financial = financial_users[uid]
+            financial_utc = ROUTING.user_binding_hash(financial)
+            require(financial_utc == ROUTING.user_binding_hash(row),
+                    "routing_financial_identity_user_disagrees")
+            user_hashes[uid] = (FIN.digest(financial), financial_utc, FIN.digest(row))
             users[uid] = {"user_id": uid, "group_name": row["group"],
                 "enabled": row["status"] == 1 and row["deleted_at"] is None,
                 "source_reference": "legacy.users/" + str(uid)}
@@ -79,16 +149,28 @@ def source_records(plan, manifest, mapping_bytes, export_bytes):
             require(kind in {"second_factor", "password_policy"} and type(row) is dict,
                     "routing_identity_export_shape_invalid")
     require(framing == {"identity": 1, "schema_identity": 1} and counts == [len(users)]
-            and users and set(users) == set(identities), "routing_identity_coverage_mismatch")
+            and users and set(users) == set(identities) == set(financial_users), "routing_identity_coverage_mismatch")
     planned = plan.get("user_group_plan")
     require(type(planned) is list and len(planned) == len(users), "routing_user_group_coverage_mismatch")
     wanted = [users[uid] for uid in sorted(users)]
-    require(all(type(row) is dict and set(row) == set(wanted[0]) | {"source_row_sha256"} for row in planned),
+    require(all(type(row) is dict and set(row) in (set(wanted[0]) | {"source_row_sha256"},
+                set(wanted[0]) | {"source_row_sha256", "source_user_utc_sha256"}) for row in planned),
             "routing_user_group_plan_shape_invalid")
-    require(FIN.digest([{k: v for k, v in row.items() if k != "source_row_sha256"} for row in planned]) == FIN.digest(wanted),
+    require(FIN.digest([{k: v for k, v in row.items() if k not in {"source_row_sha256", "source_user_utc_sha256"}} for row in planned]) == FIN.digest(wanted),
             "routing_user_group_source_disagrees")
     for row in planned:
         FIN.checked_hash(row["source_row_sha256"])
+        raw_hash, utc_hash, identity_hash = user_hashes[row["user_id"]]
+        require(row["source_row_sha256"] == raw_hash, "routing_financial_user_hash_disagrees")
+        if "source_user_utc_sha256" in row:
+            FIN.checked_hash(row["source_user_utc_sha256"])
+            require(row["source_user_utc_sha256"] == utc_hash,
+                    "routing_user_group_source_hash_disagrees")
+        else:
+            # Legacy plans contain only the raw financial-export hash. Never
+            # guess its timezone: replan from frozen inputs when bytes differ.
+            require(row["source_row_sha256"] == identity_hash,
+                    "routing_legacy_plan_requires_frozen_replan")
     return wanted, identities, proof
 
 
@@ -111,8 +193,8 @@ def snapshot_sql(inventory, migration_id):
         "(SELECT to_jsonb(r) FROM core_migration.import_runs r WHERE manifest->>'scope'='identity-only')); COMMIT;\n"
 
 
-def prepare_material(plan, manifest, mapping_bytes, export_bytes, *, migration_id, snapshot, runtime_roles, source_files):
-    records, identities, proof = source_records(plan, manifest, mapping_bytes, export_bytes)
+def prepare_material(plan, manifest, mapping_bytes, export_bytes, financial_bytes, *, migration_id, snapshot, runtime_roles, source_files):
+    records, identities, proof = source_records(plan, manifest, mapping_bytes, export_bytes, financial_bytes)
     require(type(snapshot) is dict and all(type(snapshot.get(name)) is dict for name in
             ("instance", "state", "identity_import", "component_fingerprints", "trust_policy_seed"))
             and type(snapshot.get("native_users")) is list, "routing_snapshot_shape_invalid")
@@ -127,7 +209,7 @@ def prepare_material(plan, manifest, mapping_bytes, export_bytes, *, migration_i
         "target": {**{k: snapshot[k] for k in ("instance", "catalog_fingerprint_sha256", "ownership_sha256",
             "component_fingerprints", "trust_policy_seed")},
             "source_contract": {k: contract[k] for k in FIN.CONTRACT_FIELDS}},
-        "tool_source_hashes": source_hashes()}
+        "tool_source_hashes": source_hashes(), "source_artifacts": financial_source_files(source_files, plan)}
     validate_material(material)
     return material
 
@@ -199,6 +281,11 @@ def validate_material(material):
     require(type(roles) is list and roles and all(type(r) is str and IDENTITY.IDENTIFIER.fullmatch(r) for r in roles)
             and roles == sorted(set(roles))
             and not {expected["role"], expected["session_user"]}.intersection(roles), "routing_runtime_roles_invalid")
+    artifacts = material.get("source_artifacts")
+    require(type(artifacts) is dict and artifacts and all(type(path) is str and Path(path).is_absolute()
+            for path in artifacts), "routing_source_artifacts_invalid")
+    for digest in artifacts.values():
+        FIN.checked_hash(digest)
     files = material["source_files"]
     require(type(files) is dict and set(files) == set(INPUTS), "routing_source_files_incomplete")
     for item in files.values():
@@ -214,7 +301,11 @@ def verify_source_files(material):
     data = {name: PRIVATE.private_bytes(Path(item["path"])) for name, item in files.items()}
     require(all(FIN.sha(data[name]) == files[name]["sha256"] for name in INPUTS), "routing_source_file_changed")
     plan, manifest = (FIN.PLANNER.parse_json(data[name].decode("utf-8")) for name in INPUTS[:2])
-    rows, identities, _ = source_records(plan, manifest, data["identity_map"], data["source_identity_export"])
+    require(all(IDENTITY.sha256_file(IDENTITY.private_backup_path(Path(path))) == digest
+                for path, digest in material["source_artifacts"].items()), "routing_source_artifacts_changed")
+    require(financial_source_files(files, plan) == material["source_artifacts"], "routing_source_artifacts_changed")
+    rows, identities, _ = source_records(plan, manifest, data["identity_map"], data["source_identity_export"],
+                                         data["source_financial_export"])
     require(rows == material["records"] and {str(uid): aid for uid, aid in identities.items()} == material["identity_accounts"]
             and manifest == material["identity_manifest"] and plan["plan_sha256"] == material["routing_plan_sha256"],
             "routing_frozen_inputs_mismatch")
@@ -345,7 +436,7 @@ def main():
             plan, manifest = (FIN.PLANNER.parse_json(data[name].decode("utf-8")) for name in INPUTS[:2])
             files = {name: {"path": str(getattr(args, name).absolute()), "sha256": FIN.sha(data[name])} for name in INPUTS}
             material = prepare_material(plan, manifest, data["identity_map"], data["source_identity_export"],
-                migration_id=args.migration_id, snapshot=PRIVATE.load_json(args.snapshot),
+                data["source_financial_export"], migration_id=args.migration_id, snapshot=PRIVATE.load_json(args.snapshot),
                 runtime_roles=sorted(args.runtime_role), source_files=files)
             verify_source_files(material)
             outputs = {"material.private.json": FIN.canonical(material) + "\n", "grants.private.sql": build_apply_sql(material)}

@@ -94,6 +94,44 @@ class ProducerTests(unittest.TestCase):
         self.assertNotIn("setval(", sql)
         self.assertNotIn("nextval(", sql)
 
+    def test_all_generated_psql_scripts_stop_on_the_first_error(self):
+        material = material_fixture()
+        for sql in (IMPORT.build_apply_sql(material),
+                    IMPORT.build_verify_sql(material, "lmm-credential-" + "a" * 32),
+                    IMPORT.snapshot_sql(material["before_state"]["inventory"], material["migration_id"])):
+            with self.subTest(prefix=sql[:60]):
+                self.assertTrue(sql.startswith("\\set ON_ERROR_STOP on\n"))
+
+    def test_missing_routing_grant_requires_fresh_projection_proposal_and_review(self):
+        source, target, _, review, snapshot, files = fixture()
+        target["users"][0]["routing_groups"] = []
+        proposal = IMPORT.PROPOSAL.plan_api_keys(source, target)
+        review.update(target_input_sha256=IMPORT.PROPOSAL.sha256(target),
+                      proposal_sha256=proposal["proposal_sha256"])
+        self.assertIn("target_routing_grant_missing", proposal["records"][0]["blocked_reasons"])
+        with self.assertRaisesRegex(IMPORT.Error, "credential_native_semantics_unsupported"):
+            IMPORT.prepare_material(source, target, proposal, review, migration_id="synthetic-import",
+                snapshot=snapshot, runtime_roles=["synthetic_runtime"], source_files=files)
+
+        # Simulate a fresh observed projection after the original group became
+        # effective; reusing either the old proposal or old review must fail.
+        target["users"][0]["routing_groups"] = [source["users"][0]["group"]]
+        with self.assertRaisesRegex(IMPORT.Error, "credential_proposal_rebuild_mismatch"):
+            IMPORT.prepare_material(source, target, proposal, review, migration_id="synthetic-import",
+                snapshot=snapshot, runtime_roles=["synthetic_runtime"], source_files=files)
+        proposal = IMPORT.PROPOSAL.plan_api_keys(source, target)
+        with self.assertRaisesRegex(IMPORT.Error, "credential_review_input_mismatch"):
+            IMPORT.prepare_material(source, target, proposal, review, migration_id="synthetic-import",
+                snapshot=snapshot, runtime_roles=["synthetic_runtime"], source_files=files)
+        review.update(target_input_sha256=IMPORT.PROPOSAL.sha256(target),
+                      proposal_sha256=proposal["proposal_sha256"])
+        material = IMPORT.prepare_material(source, target, proposal, review, migration_id="synthetic-import",
+            snapshot=snapshot, runtime_roles=["synthetic_runtime"], source_files=files)
+        sql = IMPORT.build_apply_sql(material)
+        self.assertNotIn("INSERT INTO core_identity.user_routing_groups", sql)
+        self.assertNotIn("UPDATE core_identity.users", sql)
+        self.assertEqual(material["records"][0]["group"]["value"], "paid")
+
     def test_inclusive_expiry_and_disabled_deleted_history_preserved(self):
         material = material_fixture(changes={"expired_time": 2000, "status": 2,
             "deleted_at": "2026-10-26T00:00:00Z", "accessed_time": 0})
