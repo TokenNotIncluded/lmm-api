@@ -124,8 +124,8 @@ export type SystemResourceSnapshot = {
     memory_usage_percent: number
   }
   processes: {
-    core?: SystemProcessInfo
-    extensions?: SystemProcessInfo
+    'lmm-core'?: SystemProcessInfo
+    'lmm-extensions'?: SystemProcessInfo
     [key: string]: SystemProcessInfo | undefined
   }
 }

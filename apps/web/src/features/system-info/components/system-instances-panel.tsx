@@ -683,8 +683,8 @@ function RuntimeResourceBreakdown(props: {
           total_bytes: props.native.system.memory_total_bytes,
         },
       },
-      core: props.native.processes.core,
-      extensions: props.native.processes.extensions,
+      core: props.native.processes['lmm-core'],
+      extensions: props.native.processes['lmm-extensions'],
     })
   }
   if (rows.length === 0) return null
