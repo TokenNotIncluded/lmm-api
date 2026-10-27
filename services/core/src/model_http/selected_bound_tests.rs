@@ -9,7 +9,7 @@ use crate::{
     accounts::{Account, AccountKind},
     billing::{
         Credits,
-        charging::Charge,
+        charging::{self, Charge},
         ledger::{Action, Ledger, Request as LedgerRequest},
     },
     funding::FundingPolicy,
@@ -771,10 +771,21 @@ async fn selected_bound_external_contract_must_match_every_binding_field(pool: P
 
 #[sqlx::test(migrations = false)]
 async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: PgPool) {
+    // @context-fold begin selected-bound-observation-is-audit-only
     let f = fixture(pool, 300_000).await;
     let g = gateway(&f, EXTERNAL_BASE, contexts(SMALL_INPUT));
     let invalid = [
-        usage(SMALL_INPUT as u64 + 1),
+        relay::Usage {
+            upstream_cost_atto_usd: Some(123),
+            ..usage(SMALL_INPUT as u64 + 1)
+        },
+        relay::Usage {
+            input_tokens: Some(37),
+            output_tokens: Some(40),
+            cached_input_tokens: Some(0),
+            reasoning_output_tokens: Some(30),
+            ..relay::Usage::default()
+        },
         relay::Usage {
             input_tokens: Some(1),
             output_tokens: Some(1),
@@ -782,6 +793,7 @@ async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: 
         },
         relay::Usage::default(),
     ];
+    let cases = invalid.len() as i64;
     for (index, observed) in invalid.into_iter().enumerate() {
         let id = format!("unknown-selected-{index}");
         let (context, request) = admit(&g, &f, &id, "small-model", 1).await;
@@ -789,21 +801,87 @@ async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: 
         let reservation = g.bridge.reserve(&context, &route, &request).await.unwrap();
         let original = receipt(&g, &id).await;
         assert_eq!((original.reserved, original.settled), (SMALL_INPUT, 0));
-        assert!(matches!(
+        let worker = g.bridge.active.lock().unwrap().get(&id).unwrap().worker;
+        let raw_usage = serde_json::to_value(observed).unwrap();
+        let checkpoint = OutputCheckpoint {
+            sequence: 1,
+            packet_sha256: [3; 32],
+            packet_bytes: 128,
+            usage: observed,
+            terminal_observed: true,
+        };
+        let finalize_only = observed == relay::Usage::default();
+        for _ in 0..2 {
+            let result = if finalize_only {
+                g.bridge
+                    .finalize(&reservation, &terminal(&id, &route, observed))
+                    .await
+            } else {
+                g.bridge.persist_output(&reservation, &checkpoint).await
+            };
+            assert!(matches!(result, Err(RelayError::SettlementPending)));
+        }
+        let observation: serde_json::Value = sqlx::query_scalar(
+            "SELECT detail FROM core_charging.usage_events WHERE request_id=$1 AND event_id='provider-observation:terminal'",
+        )
+        .bind(&id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            observation,
+            json!({
+                "kind": "provider_observation",
+                "provider_complete": true,
+                "settlement_eligible": false,
+                "route_id": route.id,
+                "raw_usage": raw_usage,
+                "input_token_ceiling": SMALL_INPUT,
+                "output_token_ceiling": request.max_output_tokens,
+            })
+        );
+        let audited = receipt(&g, &id).await;
+        if finalize_only {
+            assert_eq!(audited.state, "reconcile");
+        } else {
+            assert_eq!(audited.state, original.state);
+            assert_eq!(audited.revision, original.revision);
+        }
+        assert_eq!(audited.reserved, original.reserved);
+        assert_eq!(audited.settled, original.settled);
+        assert_eq!(audited.usage, original.usage);
+        let mut stale_worker = worker;
+        stale_worker[0] ^= 1;
+        assert_eq!(
             g.bridge
-                .persist_output(
-                    &reservation,
-                    &OutputCheckpoint {
-                        sequence: 1,
-                        packet_sha256: [3; 32],
-                        packet_bytes: 128,
-                        usage: observed,
-                        terminal_observed: true,
-                    },
+                .charging
+                .record_provider_observation(
+                    &id,
+                    &stale_worker,
+                    &route.id,
+                    &raw_usage,
+                    SMALL_INPUT,
+                    request.max_output_tokens,
                 )
                 .await,
-            Err(RelayError::SettlementPending)
-        ));
+            Err(charging::Error::StaleWorker)
+        );
+        let mut changed_usage = raw_usage.clone();
+        changed_usage["input_tokens"] = json!(0);
+        assert_eq!(
+            g.bridge
+                .charging
+                .record_provider_observation(
+                    &id,
+                    &worker,
+                    &route.id,
+                    &changed_usage,
+                    SMALL_INPUT,
+                    request.max_output_tokens,
+                )
+                .await,
+            Err(charging::Error::Conflict)
+        );
         assert_eq!(checkpoint_rows(&f.pool, &id).await, 0);
         assert!(matches!(
             g.bridge
@@ -817,6 +895,23 @@ async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: 
             ("reconcile", SMALL_INPUT, 0)
         );
         assert_eq!(after.price, original.price);
+        assert_eq!(after.usage, original.usage);
+        let observation_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM core_charging.usage_events WHERE request_id=$1 AND event_id='provider-observation:terminal'",
+        )
+        .bind(&id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        assert_eq!(observation_count, 1);
+        let recorded: serde_json::Value = sqlx::query_scalar(
+            "SELECT detail FROM core_charging.usage_events WHERE request_id=$1 AND event_id='provider-observation:terminal'",
+        )
+        .bind(&id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        assert_eq!(recorded, observation);
         assert!(matches!(
             g.bridge.reserve(&context, &route, &request).await,
             Err(RelayError::Conflict)
@@ -833,7 +928,22 @@ async fn selected_bound_bad_terminal_and_unknown_usage_keep_original_hold(pool: 
         g.reconcile_completed_streams_page(10, None).await.unwrap(),
         (0, None)
     );
-    assert_balance(&f, 300_000 - 3 * SMALL_INPUT, 3 * SMALL_INPUT).await;
+    let accepted_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_charging.usage_events WHERE event_id='final' OR event_id LIKE 'usage:%'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(accepted_events, 0);
+    let open_holds: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_charging.ledger_holds WHERE NOT closed AND captured=0 AND refunded=0",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(open_holds, cases);
+    assert_balance(&f, 300_000 - cases * SMALL_INPUT, cases * SMALL_INPUT).await;
+    // @context-fold end selected-bound-observation-is-audit-only
 }
 
 #[sqlx::test(migrations = false)]
