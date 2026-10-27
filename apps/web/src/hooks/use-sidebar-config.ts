@@ -119,6 +119,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/open-source-bounties': { section: 'personal', module: 'personal' },
   '/public-relay': { section: 'personal', module: 'personal' },
   '/channels': { section: 'admin', module: 'channel' },
+  '/extensions/plugins': { section: 'admin', module: 'setting' },
   '/models': { section: 'admin', module: 'models' },
   '/models/metadata': { section: 'admin', module: 'models' },
   '/models/deployments': { section: 'admin', module: 'models' },
