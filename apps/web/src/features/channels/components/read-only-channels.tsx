@@ -33,7 +33,7 @@ export function ReadOnlyChannels() {
   // @context-fold end read-only-channel-query
 
   return (
-    <div className='space-y-4'>
+    <div className='min-w-0 space-y-4'>
       <Alert>
         <AlertTitle>{t('Read only')}</AlertTitle>
         <AlertDescription>
@@ -43,7 +43,7 @@ export function ReadOnlyChannels() {
         </AlertDescription>
       </Alert>
       <form
-        className='flex gap-2'
+        className='flex flex-col gap-2 sm:flex-row'
         onSubmit={(event) => {
           event.preventDefault()
           setKeyword(input.trim())
@@ -51,11 +51,14 @@ export function ReadOnlyChannels() {
         }}
       >
         <Input
+          className='min-h-11 min-w-0'
           value={input}
           onChange={(event) => setInput(event.target.value)}
           aria-label={t('Search')}
         />
-        <Button type='submit'>{t('Search')}</Button>
+        <Button type='submit' className='min-h-11 shrink-0'>
+          {t('Search')}
+        </Button>
       </form>
       {query.isLoading ? (
         <LoadingState />
@@ -71,7 +74,51 @@ export function ReadOnlyChannels() {
           <p className='text-muted-foreground text-sm'>
             {t('Total')}: {data.total}
           </p>
-          <div className='overflow-x-auto border'>
+          <div className='space-y-3 sm:hidden'>
+            {data.items.map((channel) => (
+              <dl key={channel.id} className='min-w-0 space-y-3 border p-3'>
+                <div className='min-w-0'>
+                  <dt className='text-muted-foreground text-xs'>{t('Name')}</dt>
+                  <dd className='font-medium [overflow-wrap:anywhere]'>
+                    {channel.name}
+                  </dd>
+                </div>
+                <div className='grid min-w-0 grid-cols-2 gap-3'>
+                  <div className='min-w-0'>
+                    <dt className='text-muted-foreground text-xs'>{t('ID')}</dt>
+                    <dd className='font-mono text-sm [overflow-wrap:anywhere]'>
+                      {channel.id}
+                    </dd>
+                  </div>
+                  <div className='min-w-0'>
+                    <dt className='text-muted-foreground text-xs'>
+                      {t('Status')}
+                    </dt>
+                    <dd className='text-sm [overflow-wrap:anywhere]'>
+                      {channel.status === 1 ? t('Enabled') : t('Disabled')}
+                    </dd>
+                  </div>
+                </div>
+                <div className='min-w-0'>
+                  <dt className='text-muted-foreground text-xs'>
+                    {t('Group')}
+                  </dt>
+                  <dd className='text-sm [overflow-wrap:anywhere] whitespace-pre-wrap'>
+                    {channel.group}
+                  </dd>
+                </div>
+                <div className='min-w-0'>
+                  <dt className='text-muted-foreground text-xs'>
+                    {t('Models')}
+                  </dt>
+                  <dd className='text-sm [overflow-wrap:anywhere] whitespace-pre-wrap'>
+                    {channel.models}
+                  </dd>
+                </div>
+              </dl>
+            ))}
+          </div>
+          <div className='hidden overflow-x-auto border sm:block'>
             <table className='w-full text-left text-sm'>
               <thead className='border-b'>
                 <tr>
@@ -98,16 +145,17 @@ export function ReadOnlyChannels() {
                 ))}
               </tbody>
             </table>
-            {data.items.length === 0 ? (
-              <p className='text-muted-foreground p-3'>
-                {t('No data available')}
-              </p>
-            ) : null}
           </div>
-          <div className='flex items-center justify-end gap-3'>
+          {data.items.length === 0 ? (
+            <p className='text-muted-foreground border p-3'>
+              {t('No data available')}
+            </p>
+          ) : null}
+          <div className='flex flex-wrap items-center justify-end gap-3'>
             <Button
               type='button'
               variant='outline'
+              className='min-h-11'
               disabled={page === 1}
               onClick={() => setPage(page - 1)}
             >
@@ -120,6 +168,7 @@ export function ReadOnlyChannels() {
             <Button
               type='button'
               variant='outline'
+              className='min-h-11'
               disabled={page * PAGE_SIZE >= data.total}
               onClick={() => setPage(page + 1)}
             >

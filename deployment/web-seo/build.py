@@ -21,6 +21,8 @@ PAGES = {
 }
 
 def route_patterns(source, bundle):
+    # Verify that the release catalog, bundle graph, and public pages agree.
+    # @context-fold begin installed-route-validation
     section = source.split('  fullPaths:', 1)[1].split('  fileRoutesByTo:', 1)[0]
     routes = sorted(set(re.findall(r"\|\s*'([^']+)'", section)))
     if '/' not in routes or len(routes) < 10:
@@ -41,6 +43,10 @@ def route_patterns(source, bundle):
     installed = {full_path(name) for name, (path, _) in nodes.items() if path}
     if installed != set(routes):
         raise ValueError(f'Route catalog differs from installed bundle: missing={installed-set(routes)}, extra={set(routes)-installed}')
+    missing_public = set(PAGES) - {route.rstrip('/') or '/' for route in installed}
+    if missing_public:
+        raise ValueError(f'Public overlay paths absent from installed bundle: {sorted(missing_public)}')
+    # @context-fold end installed-route-validation
     patterns = []
     for route in routes:
         escaped = re.escape(route.rstrip('/'))
