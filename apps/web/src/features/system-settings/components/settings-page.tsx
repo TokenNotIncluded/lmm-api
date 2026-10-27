@@ -51,7 +51,15 @@ import './settings-workspace.css'
 import { Button } from '@/components/ui/button'
 
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
-import type { SystemOption } from '../types'
+import {
+  settingsUseRestrictedView,
+  writableOptionKey,
+} from '../hooks/option-writability'
+import type {
+  SystemOption,
+  SystemOptionsCapabilities,
+} from '../types'
+import { lazyNamedSection } from '../utils/lazy-section'
 import { getSettingsErrorMessage } from '../utils/settings-error-message'
 import { SettingsPageProvider } from './settings-page-context'
 import { SettingsBreadcrumb, SettingsSearch } from './settings-search'
@@ -139,17 +147,56 @@ export function SettingsPageFrame(props: SettingsPageFrameProps) {
 }
 
 /** Show only returned values, without mounting editors or filling missing defaults. */
+const LimitedNoticeSection = lazyNamedSection(
+  () => import('../maintenance/notice-section'),
+  'NoticeSection'
+)
+const LimitedAnnouncementsSection = lazyNamedSection(
+  () => import('../content/announcements-section'),
+  'AnnouncementsSection'
+)
+
 function LimitedSettings({
   options,
   readOnly,
   partial,
+  activeSection,
+  capabilities,
 }: {
   options: SystemOption[]
   readOnly: boolean
   partial: boolean
+  activeSection: string
+  capabilities?: SystemOptionsCapabilities
 }) {
   // @context-fold begin limited-settings-view
   const { t } = useTranslation()
+  const writableNotice =
+    !readOnly &&
+    activeSection === 'notice' &&
+    options.some((option) => option.key === 'Notice') &&
+    writableOptionKey(capabilities, 'Notice') === 'Notice'
+  const announcementOption = options.find(
+    (option) =>
+      option.key === 'console_setting.announcements' ||
+      option.key === 'Announcements'
+  )
+  const writableAnnouncements =
+    !readOnly &&
+    activeSection === 'announcements' &&
+    announcementOption !== undefined &&
+    writableOptionKey(capabilities, announcementOption.key) !== undefined
+  const visibleOptions = options.filter((option) => {
+    if (writableNotice && option.key === 'Notice') return false
+    if (
+      writableAnnouncements &&
+      (option.key === 'Announcements' ||
+        option.key === 'console_setting.announcements')
+    ) {
+      return false
+    }
+    return true
+  })
   return (
     <div className='space-y-4'>
       <Alert>
@@ -171,14 +218,19 @@ function LimitedSettings({
           ) : null}
         </AlertDescription>
       </Alert>
-      {options.length > 0 ? (
+      {visibleOptions.length > 0 ? (
         <dl className='divide-y border'>
-          {options.map((option) => (
+          {visibleOptions.map((option) => (
             <div
               key={option.key}
               className='grid min-w-0 gap-2 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]'
             >
-              <dt className='text-sm font-medium break-words'>{option.key}</dt>
+              <dt className='text-sm font-medium break-words'>
+                {option.key}
+                <span className='text-muted-foreground ml-2 text-xs'>
+                  {t('Read only')}
+                </span>
+              </dt>
               <dd className='min-w-0 font-mono text-sm break-words whitespace-pre-wrap'>
                 {option.value}
               </dd>
@@ -190,6 +242,28 @@ function LimitedSettings({
           {t('No data available')}
         </p>
       )}
+      {writableNotice ? (
+        <LimitedNoticeSection
+          defaultValue={
+            options.find((option) => option.key === 'Notice')?.value ?? ''
+          }
+        />
+      ) : null}
+      {writableAnnouncements && announcementOption ? (
+        <LimitedAnnouncementsSection
+          enabled={(() => {
+            const enabledOption = options.find(
+              (option) =>
+                option.key === 'console_setting.announcements_enabled'
+            )
+            return enabledOption
+              ? enabledOption.value === 'true'
+              : undefined
+          })()}
+          enabledWritable={false}
+          data={announcementOption.value}
+        />
+      ) : null}
       <div className='flex justify-end'>
         <Button type='button' disabled>
           {t('Save Settings')}
@@ -227,9 +301,11 @@ export function SettingsPage<
   const sectionMeta = getSectionMeta(activeSection)
   const readOnly = data?.capabilities?.read_only === true
   const partial = data?.capabilities?.partial === true
+  const restricted =
+    settingsUseRestrictedView(data?.capabilities) || readOnly || partial
 
   const settings = useMemo(() => {
-    if (readOnly || partial) return null
+    if (restricted) return null
     const baseSettings = getOptionValue(
       data?.data,
       defaultSettings
@@ -237,7 +313,7 @@ export function SettingsPage<
     return resolveSettings
       ? resolveSettings(baseSettings, data?.data)
       : baseSettings
-  }, [data?.data, defaultSettings, resolveSettings, readOnly, partial])
+  }, [data?.data, defaultSettings, resolveSettings, restricted])
 
   if (isLoading && !data) {
     return (
@@ -270,6 +346,8 @@ export function SettingsPage<
         options={data?.data ?? []}
         readOnly={readOnly}
         partial={partial}
+        activeSection={activeSection}
+        capabilities={data?.capabilities}
       />
     ) : (
       getSectionContent(

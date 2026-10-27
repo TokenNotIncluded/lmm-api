@@ -28,17 +28,29 @@ export type SystemOption = {
 
 export type SystemOptionKey = string
 
+export type SystemOptionsCapabilities = {
+  read_only?: boolean
+  partial?: boolean
+  writable_keys?: string[]
+  model_price_locks?: boolean
+  trust_level_benefits?: boolean
+}
+
 export type SystemOptionsResponse = {
   success: boolean
   message: string
   data: SystemOption[]
-  capabilities?: {
-    read_only?: boolean
-    partial?: boolean
-    model_price_locks?: boolean
-    trust_level_benefits?: boolean
-  }
+  capabilities?: SystemOptionsCapabilities
 }
+
+export const WRITABLE_SYSTEM_OPTION_KEYS = [
+  'Notice',
+  'Announcements',
+  'console_setting.announcements',
+] as const
+
+export type WritableSystemOptionKey =
+  (typeof WRITABLE_SYSTEM_OPTION_KEYS)[number]
 
 export type UpdateOptionRequest = {
   key: string
