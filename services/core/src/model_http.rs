@@ -765,7 +765,7 @@ async fn dispatch(
         let plan = gateway
             .bridge
             .routing
-            .route(crate::routing::RouteRequest {
+            .route_adapted(crate::routing::RouteRequest {
                 model: &request.model,
                 group: &group,
                 speed: None,

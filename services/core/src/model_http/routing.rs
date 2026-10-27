@@ -226,7 +226,7 @@ impl RouteProvider for Bridge {
             };
             let mut plan = self
                 .routing
-                .route(RouteRequest {
+                .route_adapted(RouteRequest {
                     model: &request.model,
                     group: &group,
                     speed: None,
