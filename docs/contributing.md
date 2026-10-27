@@ -19,7 +19,10 @@ accounts or database contents for ordinary tests.
 
 Use [the working guide](agent-workflows.md) to select checks. Start with affected
 behavior and callers; expand for shared contracts, security, billing and data
-integrity. Documentation text normally needs:
+integrity. Follow its [proportion and stopping](agent-workflows.md#适度与停止)
+rules: no reviewer will nitpick your code, so write no speculative defensive
+code, test only changed behavior and deliver once targeted checks pass.
+Documentation text normally needs:
 
 ```sh
 python3 -B scripts/check-docs-brand.py --docs-only
