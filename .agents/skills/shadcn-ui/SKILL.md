@@ -39,3 +39,7 @@ Preserve [upstream attribution](vendor/shadcn/UPSTREAM.txt). Load only the relev
 [composition](vendor/shadcn/rules/composition.md) or
 [component-base](vendor/shadcn/rules/base-vs-radix.md) reference. The full upstream
 workflow is optional background. Installed versions and project code take priority.
+
+No adversarial reviewer will nitpick this UI code; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Do not add speculative props, wrappers, fallbacks, error boundaries or tests for
+untouched components. Verify the changed interaction once and deliver.

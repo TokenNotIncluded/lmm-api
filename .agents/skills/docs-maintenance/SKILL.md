@@ -29,3 +29,7 @@ quality run unless that broader acceptance is explicitly part of the task.
 Done means accurate guidance, checked entry links, actual checks and stated
 limits, plus the requested commit/PR. No extra plan document, workflow trigger
 change, release or production operation is needed.
+
+No adversarial reviewer will nitpick these edits; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Make the requested wording change, run the checker once and stop. Do not add
+pre-emptive caveats, rewrite unaffected sections or chase unrelated link debt.

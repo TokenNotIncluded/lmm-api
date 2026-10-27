@@ -22,6 +22,12 @@ with clear triggers and exclusions. Keep one task per skill, share check policy
 through the working guide, and load large references only when needed. Preserve
 upstream attribution; do not create duplicate discoverable `SKILL.md` files.
 
+Every skill inherits the working guide's
+[proportion and stopping](../../docs/agent-workflows.md#适度与停止) rules: no
+adversarial reviewer will nitpick the code, so no speculative defensive code,
+tests only for changed behavior, a bounded number of check runs, and delivery
+once the requested result passes its targeted checks.
+
 A skill does not connect tools, provide credentials or authorize an operation.
 The bounty skills describe the connected service, not proof that this WIP has
 implemented or deployed every corresponding server module.

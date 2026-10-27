@@ -66,3 +66,7 @@ Report separately: edited, built, verified, installed, published or deployed.
 Record actual commands, source/artifact identity and missing checks. Readiness
 or HTTP 200 is not proof of model traffic, billing, payment or full recovery.
 Do not claim deployment speed or memory savings without comparable measurements.
+
+No adversarial reviewer will nitpick this work; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Required confirmations, backups and identity checks stay. Do not add extra
+wrapper scripts, retries, fallback paths or repeated builds for hypothetical failures.

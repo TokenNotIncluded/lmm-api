@@ -40,3 +40,7 @@ Only helper-code changes require its `node --test` self-test suite.
 
 Done means complete changed keys across actual locales, preserved variables,
 reviewed sync output and reported checks. Delete only your own temporary patch.
+
+No adversarial reviewer will nitpick these strings; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Apply the patch once, review the diff and stop. Do not add extra validation
+scripts, retranslate unchanged keys or rerun sync on unchanged input.

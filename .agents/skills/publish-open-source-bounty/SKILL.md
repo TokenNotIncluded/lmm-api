@@ -54,3 +54,7 @@ Withdrawal, draft deletion, closing/refunding, tipping, rating and dispute actio
 retain their own preview and explicit confirmation. Tips are separate and non-
 refundable. The publisher reviews ordinary submissions; an administrator handles
 disputes, not an extra routine approval stage.
+
+No adversarial reviewer will nitpick this flow; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+The previews, confirmations and read-backs above are required. Do not add extra
+approval rounds, duplicate state reads on unchanged state or invented safeguards.
