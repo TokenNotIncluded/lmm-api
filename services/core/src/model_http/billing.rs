@@ -276,7 +276,19 @@ impl Billing for Bridge {
                 }
             })
             .await
-            .map_err(error)?;
+            .map_err(|cause| {
+                let reason = match &cause {
+                    charging::Error::NoFunds => Some("wallet"),
+                    charging::Error::BudgetExceeded => Some("budget"),
+                    _ => None,
+                };
+                if let Some(reason) = reason {
+                    eprintln!(
+                        "core_model_reserve_denied reason={reason} reserve_credits={reserve}"
+                    );
+                }
+                error(cause)
+            })?;
             if charge.actor_user_id != context.actor_user_id
                 || charge.key_id != context.key_id
                 || charge.oauth_source != context.oauth_source
