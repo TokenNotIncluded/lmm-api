@@ -470,6 +470,40 @@ async fn disabled_registration_accepts_known_subject_and_denies_unknown_without_
 }
 
 #[sqlx::test(migrations = false)]
+async fn registration_email_domain_external_new_subject_denied_existing_login_allowed(
+    pool: PgPool,
+) {
+    let base = setup(&pool).await;
+    for provider in [
+        ExternalProvider::Github,
+        ExternalProvider::LinuxDo,
+        ExternalProvider::Discord,
+    ] {
+        let server = ProviderServer::start(provider).await;
+        let store = base.clone().with_external_oauth(server.config()).unwrap();
+        let original = login(&browser(&store), provider, "existing").await;
+        for restricted in [
+            store
+                .clone()
+                .with_registration_email_policy(true, &["gmail.com".to_owned()])
+                .unwrap(),
+            store.with_registration_email_verification(true),
+        ] {
+            let web = browser(&restricted);
+            let known = login(&web, provider, "existing").await;
+            assert_eq!(user(&known), user(&original));
+            let before = counts(&pool).await;
+            let state = begin(&web, provider).await;
+            assert!(matches!(
+                finish(&web, provider, &state, "unknown").await,
+                Err(MfaError::Identity(IdentityError::Forbidden))
+            ));
+            assert_eq!(before, counts(&pool).await);
+        }
+    }
+}
+
+#[sqlx::test(migrations = false)]
 async fn inactive_user_and_account_cannot_issue_external_browser_families(pool: PgPool) {
     let github = ProviderServer::start(ExternalProvider::Github).await;
     let store = setup(&pool)

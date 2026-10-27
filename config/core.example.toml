@@ -24,6 +24,12 @@ registration_enabled = false
 password_register_enabled = false
 oauth_register_enabled = false
 registration_disabled_methods = ["discord", "github", "linuxdo", "oidc", "telegram", "wechat"]
+# Exact domain matches for new registrations, including OAuth. Only Google
+# currently proves an email; other methods fail closed when enabled.
+# All three email settings must also be explicit before registration_enabled=true.
+email_verification_enabled = false
+email_domain_restriction_enabled = false
+email_domain_whitelist = ["gmail.com"]
 password_slots = 1
 # Optional recoverable API Key encryption: a stable, independently generated
 # exact 32-byte raw key. Never regenerate it on startup or use the Web key.

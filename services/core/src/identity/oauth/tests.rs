@@ -6,6 +6,97 @@ mod google_legacy_browser_tests;
 use jsonwebtoken::{EncodingKey, Header, encode};
 
 #[sqlx::test(migrations = false)]
+async fn registration_email_domain_google_verified_new_and_existing_subjects(pool: PgPool) {
+    crate::core_schema::init(&pool).await.unwrap();
+    let store = IdentityStore::from_pool(pool.clone())
+        .with_registration_enabled(true)
+        .with_registration_email_policy(true, &["gmail.com".to_owned()])
+        .unwrap();
+    let proof = |subject: &str, email: Option<&str>, verified: Option<bool>| {
+        verified_identity(Claims {
+            sub: subject.to_owned(),
+            email: email.map(str::to_owned),
+            email_verified: verified,
+            aud: "client-1".into(),
+            nonce: "test-nonce".into(),
+            exp: u64::MAX,
+            iat: 0,
+            azp: None,
+        })
+    };
+    let mut tx = pool.begin().await.unwrap();
+    let user = store
+        .google_user(
+            &mut tx,
+            &proof("allowed", Some("a@GMAIL.com"), Some(true)),
+            None,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    for (email, verified) in [
+        (None, Some(true)),
+        (Some(""), Some(true)),
+        (Some("a@gmail.com"), Some(false)),
+        (Some("a@gmail.com"), None),
+        (Some("a@sub.gmail.com"), Some(true)),
+        (Some("a@other.com"), Some(true)),
+    ] {
+        let before = identity_counts(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        assert!(matches!(
+            store
+                .google_user(&mut tx, &proof("blocked", email, verified), None)
+                .await,
+            Err(IdentityError::Forbidden)
+        ));
+        tx.commit().await.unwrap();
+        assert_eq!(before, identity_counts(&pool).await);
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(
+            store
+                .google_user(&mut tx, &proof("allowed", email, verified), None)
+                .await
+                .unwrap(),
+            user
+        );
+        tx.commit().await.unwrap();
+    }
+    let verified_only = IdentityStore::from_pool(pool.clone())
+        .with_registration_enabled(true)
+        .with_registration_email_verification(true);
+    for verified in [None, Some(false), Some(true)] {
+        let before = identity_counts(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = verified_only
+            .google_user(
+                &mut tx,
+                &proof(
+                    "verification-only",
+                    Some(concat!("test", "@", "example.org")),
+                    verified,
+                ),
+                None,
+            )
+            .await;
+        if verified == Some(true) {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(IdentityError::Forbidden)));
+            assert_eq!(
+                verified_only
+                    .google_user(&mut tx, &proof("allowed", None, verified), None)
+                    .await
+                    .unwrap(),
+                user
+            );
+        }
+        tx.rollback().await.unwrap();
+        assert_eq!(before, identity_counts(&pool).await);
+    }
+}
+
+#[sqlx::test(migrations = false)]
 async fn google_login_cannot_issue_sessions_while_local_second_factor_is_required(pool: PgPool) {
     let mock = MockProvider::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
