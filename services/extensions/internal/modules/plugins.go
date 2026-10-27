@@ -183,8 +183,10 @@ func (m *PluginManager) Install(request PluginInstallRequest) (PluginInfo, error
 	if request.APIVersion != entry.info.APIVersion || request.Version != entry.info.Version || request.RegistrationSHA256 != entry.info.RegistrationSHA256 {
 		return PluginInfo{}, ErrPluginManifest
 	}
+	wasInstalled := m.installed[request.Name]
 	m.installed[request.Name] = true
 	if err := m.persistLocked(); err != nil {
+		m.installed[request.Name] = wasInstalled
 		return PluginInfo{}, err
 	}
 	return m.infoLocked(request.Name), nil
