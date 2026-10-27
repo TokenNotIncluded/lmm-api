@@ -114,6 +114,41 @@ test('usage date formatting accepts the actual Chinese interface codes', () => {
 
 const usageTime = new Date(2026, 9, 9, 19, 0, 0)
 const usageRange = overviewUsageRange(7, usageTime)
+test('partial usage omits unreported dates but preserves measured zero values', () => {
+  const row = {
+    created_at: usageRange.end_timestamp,
+    count: 2,
+    token_used: 0,
+    model_name: 'native-model',
+    usage_scope: 'administrator_all_accounts',
+  } satisfies QuotaDataItem
+  for (const metric of ['requests', 'tokens'] as const) {
+    const result = buildOverviewUsage(
+      [row],
+      metric,
+      usageRange.start_timestamp,
+      usageRange.end_timestamp,
+      'en',
+      'Other',
+      'Unknown',
+      { includeUnreportedDays: false }
+    )
+    assert.equal(result.labels.length, 1)
+    assert.deepEqual(result.values, metric === 'requests' ? [2] : [0])
+  }
+  const empty = buildOverviewUsage(
+    [],
+    'requests',
+    usageRange.start_timestamp,
+    usageRange.end_timestamp,
+    'en',
+    'Other',
+    'Unknown',
+    { includeUnreportedDays: false }
+  )
+  assert.deepEqual(empty.labels, [])
+  assert.deepEqual(empty.values, [])
+})
 function usageFor(rows: QuotaDataItem[], metric: OverviewMetric) {
   return buildOverviewUsage(
     rows,

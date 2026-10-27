@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getUserQuotaDates } from '@/features/dashboard/api'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatHistoricalRawQuota } from '@/lib/historical-quota-money'
+import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -26,23 +27,34 @@ const ChartCard = lazy(() =>
 export function OverviewUsageCharts() {
   const { t, i18n } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
+  const isAdmin = Boolean(user && user.role >= ROLE.ADMIN)
   const [days, setDays] = useState(7)
   const [metric, setMetric] = useState<OverviewMetric>('requests')
   const query = useQuery({
-    queryKey: ['overview-recorded-usage', user?.id, days],
+    queryKey: ['overview-recorded-usage', user?.id, isAdmin, days],
     queryFn: async ({ signal }) => {
       const range = overviewUsageRange(days)
-      const data = await getUserQuotaDates(range, false, signal)
-      if (!data.success || (data.data !== null && !Array.isArray(data.data))) {
-        throw new Error('Usage unavailable')
+      const data = await getUserQuotaDates(range, isAdmin, signal)
+      return {
+        rows: data.data,
+        coverage: data.coverage,
+        availability: data.availability,
+        ...range,
       }
-      return { rows: data.data ?? [], ...range }
     },
     enabled: Boolean(user?.id),
     staleTime: 60_000,
     refetchInterval: 60_000,
     retry: false,
   })
+  const partialAdminUsage =
+    isAdmin &&
+    (query.data?.availability === 'partial' ||
+      query.data?.coverage?.complete !== true ||
+      query.data?.coverage?.historical_imports !== true)
+  const provenance = isAdmin
+    ? t('All accounts: native Core usage')
+    : t('Recorded account usage')
   const usage = useMemo(() => {
     if (!query.data) return undefined
     try {
@@ -53,12 +65,13 @@ export function OverviewUsageCharts() {
         query.data.end_timestamp,
         i18n.language,
         t('Other models'),
-        t('Unknown model')
+        t('Unknown model'),
+        { includeUnreportedDays: !partialAdminUsage }
       )
     } catch {
       return undefined
     }
-  }, [query.data, metric, i18n.language, t])
+  }, [query.data, metric, i18n.language, t, partialAdminUsage])
   const name =
     metric === 'quota'
       ? t('Raw credits')
@@ -80,13 +93,12 @@ export function OverviewUsageCharts() {
   const tokensUnavailable =
     metric === 'tokens' && !empty && usage?.hasTextTokenData === false
   return (
-    <section
-      className='overview-usage-charts'
-      aria-label={t('Recorded account usage')}
-    >
+    <section className='overview-usage-charts' aria-label={provenance}>
       <header className='overview-chart-toolbar'>
         <div>
-          <p className='overview-chart-eyebrow'>{t('Your account only')}</p>
+          <p className='overview-chart-eyebrow'>
+            {isAdmin ? provenance : t('Your account only')}
+          </p>
           <h2 className='text-xl font-medium tracking-tight'>
             {t('Usage at a glance')}
           </h2>
@@ -127,6 +139,13 @@ export function OverviewUsageCharts() {
           </select>
         </div>
       </header>
+      {!loading && !failed && partialAdminUsage && (
+        <p className='text-muted-foreground mt-3 text-sm' role='status'>
+          {t(
+            'Partial usage across all accounts: only native Core requests are included; imported historical usage is unavailable.'
+          )}
+        </p>
+      )}
       {loading && (
         <div className='overview-chart-grid' aria-busy='true'>
           <Skeleton className='h-80 rounded-2xl' />
@@ -149,7 +168,12 @@ export function OverviewUsageCharts() {
           </Button>
         </div>
       )}
-      {empty && (
+      {empty && partialAdminUsage && (
+        <div className='overview-chart-empty' role='status'>
+          {t('Unavailable')}
+        </div>
+      )}
+      {empty && !partialAdminUsage && (
         <div className='overview-chart-empty'>
           <ChartNoAxesCombined
             className='text-muted-foreground size-8'
@@ -172,7 +196,7 @@ export function OverviewUsageCharts() {
         <Suspense fallback={<Skeleton className='h-80 rounded-2xl' />}>
           <div className='overview-chart-grid'>
             <ChartCard
-              provenance={t('Recorded account usage')}
+              provenance={provenance}
               formatChartValue={formatChartValue}
               visual={{
                 kind: 'chart',
@@ -185,7 +209,7 @@ export function OverviewUsageCharts() {
               }}
             />
             <ChartCard
-              provenance={t('Recorded account usage')}
+              provenance={provenance}
               formatChartValue={formatChartValue}
               visual={{
                 kind: 'chart',
