@@ -19,8 +19,11 @@ mod model_fixture;
 mod runtime;
 
 async fn query(app: &Router, secret: &str, ip: &str) -> (StatusCode, Value) {
+    query_route(app, "/v1/balance", secret, ip).await
+}
+async fn query_route(app: &Router, path: &str, secret: &str, ip: &str) -> (StatusCode, Value) {
     let mut req = Request::builder()
-        .uri("/v1/balance")
+        .uri(path)
         .header("Authorization", format!("Bearer {secret}"))
         .body(Body::empty())
         .unwrap();
@@ -69,16 +72,57 @@ async fn native_balance_optin_exact_usd_and_readonly_runtime(pool: PgPool) {
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(before, financial_snapshot(&pool).await);
-    let unavailable = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/usage")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let (code, usage) = query_route(&app, "/v1/usage", &key, "127.0.0.1").await;
+    assert_eq!(code, StatusCode::OK, "{usage}");
+    assert_eq!(usage["scope"], "token");
+    assert_eq!(usage["used_quota"], 0);
+    role.cleanup().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn native_usage_requires_legacy_receipts_and_reports_key_quota_without_writes(pool: PgPool) {
+    let (_, _, session, key, id, account) = model_fixture::fixture(&pool, 5_000_000).await;
+    settings(&pool, id, false).await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
         .await
         .unwrap();
-    assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
+    sqlx::query("INSERT INTO core_charging.budgets(scope,key_id,issuer_user_id,period,limit_credits,unlimited) VALUES('key',$1,7,'lifetime',1000000,FALSE)")
+        .bind(id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO core_charging.budget_opening_consumption(scope,key_id,period,start_at,end_at,consumed_credits,import_reference) VALUES('key',$1,'lifetime',-62135596800,253402300800,250000,'synthetic-key-opening')")
+        .bind(id).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query("INSERT INTO core_history.sources(contract_version,source_archive_sha256,mapping_sha256,source_namespace,observed_at,complete) VALUES('core.history-source.v1',repeat('a',64),repeat('b',64),'synthetic-usage',extract(epoch FROM clock_timestamp())::bigint,true)")
+        .execute(&pool).await.unwrap();
+    let role = runtime::RuntimeRole::create(&pool).await;
+    role.optional("core_charging").await;
+    let app = lmm_core::native_key_read::router(role.pool.clone());
+    let before = financial_snapshot(&pool).await;
+    let (code, body) = query_route(&app, "/v1/usage", &key, "127.0.0.1").await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "quota_query_unavailable");
+    for token_id in [None, Some(id)] {
+        sqlx::query("INSERT INTO core_history.scope_receipts(source_id,user_id,owner_account_id,token_id,source_archive_sha256,mapping_sha256,source_scope_sha256,complete) VALUES(1,7,$1,$2,repeat('a',64),repeat('b',64),repeat('c',64),true)")
+            .bind(account).bind(token_id).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO core_history.log_records(source_id,source_log_id,canonical_event_key,source_row_sha256,user_id,owner_account_id,token_id,created_at,log_type,quota) VALUES(1,1,'synthetic-today-usage',repeat('d',64),7,$1,$2,extract(epoch FROM clock_timestamp())::bigint,2,250000)")
+        .bind(account).bind(id).execute(&pool).await.unwrap();
+    let (code, body) = query_route(&app, "/v1/usage", &key, "127.0.0.1").await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body["remaining"], 1.5);
+    assert_eq!(body["used_total"], 0.5);
+    assert_eq!(body["used_today"], 0.5);
+    assert_eq!(body["used_quota"], 250_000);
+    assert_eq!(body["total_quota"], 2.0);
+    assert_eq!(body["scope"], "token");
+    assert_eq!(
+        query_route(&app, "/v1/usage", &session, "127.0.0.1")
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(before, financial_snapshot(&pool).await);
     role.cleanup().await;
 }
 

@@ -713,7 +713,9 @@ mod tests {
                     .unwrap_err();
                 assert_eq!(err, RelayError::RevokedLegacyKey);
                 assert_eq!(err.status(), 401);
-                assert!(err.to_string().contains("recreate") || err.to_string().contains("重新创建"));
+                assert!(
+                    err.to_string().contains("recreate") || err.to_string().contains("重新创建")
+                );
             }
         }
     }
@@ -868,6 +870,7 @@ mod tests {
     async fn legacy_wire_pg_router_canonicalizes_before_honeypot_and_native_handlers(pool: PgPool) {
         use axum::{
             body::{Body, to_bytes},
+            extract::ConnectInfo,
             http::{Request, StatusCode},
         };
         use std::sync::Arc;
@@ -892,6 +895,23 @@ mod tests {
         );
         aliases.verify(&observed).await.unwrap();
         gateway.legacy_keys = Some(Arc::new(aliases));
+        let mut usage_request = Request::builder()
+            .uri("/v1/usage")
+            .header(header::AUTHORIZATION, format!("Bearer sk-{KEY}"))
+            .body(Body::empty())
+            .unwrap();
+        usage_request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:8123".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let usage = gateway
+            .key_read_router(pool.clone())
+            .oneshot(usage_request)
+            .await
+            .unwrap();
+        assert_eq!(usage.status(), StatusCode::OK);
+        let usage_body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(usage.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(usage_body["scope"], "token");
         let router = gateway.router();
         let ungranted = router
             .clone()

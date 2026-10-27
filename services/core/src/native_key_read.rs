@@ -1,5 +1,6 @@
 //! Native API-key compatibility reads. No Session/OAuth authority or financial writes.
-//! Wire contract: go-v0.2.118 controller/account_balance.go (AGPL-3.0-or-later).
+//! Wire contracts: go-v0.2.118 controller/account_balance.go and
+//! controller/quota_query.go (AGPL-3.0-or-later).
 use axum::{
     Json, Router,
     extract::{ConnectInfo, State},
@@ -8,7 +9,7 @@ use axum::{
     routing::get,
 };
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{
     collections::{BTreeMap, VecDeque},
     net::SocketAddr,
@@ -26,6 +27,7 @@ struct Reads {
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/v1/balance", get(balance))
+        .route("/v1/usage", get(usage))
         .with_state(Reads {
             pool,
             queries: Arc::default(),
@@ -38,6 +40,7 @@ enum Failure {
     Consent,
     Limit,
     Unavailable,
+    QuotaUnavailable,
 }
 impl From<sqlx::Error> for Failure {
     fn from(_: sqlx::Error) -> Self {
@@ -55,6 +58,7 @@ impl IntoResponse for Failure {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "account_balance_unavailable",
             ),
+            Self::QuotaUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "quota_query_unavailable"),
         };
         no_store((status, Json(json!({"valid":false,"error":error}))).into_response())
     }
@@ -115,12 +119,13 @@ impl Reads {
         values.push_back(now);
         Ok(())
     }
-    async fn balance(&self, secret: &str, peer: SocketAddr) -> Result<Value, Failure> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let actor = crate::identity::authenticate_readonly_in_transaction(&mut tx, secret)
+    async fn key(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        secret: &str,
+        peer: SocketAddr,
+    ) -> Result<(crate::identity::Principal, bool), Failure> {
+        let actor = crate::identity::authenticate_readonly_in_transaction(&mut **tx, secret)
             .await
             .map_err(|e| match e {
                 crate::identity::IdentityError::Unauthorized
@@ -128,19 +133,28 @@ impl Reads {
                 | crate::identity::IdentityError::Forbidden => Failure::Unauthorized,
                 _ => Failure::Unavailable,
             })?;
-        if actor.credential_kind != crate::identity::CredentialKind::ApiKey
-            || actor.owner.kind != crate::accounts::AccountKind::Personal
-        {
+        if actor.credential_kind != crate::identity::CredentialKind::ApiKey {
             return Err(Failure::Unauthorized);
         }
         let settings = sqlx::query("SELECT account_balance_read,cardinality(allow_ips)=0 OR $2::inet <<= ANY(allow_ips) AS ip_allowed FROM core_identity.api_key_settings WHERE credential_id=$1 AND enabled")
-            .bind(actor.credential_id).bind(peer.ip().to_string()).fetch_optional(&mut *tx).await?
+            .bind(actor.credential_id).bind(peer.ip().to_string()).fetch_optional(&mut **tx).await?
             .ok_or(Failure::Unauthorized)?;
         if !settings.try_get::<bool, _>("ip_allowed")? {
             return Err(Failure::Ip);
         }
         self.admit(actor.user_id)?;
-        if !settings.try_get::<bool, _>("account_balance_read")? {
+        Ok((actor, settings.try_get("account_balance_read")?))
+    }
+    async fn balance(&self, secret: &str, peer: SocketAddr) -> Result<Value, Failure> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let (actor, account_balance_read) = self.key(&mut tx, secret, peer).await?;
+        if actor.owner.kind != crate::accounts::AccountKind::Personal {
+            return Err(Failure::Unauthorized);
+        }
+        if !account_balance_read {
             return Err(Failure::Consent);
         }
         // Reuse the existing exact-unit/native-or-opening provenance proof.
@@ -165,6 +179,122 @@ impl Reads {
             "updated_at":updated_at,"consistency":"persisted_snapshot"}),
         )
     }
+
+    async fn usage(&self, secret: &str, peer: SocketAddr) -> Result<Value, Failure> {
+        // Read authority, migrated history and current charges in one snapshot.
+        // @context-fold begin key-usage-snapshot
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let (actor, _) = self
+            .key(&mut tx, secret, peer)
+            .await
+            .map_err(Failure::for_quota)?;
+        let (used, remaining, unlimited) =
+            crate::billing::charging::key_quota_snapshot(&mut *tx, actor.credential_id)
+                .await
+                .map_err(|_| Failure::QuotaUnavailable)?;
+        let now: i64 = sqlx::query_scalar("SELECT extract(epoch FROM clock_timestamp())::bigint")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| Failure::QuotaUnavailable)?;
+        let covered: bool = sqlx::query_scalar(
+            r#"SELECT ((SELECT extract(epoch FROM created_at)::bigint FROM core_identity.credentials WHERE id=$1)
+                     > coalesce((SELECT max(observed_at) FROM core_history.sources),0)
+                     AND NOT EXISTS (SELECT 1 FROM core_charging.budget_opening_consumption
+                                     WHERE scope='key' AND key_id=$1))
+                OR NOT EXISTS (
+                    SELECT 1 FROM core_history.sources s
+                    WHERE NOT s.complete OR s.contract_version<>'core.history-source.v1'
+                       OR NOT EXISTS (SELECT 1 FROM core_history.scope_receipts p
+                           WHERE p.source_id=s.source_id AND p.user_id=$2
+                             AND p.owner_account_id=$3 AND p.token_id IS NULL
+                             AND p.complete AND p.source_archive_sha256=s.source_archive_sha256
+                             AND p.mapping_sha256=s.mapping_sha256)
+                       OR NOT EXISTS (SELECT 1 FROM core_history.scope_receipts p
+                           WHERE p.source_id=s.source_id AND p.user_id=$2
+                             AND p.owner_account_id=$3 AND p.token_id=$1
+                             AND p.complete AND p.source_archive_sha256=s.source_archive_sha256
+                             AND p.mapping_sha256=s.mapping_sha256))"#,
+        )
+        .bind(actor.credential_id)
+        .bind(actor.user_id)
+        .bind(actor.owner_account_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| Failure::QuotaUnavailable)?;
+        if !covered {
+            return Err(Failure::QuotaUnavailable);
+        }
+        let day_start = now - now.rem_euclid(86_400);
+        let history = sqlx::query(
+            "SELECT count(*) FILTER (WHERE quota IS NULL) AS missing,coalesce(sum(quota),0)::bigint AS credits \
+             FROM core_history.log_records WHERE token_id=$1 AND user_id=$2 AND owner_account_id=$3 \
+             AND log_type=2 AND created_at BETWEEN $4 AND $5",
+        )
+        .bind(actor.credential_id)
+        .bind(actor.user_id)
+        .bind(actor.owner_account_id)
+        .bind(day_start)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| Failure::QuotaUnavailable)?;
+        if history
+            .try_get::<i64, _>("missing")
+            .map_err(|_| Failure::QuotaUnavailable)?
+            != 0
+        {
+            return Err(Failure::QuotaUnavailable);
+        }
+        let historical: i64 = history
+            .try_get("credits")
+            .map_err(|_| Failure::QuotaUnavailable)?;
+        let native: i64 = sqlx::query_scalar(
+            "SELECT ((SELECT coalesce(sum(core_charging.committed_credits(state,reserved,settled,refunded)),0) \
+             FROM core_charging.requests WHERE key_id=$1 AND authorized_at BETWEEN $2 AND $3) \
+             + (SELECT coalesce(sum(amount_credits-refunded),0) FROM core_charging.external_consumption \
+             WHERE key_id=$1 AND authorized_at BETWEEN $2 AND $3))::bigint",
+        )
+        .bind(actor.credential_id)
+        .bind(day_start)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| Failure::QuotaUnavailable)?;
+        let used_today = historical
+            .checked_add(native)
+            .ok_or(Failure::QuotaUnavailable)?;
+        let total = if unlimited {
+            None
+        } else {
+            Some(
+                remaining
+                    .checked_add(used)
+                    .ok_or(Failure::QuotaUnavailable)?,
+            )
+        };
+        tx.commit().await.map_err(|_| Failure::QuotaUnavailable)?;
+        let usd = |credits: i64| credits as f64 / crate::billing::CREDITS_PER_USD as f64;
+        Ok(json!({"valid":true,"scope":"token","currency":"USD",
+            "remaining":(!unlimited).then(|| usd(remaining)),
+            "used_today":usd(used_today),"used_total":usd(used),
+            "used_quota":used,"normalized_used_quota":used,
+            "usage_projection_available":true,"total_quota":total.map(usd),
+            "unlimited":unlimited,"updated_at":now,"day_timezone":"UTC",
+            "used_today_source":"retained_consumption_logs",
+            "consistency":"persisted_snapshot"}))
+        // @context-fold end key-usage-snapshot
+    }
+}
+impl Failure {
+    fn for_quota(self) -> Self {
+        match self {
+            Self::Unavailable => Self::QuotaUnavailable,
+            other => other,
+        }
+    }
 }
 async fn balance(
     State(state): State<Reads>,
@@ -174,6 +304,19 @@ async fn balance(
     let secret = bearer(&headers)?;
     let peer = peer.map_err(|_| Failure::Ip)?.0;
     let result = state.balance(secret, peer).await?;
+    Ok(no_store(Json(result).into_response()))
+}
+async fn usage(
+    State(state): State<Reads>,
+    headers: HeaderMap,
+    peer: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
+) -> Result<Response, Failure> {
+    let secret = bearer(&headers)?;
+    let peer = peer.map_err(|_| Failure::Ip)?.0;
+    let result = state
+        .usage(secret, peer)
+        .await
+        .map_err(Failure::for_quota)?;
     Ok(no_store(Json(result).into_response()))
 }
 
