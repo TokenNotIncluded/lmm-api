@@ -18,14 +18,32 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 
+import { readNativeUsersScope } from '@/features/native-users/access'
+import { CAPABILITY_REFRESH_MS } from '@/lib/runtime-capabilities'
+import { useAuthStore } from '@/stores/auth-store'
+
 import { getSystemOptions } from '../api'
 
-export function useSystemOptions() {
+export function useSystemOptions(enabled = true) {
+  const auth = useAuthStore((state) => state.auth)
+  const scope = readNativeUsersScope(auth)
   return useQuery({
     queryKey: ['system-options'],
-    queryFn: () => getSystemOptions({ silent: true }),
+    queryFn: ({ signal }) =>
+      getSystemOptions({
+        silent: true,
+        signal,
+        authScope: scope
+          ? { userId: scope.userId, sessionId: scope.sessionId }
+          : undefined,
+      }),
+    enabled,
     retry: false,
-    staleTime: 5 * 60 * 1000,
+    staleTime: CAPABILITY_REFRESH_MS,
+    refetchInterval: CAPABILITY_REFRESH_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
   })
 }
 

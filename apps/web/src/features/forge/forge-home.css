@@ -66,28 +66,29 @@
 }
 .lmm-cinema {
   position: relative;
-  --poster-ground: #f6f4f0;
-  --poster-ink: #241f25;
-  --poster-muted: #655a62;
-  --poster-rule: #cfc3ca;
-  --poster-primary: #29212b;
-  --poster-primary-ink: #faf6f8;
-  --poster-secondary: #e7dfe5;
-  --poster-secondary-ink: #342935;
-  --poster-focus: #974466;
+  /* The canvas reads this raw hex token; keep it aligned with the paper. */
+  --poster-ground: var(--forge-paper-light);
+  --poster-ink: var(--forge-ink-light);
+  --poster-muted: var(--forge-muted-ink-light);
+  --poster-rule: var(--forge-secondary-light);
+  --poster-primary: var(--forge-ink-light);
+  --poster-primary-ink: var(--forge-paper-light);
+  --poster-secondary: var(--forge-cactus-light);
+  --poster-secondary-ink: var(--forge-ink-light);
+  --poster-focus: var(--forge-ink-light);
   background: var(--poster-ground);
   color: var(--poster-ink);
 }
 .dark .lmm-cinema {
-  --poster-ground: #070707;
-  --poster-ink: #f5f3f1;
-  --poster-muted: #d4ccc9;
-  --poster-rule: #c4b6bc;
-  --poster-primary: #f2ede9;
-  --poster-primary-ink: #181413;
-  --poster-secondary: #30292c;
-  --poster-secondary-ink: #f5e8ee;
-  --poster-focus: #f2b7cf;
+  --poster-ground: var(--forge-surface-dark);
+  --poster-ink: var(--forge-foreground-dark);
+  --poster-muted: var(--forge-muted-ink-dark);
+  --poster-rule: var(--forge-secondary-dark);
+  --poster-primary: var(--forge-foreground-dark);
+  --poster-primary-ink: var(--forge-surface-dark);
+  --poster-secondary: var(--forge-cactus-dark);
+  --poster-secondary-ink: var(--forge-surface-dark);
+  --poster-focus: var(--forge-foreground-dark);
 }
 .lmm-cinema-inner {
   position: relative;
@@ -154,7 +155,7 @@
   max-width: 26rem;
   font-size: clamp(2.2rem, 3.55vw, 3.65rem);
   line-height: 1.18;
-  font-weight: 550;
+  font-weight: 650;
   letter-spacing: -0.035em;
   text-wrap: balance;
 }
@@ -180,14 +181,32 @@
   color: var(--poster-primary-ink);
   border: 0;
   box-shadow: none;
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--cut-size)),
+    calc(100% - var(--cut-size)) 100%,
+    0 100%
+  );
 }
-.lmm-cinema .lmm-intro-actions [data-slot='button']:nth-child(2) {
+.lmm-cinema .lmm-intro-actions [data-slot='button']:hover {
   background: var(--poster-secondary);
   color: var(--poster-secondary-ink);
 }
-.lmm-cinema .lmm-intro-actions [data-slot='button']:hover {
-  background: #f2b7cf;
-  color: #181413;
+.lmm-cinema .lmm-intro-actions [data-slot='button']:focus-visible {
+  clip-path: none;
+}
+.lmm-world-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.4rem;
+}
+.lmm-world-actions [data-slot='button'] {
+  min-height: 2.75rem;
+}
+.lmm-resource-actions {
+  margin-bottom: 1.25rem;
 }
 .lmm-world-primary {
   margin-top: 0.7rem;
@@ -250,13 +269,13 @@
   outline-color: var(--poster-focus);
 }
 .lmm-cinema ::selection {
-  background: #f2b7cf;
-  color: #171014;
+  background: var(--poster-secondary);
+  color: var(--poster-secondary-ink);
 }
 .lmm-chapter-film {
   display: none;
 }
-@media (prefers-reduced-motion: no-preference) {
+@media (min-width: 901px) and (min-height: 601px) and (prefers-reduced-motion: no-preference) {
   .lmm-home[data-motion='playing'] .lmm-cinema,
   .lmm-home[data-motion='paused'] .lmm-cinema {
     height: 420svh;
@@ -1001,17 +1020,25 @@
   (max-height: 600px),
   (prefers-reduced-motion: reduce) {
   .lmm-cinema-inner {
+    display: flex;
+    flex-direction: column;
     min-height: 0;
     padding-bottom: 1rem;
   }
   .lmm-poster-art {
-    inset: 7rem 0 auto;
-    height: 30rem;
+    position: relative;
+    order: -2;
+    inset: auto;
+    z-index: 0;
+    height: clamp(14rem, 50vw, 22rem);
+    margin-block: 0.5rem 1.25rem;
   }
   .lmm-poster-brand {
-    top: 1.6rem;
-    right: var(--home-gutter);
-    font-size: clamp(2.8rem, 7vw, 5rem);
+    position: static;
+    order: -4;
+    margin: 1.5rem var(--home-gutter) 0;
+    padding-inline-end: 6rem;
+    font-size: clamp(1.75rem, 4vw, 3rem);
   }
   .lmm-poster-caption {
     display: none;
@@ -1021,7 +1048,9 @@
     padding: 3rem var(--home-gutter);
   }
   .lmm-intro {
-    padding-top: 36rem;
+    order: -3;
+    padding-top: 1.5rem;
+    padding-bottom: 0;
   }
   .lmm-scene-panel :is(h1, h2) {
     max-width: 36rem;
@@ -1029,6 +1058,8 @@
   }
   .lmm-scene-panel p {
     max-width: 38rem;
+    font-size: 1rem;
+    line-height: 1.65;
   }
   .lmm-chapter-film {
     display: block;
@@ -1040,14 +1071,17 @@
     border-top: 1px solid var(--poster-rule);
   }
   .lmm-core-steps {
+    order: -1;
     padding: 1rem var(--home-gutter);
   }
   .lmm-core-continue {
+    order: -1;
+    align-self: flex-start;
     position: static;
     margin: 0 var(--home-gutter) 1rem;
   }
   .lmm-motion-toggle {
-    top: 6rem;
+    top: 1.5rem;
     bottom: auto;
   }
   .lmm-story-preview {
@@ -1061,6 +1095,9 @@
   }
 }
 @media (max-width: 680px) {
+  .lmm-home {
+    --home-gutter: 1rem;
+  }
   .lmm-cinema .lmm-intro-actions [data-slot='button'] {
     max-width: 100%;
     height: auto;
@@ -1069,26 +1106,22 @@
   }
 
   .lmm-poster-art {
-    height: 23rem;
-    inset-block-start: 6rem;
+    height: clamp(14rem, 60vw, 18rem);
   }
-  .lmm-intro {
-    padding-top: 27rem;
+  .lmm-poster-brand {
+    padding-inline-end: 3.5rem;
   }
-  .lmm-scene-panel {
+  .lmm-scene-panel:not(.lmm-intro) {
     padding-bottom: 3rem;
   }
   .lmm-scene-panel :is(h1, h2) {
     font-size: 2rem;
   }
   .lmm-scene-panel p {
-    font-size: 0.88rem;
+    font-size: 1rem;
   }
   .lmm-chapter-film {
     height: 16rem;
-  }
-  .lmm-motion-toggle {
-    top: 5rem;
   }
   .lmm-motion-toggle [data-play-label],
   .lmm-motion-toggle [data-pause-label] {
@@ -1179,193 +1212,6 @@
   }
 }
 
-/* One scroll-driven stage on every screen. No wheel/touch scroll lock. */
-.lmm-home[data-cinema-layout='immersive'] .lmm-chapter-film {
-  display: none;
-}
-.lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel {
-  border: 0;
-}
-@media (max-width: 900px) and (min-height: 601px) {
-  .lmm-home[data-cinema-layout='immersive'] .lmm-cinema {
-    height: 460svh;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-cinema-inner {
-    top: 4rem;
-    height: calc(100svh - 4rem);
-    min-height: 0;
-    max-height: none;
-    padding: 0;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-poster-brand {
-    top: 1rem;
-    right: 4.5rem;
-    font-size: clamp(2.6rem, 9vw, 4.4rem);
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-poster-art {
-    inset: calc(1rem + clamp(2.73rem, 9.45vw, 4.62rem) + 3.75rem) -12% 40%;
-    height: auto;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel {
-    inset: auto 0 6.5rem;
-    width: 100%;
-    max-width: none;
-    max-height: 52%;
-    overflow-y: auto;
-    padding: 1rem var(--home-gutter) 0.5rem;
-    justify-content: flex-start;
-    background: linear-gradient(transparent, var(--poster-ground) 1.5rem);
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel :is(h1, h2) {
-    font-size: clamp(1.65rem, 6.5vw, 2.7rem);
-    max-width: 32rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel p {
-    margin-top: 0.7rem;
-    font-size: 0.875rem;
-    line-height: 1.6;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-intro-actions {
-    margin-top: 1rem;
-    gap: 0.5rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-steps {
-    position: absolute;
-    inset: auto var(--home-gutter) 3.3rem;
-    padding: 0;
-    display: flex;
-    flex-wrap: nowrap;
-    justify-content: space-between;
-    gap: 0.35rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-steps button {
-    font-size: 0.75rem;
-    min-height: 2.75rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-continue {
-    position: absolute;
-    bottom: max(0.4rem, env(safe-area-inset-bottom));
-    margin: 0;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-motion-toggle {
-    top: 1.2rem;
-    bottom: auto;
-  }
-}
-@media (max-height: 600px) and (prefers-reduced-motion: no-preference) {
-  .lmm-home[data-cinema-layout='immersive'] .lmm-cinema-inner {
-    top: 4rem;
-    height: calc(100svh - 4rem);
-    min-height: 17rem;
-    padding: 0;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-poster-brand {
-    top: 0.75rem;
-    font-size: 2.2rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-poster-art {
-    inset: 2rem 0 2rem 42%;
-    height: auto;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel {
-    inset: 3.6rem auto 3.4rem 0;
-    width: 52%;
-    padding: 0.5rem var(--home-gutter);
-    overflow-y: auto;
-    justify-content: flex-start;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel :is(h1, h2) {
-    font-size: 1.5rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel p {
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-intro-actions {
-    margin-top: 0.7rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-steps {
-    inset: auto 4.5rem 0.25rem 45%;
-    flex-wrap: nowrap;
-    padding: 0;
-    gap: 0.5rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-continue {
-    position: absolute;
-    bottom: 0.25rem;
-    margin: 0;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-motion-toggle {
-    top: 0.5rem;
-    bottom: auto;
-  }
-}
-
-/* Keep the initial mobile stage inside the viewport, including public links. */
-@media (max-width: 900px) and (prefers-reduced-motion: no-preference) {
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link {
-    position: absolute;
-    top: calc(1rem + clamp(2.73rem, 9.45vw, 4.62rem) + 0.5rem);
-    left: clamp(1.25rem, 4vw, 4rem);
-    right: 4.6rem;
-    z-index: 2;
-    width: auto;
-    padding: 0;
-  }
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link
-    a {
-    min-height: 2.75rem;
-    padding: 0.5rem;
-    gap: 0.35rem;
-    border: 0;
-    background: transparent;
-  }
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link
-    strong {
-    font-size: 0.7rem;
-  }
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link
-    :is(span, a > svg:last-child) {
-    display: none;
-  }
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link
-    a
-    > svg:first-child {
-    width: 1rem;
-    height: 1rem;
-  }
-}
-@media (max-width: 900px) and (max-height: 600px) and (prefers-reduced-motion: no-preference) {
-  .forge-surface:has(.lmm-home[data-cinema-layout='immersive'])
-    > .home-directory-link {
-    top: 1rem;
-    left: auto;
-    right: calc(clamp(1.25rem, 4vw, 4rem) + 4.5rem);
-    width: max-content;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-poster-brand {
-    right: auto;
-    font-size: clamp(1.5rem, 5vw, 2.2rem);
-  }
-}
-@media (max-width: 480px) and (max-height: 600px) and (prefers-reduced-motion: no-preference) {
-  .lmm-home[data-cinema-layout='immersive'] .lmm-scene-panel {
-    bottom: 6.5rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-steps {
-    inset: auto var(--home-gutter) 3.25rem;
-    justify-content: space-between;
-    gap: 0.25rem;
-  }
-  .lmm-home[data-cinema-layout='immersive'] .lmm-core-steps button {
-    white-space: nowrap;
-  }
-}
 @media (max-width: 900px) {
   body:has(.lmm-home) .lmm-feedback-reward > * > button,
   body:has(.lmm-home) .lmm-feedback-reward button[aria-haspopup] {

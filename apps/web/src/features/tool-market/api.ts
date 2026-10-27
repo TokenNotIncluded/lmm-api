@@ -23,6 +23,7 @@ export type MarketCapabilities = {
   meta_delegation: boolean
   mcp_oauth: boolean
   metamcp: boolean
+  treg_connection_check: boolean
 }
 export type ProviderPricing = { provider: string; multiplier: string }
 export type ProviderPreset = {
@@ -220,6 +221,29 @@ export type MarketAuthentication = {
   mode: 'none' | 'bearer' | 'api_key'
   secret?: string
 }
+const tregConnectionCheckSchema = z
+  .object({
+    provider: z.literal('treg'),
+    surface: z.enum(['team', 'catalog']),
+    authentication: z.enum(['verified', 'not_verified']),
+    status: z.enum([
+      'verified',
+      'unauthorized',
+      'forbidden',
+      'network_error',
+      'timeout',
+      'invalid_response',
+      'unavailable',
+      'team_required',
+    ]),
+    upstream_status: z.number().int().min(100).max(599).optional(),
+  })
+  .strict()
+  .refine(
+    (result) =>
+      (result.status === 'verified') === (result.authentication === 'verified')
+  )
+export type TregConnectionCheck = z.infer<typeof tregConnectionCheckSchema>
 export type MarketCredentials = {
   mode: MarketAuthentication['mode']
   configured: boolean
@@ -355,13 +379,35 @@ export const marketAPI = {
     preset?: string
   ) =>
     unwrap<ToolInput[]>(
-      api.post(`${base}/inspect`, {
-        endpoint,
-        authentication,
-        ...reference,
-        ...(preset ? { preset } : {}),
-      })
+      api.post(
+        `${base}/inspect`,
+        {
+          endpoint,
+          authentication,
+          ...reference,
+          ...(preset ? { preset } : {}),
+        },
+        { skipBusinessError: true, skipErrorHandler: true }
+      )
     ),
+  checkTregConnection: async (
+    endpoint: string,
+    authentication?: MarketAuthentication,
+    reference?: { service_id: string; version_id: string }
+  ): Promise<TregConnectionCheck> => {
+    const data = await unwrap<unknown>(
+      api.post(
+        `${base}/connection/check`,
+        { provider: 'treg', endpoint, authentication, ...reference },
+        { skipBusinessError: true, skipErrorHandler: true, timeout: 15_000 }
+      )
+    )
+    const result = tregConnectionCheckSchema.safeParse(data)
+    if (!result.success) {
+      throw new MarketAPIError('TOOL_MARKET_CONNECTION_RESPONSE')
+    }
+    return result.data
+  },
   credentials: (id: string, versionID: string) =>
     unwrap<MarketCredentials>(
       api.get(`${base}/services/${id}/credentials`, {

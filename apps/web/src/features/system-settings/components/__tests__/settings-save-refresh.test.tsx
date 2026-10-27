@@ -406,7 +406,7 @@ test('a partial read-only refresh removes cached editable defaults and disables 
   assert.ok(requests.every((request) => request.method === 'get'))
 })
 
-test('a failed background refresh retains the same form node and its editable draft', async () => {
+test('a failed background refresh retains the same draft while blocking a new write', async () => {
   await renderPage()
   await edit('Unsaved draft')
   const input = container.querySelector('input')
@@ -424,6 +424,21 @@ test('a failed background refresh retains the same form node and its editable dr
   assert.equal(container.querySelector('form'), form)
   assert.equal(container.querySelector('input'), input)
   assert.equal(input?.value, 'Unsaved draft')
+  assert.equal(container.querySelector('fieldset')?.disabled, true)
+  // Exercise the mutation guard as well as the disabled controls: a portal or
+  // programmatic submit must not turn the last successful read into authority.
+  await act(async () => {
+    form?.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true })
+    )
+  })
+  await until(
+    () =>
+      container.querySelector('[data-testid="outcome"]')?.textContent ===
+      'rejected',
+    'a stale submission must be rejected'
+  )
+  assert.equal(postRequests().length, 0)
   assert.equal(
     container.querySelector('[data-testid="dirty"]')?.textContent,
     'dirty'
@@ -439,9 +454,10 @@ test('a failed background refresh retains the same form node and its editable dr
   )
   assert.equal(
     errors.length,
-    0,
-    'a page-owned refresh error must not also toast'
+    1,
+    'only the explicitly attempted stale write produces a toast'
   )
+  assert.match(errors[0].message, /Capability information is not current/)
   assert.deepEqual(
     requests.map(({ skipBusinessError, skipErrorHandler }) => ({
       skipBusinessError,

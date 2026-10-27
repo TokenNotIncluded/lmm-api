@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Settings2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -24,37 +23,39 @@ import { useTranslation } from 'react-i18next'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { LoadingState } from '@/components/loading-state'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { useRuntimeCapabilities } from '@/context/runtime-capabilities-context'
+import { useCapabilityFreshness } from '@/hooks/use-capability-freshness'
 import { ROLE } from '@/lib/roles'
 import { getServerErrorMessage } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getChannelOps } from './api'
 import { ChannelsDialogs } from './components/channels-dialogs'
 import { ChannelsHealthStrip } from './components/channels-health-strip'
 import { ChannelsPrimaryButtons } from './components/channels-primary-buttons'
 import { ChannelsProvider } from './components/channels-provider'
 import { ChannelsTable } from './components/channels-table'
 import { ReadOnlyChannels } from './components/read-only-channels'
+import { useChannelOps } from './use-channel-ops'
 
 export function Channels() {
   const { t } = useTranslation()
   const isRoot = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
-  const channelOpsQuery = useQuery({
-    queryKey: ['channel-ops'],
-    queryFn: getChannelOps,
-    retry: false,
-    staleTime: 5 * 60 * 1000,
-  })
+  const runtime = useRuntimeCapabilities()
+  const localQuery = useChannelOps(!runtime)
+  const channelOpsQuery = runtime?.channels ?? localQuery
+  const phase = useCapabilityFreshness(channelOpsQuery)
   if (
-    channelOpsQuery.isLoading ||
+    phase !== 'fresh' ||
     channelOpsQuery.isError ||
     channelOpsQuery.data?.data?.read_only
   ) {
@@ -64,7 +65,7 @@ export function Channels() {
         <SectionPageLayout.Content>
           {channelOpsQuery.isLoading ? (
             <LoadingState />
-          ) : channelOpsQuery.isError ? (
+          ) : channelOpsQuery.isError && !channelOpsQuery.data ? (
             <ErrorState
               description={
                 getServerErrorMessage(channelOpsQuery.error) ??
@@ -73,7 +74,35 @@ export function Channels() {
               onRetry={() => void channelOpsQuery.refetch()}
             />
           ) : (
-            <ReadOnlyChannels />
+            <>
+              {phase !== 'fresh' && (
+                <Alert className='mb-4' role='status'>
+                  <AlertDescription>
+                    <p>
+                      {t(
+                        'Capability information is not current. Refresh before making changes.'
+                      )}
+                    </p>
+                    {channelOpsQuery.isError && (
+                      <p>
+                        {getServerErrorMessage(channelOpsQuery.error) ??
+                          t('Failed to load data')}
+                      </p>
+                    )}
+                    <Button
+                      type='button'
+                      variant='outline'
+                      className='mt-2 min-h-11'
+                      disabled={channelOpsQuery.isFetching}
+                      onClick={() => void channelOpsQuery.refetch()}
+                    >
+                      {t('Refresh capabilities')}
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              <ReadOnlyChannels />
+            </>
           )}
         </SectionPageLayout.Content>
       </SectionPageLayout>

@@ -23,6 +23,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
+import { capabilityPhase } from '@/lib/runtime-capabilities'
 import { getServerErrorToastId } from '@/lib/server-error-message'
 
 import {
@@ -41,9 +42,9 @@ import type {
   UpdateOptionResponse,
   SystemOptionsResponse,
 } from '../types'
-import { writableOptionKey } from './option-writability'
 import { showOptionUpdateToast } from '../utils/option-update-toast'
 import { getSettingsErrorMessage } from '../utils/settings-error-message'
+import { writableOptionKey } from './option-writability'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
@@ -197,14 +198,30 @@ function reportSaveFailure(error: unknown) {
   )
 }
 
+function requireCurrentOptions(queryClient: ReturnType<typeof useQueryClient>) {
+  const state = queryClient.getQueryState<SystemOptionsResponse>([
+    'system-options',
+  ])
+  if (
+    !state?.data ||
+    state.isInvalidated ||
+    capabilityPhase(state) !== 'fresh'
+  ) {
+    throw new Error(
+      i18next.t(
+        'Capability information is not current. Refresh before making changes.'
+      )
+    )
+  }
+  return state.data
+}
+
 export function useUpdateOption() {
   const queryClient = useQueryClient()
   return useMutation({
     retry: false,
     mutationFn: async (request: UpdateOptionRequest) => {
-      const options = queryClient.getQueryData<SystemOptionsResponse>([
-        'system-options',
-      ])
+      const options = requireCurrentOptions(queryClient)
       const key = writableOptionKey(options?.capabilities, request.key)
       if (!key) throw new Error(i18next.t('Read only'))
       const allowedRequest = { ...request, key }
@@ -225,9 +242,7 @@ export function useUpdateOptions() {
   return useMutation({
     retry: false,
     mutationFn: async (values: Record<string, string>) => {
-      const options = queryClient.getQueryData<SystemOptionsResponse>([
-        'system-options',
-      ])
+      const options = requireCurrentOptions(queryClient)
       const allowedValues: Record<string, string> = {}
       for (const [key, value] of Object.entries(values)) {
         const allowedKey = writableOptionKey(options?.capabilities, key)
@@ -255,9 +270,7 @@ export function useUpdateAssistantOptions() {
   return useMutation({
     retry: false,
     mutationFn: async (request: UpdateAssistantOptionsRequest) => {
-      const options = queryClient.getQueryData<SystemOptionsResponse>([
-        'system-options',
-      ])
+      const options = requireCurrentOptions(queryClient)
       if (
         Object.keys(request.values).some(
           (key) => !writableOptionKey(options?.capabilities, key)

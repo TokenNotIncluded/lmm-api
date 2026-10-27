@@ -1556,3 +1556,21 @@ test('a missing or disabled meta capability never advertises a phantom gateway t
   assert.equal(container.querySelector('#market-meta-title'), null)
   assert.equal(findButton('Connect MCP client', container), undefined)
 })
+
+test('Connect treg opens the existing service editor at the full team endpoint', async () => {
+  stubNavigation([])
+  const { container } = await mount()
+  await click(button('Connect treg', container))
+  const endpoint = container.querySelector<HTMLInputElement>('#market-endpoint')
+  assert.ok(endpoint)
+  assert.equal(endpoint.value, 'https://treg.to/mcp/')
+  assert.equal(
+    container.querySelector<HTMLSelectElement>('#market-treg-surface')?.value,
+    'team'
+  )
+  assert.equal(
+    container.querySelector<HTMLInputElement>('#market-secret')?.type,
+    'password'
+  )
+  assert.equal(button('Save draft', container).disabled, true)
+})

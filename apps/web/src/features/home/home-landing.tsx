@@ -144,6 +144,28 @@ export function HomeLanding({
           <div className='lmm-poster-brand' aria-hidden='true'>
             {brandName}
           </div>
+          <button
+            className='lmm-motion-toggle'
+            type='button'
+            data-motion-toggle
+            aria-pressed='false'
+            aria-label={t('Pause')}
+          >
+            <span data-pause-icon>
+              <svg viewBox='0 0 20 20' aria-hidden='true'>
+                <path d='M7 5v10M13 5v10' />
+              </svg>
+            </span>
+            <span data-play-icon hidden>
+              <svg viewBox='0 0 20 20' aria-hidden='true'>
+                <path d='m7 4 9 6-9 6z' />
+              </svg>
+            </span>
+            <span data-pause-label>{t('Pause')}</span>
+            <span data-play-label hidden>
+              {t('Resume')}
+            </span>
+          </button>
           <section
             className='lmm-intro lmm-scene-panel'
             data-cinema-panel='0'
@@ -158,11 +180,32 @@ export function HomeLanding({
             </p>
             <div className='lmm-intro-actions'>
               {primaryAction}
-              {storeAction}
-              {topUpAction}
               {pricingAction}
             </div>
           </section>
+
+          <ol className='lmm-core-steps' aria-label={t('Explore LMM')}>
+            {['Home', 'Store', 'Tool market', 'Ecosystem', 'Future'].map(
+              (label, index) => (
+                <li
+                  key={label}
+                  data-cinema-step
+                  data-active={index === 0 || undefined}
+                >
+                  <button
+                    type='button'
+                    data-cinema-jump={index}
+                    aria-pressed={index === 0}
+                  >
+                    {t(label)}
+                  </button>
+                </li>
+              )
+            )}
+          </ol>
+          <a className='lmm-core-continue' href='#lmm-connect-title'>
+            {t('Continue')} <Arrow />
+          </a>
 
           <section className='lmm-scene-panel' data-cinema-panel='1'>
             <canvas
@@ -176,9 +219,7 @@ export function HomeLanding({
                 'Discover digital goods from community sellers. Browse, order, and collect in one place.'
               )}
             </p>
-            <a className='lmm-core-link lmm-world-primary' href='/store'>
-              {t('Browse products')} <Arrow />
-            </a>
+            <div className='lmm-world-actions'>{storeAction}</div>
           </section>
           <section className='lmm-scene-panel' data-cinema-panel='2'>
             <canvas
@@ -233,50 +274,6 @@ export function HomeLanding({
               {t('Explore the project')} <Arrow />
             </a>
           </section>
-          <ol className='lmm-core-steps' aria-label={t('Explore LMM')}>
-            {['Home', 'Store', 'Tool market', 'Ecosystem', 'Future'].map(
-              (label, index) => (
-                <li
-                  key={label}
-                  data-cinema-step
-                  data-active={index === 0 || undefined}
-                >
-                  <button
-                    type='button'
-                    data-cinema-jump={index}
-                    aria-pressed={index === 0}
-                  >
-                    {t(label)}
-                  </button>
-                </li>
-              )
-            )}
-          </ol>
-          <a className='lmm-core-continue' href='#lmm-connect-title'>
-            {t('Continue')} <Arrow />
-          </a>
-          <button
-            className='lmm-motion-toggle'
-            type='button'
-            data-motion-toggle
-            aria-pressed='false'
-            aria-label={t('Pause')}
-          >
-            <span data-pause-icon>
-              <svg viewBox='0 0 20 20' aria-hidden='true'>
-                <path d='M7 5v10M13 5v10' />
-              </svg>
-            </span>
-            <span data-play-icon hidden>
-              <svg viewBox='0 0 20 20' aria-hidden='true'>
-                <path d='m7 4 9 6-9 6z' />
-              </svg>
-            </span>
-            <span data-pause-label>{t('Pause')}</span>
-            <span data-play-label hidden>
-              {t('Resume')}
-            </span>
-          </button>
         </div>
       </section>
       <div className='lmm-protocols' aria-label={t('API Endpoints')}>
@@ -449,7 +446,12 @@ export function HomeLanding({
             {t('Account and access')}
             <Arrow diagonal />
           </summary>
-          <div className='lmm-resource-body'>{purchase}</div>
+          <div className='lmm-resource-body'>
+            {topUpAction && (
+              <div className='lmm-resource-actions'>{topUpAction}</div>
+            )}
+            {purchase}
+          </div>
         </details>
       </section>
       <footer className='lmm-home-footer'>

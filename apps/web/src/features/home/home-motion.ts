@@ -52,7 +52,8 @@ export function mountHomeMotion(root: HTMLElement) {
     target = 0
   let manual: number | null = null
   let layout = false,
-    filmVisible = true
+    filmVisible = true,
+    stackedChapter = 0
   const visibleCopies = new Set<HTMLCanvasElement>()
   const pointer = {
     x: 0,
@@ -109,7 +110,14 @@ export function mountHomeMotion(root: HTMLElement) {
     schedule()
   }
   const readLayout = () => {
-    layout = !reduced.matches && !!film && supported
+    const immersive =
+      window.innerWidth > 900 &&
+      window.innerHeight > 600 &&
+      !reduced.matches &&
+      !!film &&
+      supported
+    if (layout !== immersive) manual = null
+    layout = immersive
     root.dataset.cinemaLayout = layout ? 'immersive' : 'stacked'
     const rect = cinema.getBoundingClientRect(),
       box = inner.getBoundingClientRect()
@@ -123,7 +131,16 @@ export function mountHomeMotion(root: HTMLElement) {
                 Math.max(1, rect.height - box.height)
             ) * 4
           : 0
-    if (!layout) progress = 0
+    if (!layout) {
+      progress = 0
+      stackedChapter = panels.reduce(
+        (current, panel, index) =>
+          panel.getBoundingClientRect().top <= window.innerHeight * 0.5
+            ? index
+            : current,
+        0
+      )
+    }
     if (story) {
       const box = story.getBoundingClientRect()
       const positions = storySteps.map((step) =>
@@ -205,7 +222,7 @@ export function mountHomeMotion(root: HTMLElement) {
     pointer.vx += (vx - pointer.vx) * (1 - Math.exp(-elapsed / 110))
     pointer.vy += (vy - pointer.vy) * (1 - Math.exp(-elapsed / 110))
     pointer.active = pointerTarget.active && animate
-    const active = Math.round(progress)
+    const active = layout ? Math.round(progress) : stackedChapter
     inner.dataset.chapter = String(active)
     inner.style.setProperty('--scene-progress', String(progress))
     panels.forEach((panel, index) => {

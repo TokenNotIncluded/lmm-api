@@ -126,18 +126,55 @@ function fixture({ graphics = true, observers = true } = {}) {
   const root = fixtureRoot as unknown as HTMLElement
   const cinema = root.querySelector<HTMLElement>('[data-cinema]')!
   const inner = root.querySelector<HTMLElement>('[data-cinema-inner]')!
+  const scenePanels = [
+    ...root.querySelectorAll<HTMLElement>('[data-cinema-panel]'),
+  ]
   const canvases = [...root.querySelectorAll<HTMLCanvasElement>('canvas')]
+  const panelTops = scenePanels.map((_, index) => 64 + index * 1200)
+  const canvasTops = canvases.map(() => 80)
+  const chapterScrolls: {
+    chapter: number
+    options: ScrollIntoViewOptions
+  }[] = []
+  const scrollStacked = (chapter: number) => {
+    scenePanels.forEach((_, index) => {
+      panelTops[index] = 64 + (index - chapter) * 1200
+      canvasTops[index] = 80 + (index - chapter) * 1200
+    })
+    view.document.dispatchEvent(new view.Event('scroll'))
+  }
+  scenePanels.forEach((panel, index) => {
+    Object.defineProperty(panel, 'getBoundingClientRect', {
+      value: () => ({
+        top: panelTops[index],
+        height: 1200,
+        bottom: panelTops[index] + 1200,
+      }),
+    })
+    Object.defineProperty(panel, 'scrollIntoView', {
+      value: (options: ScrollIntoViewOptions) => {
+        chapterScrolls.push({ chapter: index, options })
+        scrollStacked(index)
+      },
+    })
+  })
   Object.defineProperty(cinema, 'getBoundingClientRect', {
     value: () => ({ top: sectionTop, height: 3780, bottom: sectionTop + 3780 }),
   })
   Object.defineProperty(inner, 'getBoundingClientRect', {
     value: () => ({ top: 64, height: 836, bottom: 900 }),
   })
-  for (const canvas of canvases) {
+  for (const [index, canvas] of canvases.entries()) {
     Object.defineProperty(canvas, 'clientWidth', { value: 400 })
     Object.defineProperty(canvas, 'clientHeight', { value: 300 })
     Object.defineProperty(canvas, 'getBoundingClientRect', {
-      value: () => ({ top: 80, bottom: 380, left: 0, width: 400, height: 300 }),
+      value: () => ({
+        top: canvasTops[index],
+        bottom: canvasTops[index] + 300,
+        left: 0,
+        width: 400,
+        height: 300,
+      }),
     })
     Object.defineProperty(canvas, 'getContext', {
       value: () =>
@@ -180,6 +217,8 @@ function fixture({ graphics = true, observers = true } = {}) {
   return {
     root,
     scrollOffsets,
+    chapterScrolls,
+    scrollStacked,
     view,
     inner,
     canvases,
@@ -382,40 +421,69 @@ test('all five manual chapters are keyboard accessible and native scrolling take
 })
 
 for (const [width, height] of [
+  [320, 700],
   [390, 844],
   [900, 900],
   [844, 390],
+  [1440, 600],
 ]) {
-  test(`the ${width} by ${height} scroll stage exposes the selected chapter and preserves all navigation`, () => {
+  test(`the ${width} by ${height} page exposes all chapters and navigates native stacked content`, () => {
     const page = fixture()
     try {
       page.resize(width, height)
+      page.scrollStacked(0)
       page.mount()
       page.tick()
-      assert.equal(page.root.dataset.cinemaLayout, 'immersive')
-      assert.deepEqual(
-        panels(page.root).map((panel) => panel.inert),
-        [false, true, true, true, true]
-      )
-      for (const chapter of [1, 2, 3, 4, 0]) {
-        page.scroll(chapter)
-        page.settle()
-        assert.equal(page.inner.dataset.chapter, String(chapter))
-        assert.equal(
-          panels(page.root).filter((panel) => !panel.inert).length,
-          1
+      assert.equal(page.root.dataset.cinemaLayout, 'stacked')
+      assert.ok(
+        panels(page.root).every(
+          (panel) =>
+            !panel.inert && panel.getAttribute('aria-hidden') === 'false'
         )
-      }
-      page.resize(1440, 900)
-      page.tick()
-      page.resize(width, height)
-      page.tick()
-      assert.equal(page.root.dataset.cinemaLayout, 'immersive')
+      )
       assert.equal(
         page.paints.size,
         1,
-        'only the shared stage is rendered on mobile'
+        'offscreen chapter canvases are not rendered'
       )
+      for (const chapter of [1, 2, 3, 4, 0]) {
+        const button = page.root.querySelector<HTMLButtonElement>(
+          `[data-cinema-jump="${chapter}"]`
+        )
+        assert.ok(button)
+        button.focus()
+        button.click()
+        page.tick()
+        assert.deepEqual(page.chapterScrolls.at(-1), {
+          chapter,
+          options: { block: 'start', behavior: 'smooth' },
+        })
+        assert.equal(page.inner.dataset.chapter, String(chapter))
+        assert.equal(button.getAttribute('aria-pressed'), 'true')
+        assert.ok(panels(page.root).every((panel) => !panel.inert))
+        assert.ok((page.paints.get(page.canvases[chapter]) ?? 0) > 0)
+        assert.equal(
+          page.frames.size,
+          1,
+          'chapter canvases share one animation loop'
+        )
+      }
+      page.scrollStacked(3)
+      page.tick()
+      assert.equal(
+        page.inner.dataset.chapter,
+        '3',
+        'native scrolling updates navigation'
+      )
+      page.resize(1440, 900)
+      page.tick()
+      assert.equal(page.root.dataset.cinemaLayout, 'immersive')
+      assert.equal(panels(page.root).filter((panel) => !panel.inert).length, 1)
+      page.resize(width, height)
+      page.tick()
+      assert.equal(page.root.dataset.cinemaLayout, 'stacked')
+      assert.ok(panels(page.root).every((panel) => !panel.inert))
+      assert.equal(page.frames.size, 1)
     } finally {
       page.close()
     }
@@ -458,8 +526,9 @@ test('cleanup releases every canvas, observer, frame and preference listener', (
     assert.equal(page.disconnected, 2)
     assert.equal(page.preferenceListeners, 0)
     assert.equal(page.root.dataset.motion, undefined)
-    assert.equal(page.canvases[0].width, 0)
-    assert.equal(page.canvases[0].height, 0)
+    assert.ok(
+      page.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0)
+    )
     assert.equal(page.root.dataset.cinemaLayout, undefined)
     assert.ok(
       panels(page.root).every(

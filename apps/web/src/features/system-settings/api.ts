@@ -38,12 +38,22 @@ import type {
   UpstreamRatiosResponse,
 } from './types'
 
-type SettingsRequestOptions = { silent?: boolean }
+type SettingsRequestOptions = {
+  silent?: boolean
+  signal?: AbortSignal
+  authScope?: AssistantSettingsAuthScope
+}
 
 function settingsRequestConfig(options?: SettingsRequestOptions) {
-  return options?.silent
-    ? { skipBusinessError: true, skipErrorHandler: true }
-    : undefined
+  return {
+    ...(options?.silent
+      ? { skipBusinessError: true, skipErrorHandler: true }
+      : {}),
+    ...(options?.signal ? { signal: options.signal } : {}),
+    ...(options?.authScope
+      ? { authScope: options.authScope, disableDuplicate: true }
+      : {}),
+  }
 }
 
 export function getSystemOptions(

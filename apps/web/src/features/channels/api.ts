@@ -130,10 +130,12 @@ export async function getChannel(id: number): Promise<GetChannelResponse> {
 /**
  * Get channel operations summary for administrators
  */
-export async function getChannelOps(): Promise<ChannelOpsResponse> {
+export async function getChannelOps(
+  config: Parameters<typeof channelActionConfig>[0] = {}
+): Promise<ChannelOpsResponse> {
   const res = await api.get<ChannelOpsResponse>(
     '/api/channel/ops',
-    channelActionConfig()
+    channelActionConfig(config)
   )
   if (res.data?.success !== true || !res.data.data) {
     throw new Error(getServerErrorMessage(res.data) ?? 'Failed to load data')
