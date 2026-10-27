@@ -223,7 +223,6 @@ GRANT USAGE ON SCHEMA core_console TO :"runtime_role";
 GRANT SELECT ON core_console.options, core_console.initialization,
     core_console.announcement_reads TO :"runtime_role";
 GRANT INSERT ON core_console.announcement_reads TO :"runtime_role";
-\ir upgrade-console-option-writes.sql
 \endif
 
 \if :enable_models
