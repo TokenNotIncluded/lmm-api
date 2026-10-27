@@ -1,6 +1,7 @@
 //! HTTP routing and contract handlers for historical logs and usage exports.
-//! Native receipt-backed usage remains in `usage`; these endpoints serve
-//! immutable historical logs and allowlisted usage exports only.
+//! Immutable historical logs/exports and read-only native dashboard projections.
+
+mod dashboard;
 
 use axum::{
     Json, Router,
@@ -36,6 +37,9 @@ pub fn router(store: HistoryStore) -> Router {
         .route("/api/finance/export", get(export_usage))
         .route("/api/finance/site-statistics", get(site_statistics))
         .route("/api/perf-metrics/summary", get(performance_summary))
+        .route("/api/data/flow", get(dashboard::flow))
+        .route("/api/data/flow/self", get(dashboard::self_flow))
+        .route("/api/data/users", get(dashboard::users))
         .route("/api/mj", get(drawing_admin))
         .route("/api/mj/", get(drawing_admin))
         .route("/api/mj/self", get(drawing_self))

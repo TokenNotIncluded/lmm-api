@@ -1,20 +1,24 @@
-//! Read-only compatibility for the console settings API.
+//! Compatibility for the console settings API.
 //!
 //! Runtime flags must come from the same parsed configuration used at startup.
 //! Persisting an option does not change host-owned TOML or model configuration.
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::identity::{CredentialKind, IdentityError, IdentityStore};
+
+mod writes;
 
 /// Public, effective configuration; never pass raw TOML or secret references.
 #[derive(Clone)]
@@ -42,10 +46,10 @@ impl OptionsHttp {
 
 pub fn router(state: OptionsHttp) -> Router {
     Router::new()
-        .route("/api/option/", get(read).put(write_unavailable))
-        .route("/api/option", get(read).put(write_unavailable))
-        .route("/api/option/bulk", post(write_unavailable))
-        .route("/api/option/validate", post(write_unavailable))
+        .route("/api/option/", get(read).put(writes::write))
+        .route("/api/option", get(read).put(writes::write))
+        .route("/api/option/bulk", post(writes::bulk))
+        .route("/api/option/validate", post(writes::validate))
         .with_state(state)
 }
 
@@ -55,7 +59,7 @@ struct SystemOption {
     value: String,
 }
 
-async fn authorize(state: &OptionsHttp, headers: &HeaderMap) -> Result<(), IdentityError> {
+fn bearer(headers: &HeaderMap) -> Result<&str, IdentityError> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values.next().ok_or(IdentityError::Unauthorized)?;
     if values.next().is_some() {
@@ -65,11 +69,14 @@ async fn authorize(state: &OptionsHttp, headers: &HeaderMap) -> Result<(), Ident
         .to_str()
         .map_err(|_| IdentityError::Unauthorized)?
         .split_whitespace();
-    let secret = match (fields.next(), fields.next(), fields.next()) {
+    Ok(match (fields.next(), fields.next(), fields.next()) {
         (Some(scheme), Some(secret), None) if scheme.eq_ignore_ascii_case("bearer") => secret,
         _ => return Err(IdentityError::Unauthorized),
-    };
-    let actor = state.identity.authorize(secret).await?;
+    })
+}
+
+async fn authorize(state: &OptionsHttp, headers: &HeaderMap) -> Result<(), IdentityError> {
+    let actor = state.identity.authorize(bearer(headers)?).await?;
     if actor.credential_kind != CredentialKind::Session || actor.platform_level < 6 {
         return Err(IdentityError::Forbidden);
     }
@@ -96,7 +103,7 @@ async fn read(State(state): State<OptionsHttp>, headers: HeaderMap) -> Response 
         return auth_error(error);
     }
     // Only these persisted options are consumed by the current Core console.
-    // @context-fold begin read-only-settings-projection
+    // @context-fold begin runtime-settings-projection
     let stored = sqlx::query_as::<_, (String, String)>(
         "SELECT key,value FROM core_console.options
          WHERE key IN ('Notice','Announcements','console_setting.announcements')
@@ -115,37 +122,43 @@ async fn read(State(state): State<OptionsHttp>, headers: HeaderMap) -> Response 
         }
     };
     let mut data = runtime_options(&state.runtime);
-    data.extend(
-        stored
-            .into_iter()
-            .map(|(key, value)| SystemOption { key, value }),
-    );
+    let stored: BTreeMap<_, _> = stored.into_iter().collect();
+    let notice = stored.get("Notice").cloned().unwrap_or_default();
+    let announcements = stored
+        .get("console_setting.announcements")
+        .or_else(|| stored.get("Announcements"))
+        .cloned()
+        .unwrap_or_else(|| "[]".into());
+    data.extend([
+        SystemOption {
+            key: "Notice".into(),
+            value: notice,
+        },
+        SystemOption {
+            key: "Announcements".into(),
+            value: announcements.clone(),
+        },
+        SystemOption {
+            key: "console_setting.announcements".into(),
+            value: announcements,
+        },
+    ]);
     response(
         StatusCode::OK,
         json!({
             "success":true,
-            "message":"Partial read-only settings. Changes require the host configuration upgrade procedure.",
+            "message":"Only notice and announcement content can be saved. Other settings require the host configuration upgrade procedure.",
             "data":data,
             "capabilities":{
-                "read_only":true,
+                "read_only":false,
                 "partial":true,
+                "writable_keys":["Notice","Announcements","console_setting.announcements"],
                 "model_price_locks":false,
                 "trust_level_benefits":false
             }
         }),
     )
-    // @context-fold end read-only-settings-projection
-}
-
-async fn write_unavailable(State(state): State<OptionsHttp>, headers: HeaderMap) -> Response {
-    if let Err(error) = authorize(&state, &headers).await {
-        return auth_error(error);
-    }
-    response(
-        StatusCode::CONFLICT,
-        json!({"success":false,"code":"SYSTEM_OPTIONS_READ_ONLY",
-            "message":"These settings are read-only. Update the host-owned Core configuration through the configuration upgrade procedure; no changes were saved."}),
-    )
+    // @context-fold end runtime-settings-projection
 }
 
 fn auth_error(error: IdentityError) -> Response {
@@ -238,7 +251,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
-    async fn authentic_settings_are_allowlisted_and_writes_fail(pool: PgPool) {
+    async fn authentic_settings_are_allowlisted(pool: PgPool) {
         crate::core_schema::init(&pool).await.unwrap();
         let identity = IdentityStore::from_pool(pool.clone());
         let root = identity.bootstrap_user(1, 6).await.unwrap();
@@ -266,15 +279,6 @@ mod tests {
         assert_eq!(options["RegisterEnabled"], "false");
         assert!(!options.contains_key("OAuthSecret"));
         assert_eq!(options["ServerAddress"], runtime().server_address);
-        for (method, path) in [
-            ("PUT", "/api/option/"),
-            ("POST", "/api/option/bulk"),
-            ("POST", "/api/option/validate"),
-        ] {
-            let (status, body) = call(&app, method, path, Some(&root.secret)).await;
-            assert_eq!(status, StatusCode::CONFLICT);
-            assert_eq!(body["code"], "SYSTEM_OPTIONS_READ_ONLY");
-        }
         let notice: String =
             sqlx::query_scalar("SELECT value FROM core_console.options WHERE key='Notice'")
                 .fetch_one(&pool)

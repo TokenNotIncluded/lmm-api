@@ -224,6 +224,17 @@ impl HistoryStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    pub(crate) async fn read_snapshot(&self) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await?;
+        Ok(tx)
+    }
     /// Admit an unavailable category without reading unrelated historical logs.
     /// This establishes read identity only; it grants no data or write authority.
     pub(crate) async fn authenticate_category(&self, secret: &str, route: ReadRoute) -> Result<()> {
