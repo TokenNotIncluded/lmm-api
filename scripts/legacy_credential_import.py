@@ -63,12 +63,20 @@ def alias_digest(value, code="credential_alias_digest_invalid") -> str:
     return value
 
 
-def validate_wire_source(source: dict) -> None:
+def validate_wire_source(source: dict, *, allow_revoked_unsupported: bool = False) -> None:
     tokens = source.get("tokens")
     require(type(tokens) is list and 1 <= len(tokens) <= MAX_ALIAS_KEYS, "credential_alias_key_count_invalid")
     alias_digest(source.get("source_archive_sha256"), "credential_alias_source_digest_invalid")
-    require(all(type(token) is dict and ordinary_secret(token.get("key")) for token in tokens),
-            "credential_ordinary_wire_contract_unsupported")
+    if allow_revoked_unsupported:
+        require(all(type(token) is dict and type(token.get("key")) is str
+                    and re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token["key"]) is not None
+                    and "lmm_" not in token["key"].lower()
+                    and not token["key"].lower().startswith(RESERVED_PREFIXES)
+                    for token in tokens),
+                "credential_ordinary_wire_contract_unsupported")
+    else:
+        require(all(type(token) is dict and ordinary_secret(token.get("key")) for token in tokens),
+                "credential_ordinary_wire_contract_unsupported")
 
 
 def alias_target(instance: dict) -> dict:
@@ -173,13 +181,23 @@ def mapping_receipt(source_hash: str, rows: list[dict]) -> dict:
                          "source_secret_sha256": row["digest_sha256"]} for row in rows]}
 
 
+REVIEW_DECISIONS = (
+    "approve-offline-native-equivalent-credentials",
+    "approve-offline-revoke-unsupported-credentials",
+)
+
+
+def _revoke_unsupported(review: dict) -> bool:
+    return type(review) is dict and review.get("decision") == "approve-offline-revoke-unsupported-credentials"
+
+
 def validate_review(review: dict, source: dict, target: dict, proposal: dict) -> None:
     require(type(review) is dict and set(review) == {"format_version", "scope", "decision",
         "source_input_sha256", "target_input_sha256", "proposal_sha256", "source_frozen",
         "source_unit", "native_unit", "numerator", "denominator", "evidence_sha256",
         "economic_review_sha256"}, "credential_review_shape_invalid")
     require(type(review["format_version"]) is int and review["format_version"] == 1
-        and review["scope"] == SCOPE and review["decision"] == "approve-offline-native-equivalent-credentials"
+        and review["scope"] == SCOPE and review["decision"] in REVIEW_DECISIONS
         and review["source_frozen"] is True, "credential_review_not_approved")
     require(review["source_input_sha256"] == PROPOSAL.sha256(source)
         and review["target_input_sha256"] == PROPOSAL.sha256(target)
@@ -203,7 +221,7 @@ def _next_id(state: dict, sequence: str, count: int) -> int:
     return first
 
 
-def _supported_rows(proposal: dict, target: dict, first_id: int) -> list[dict]:
+def _supported_rows(proposal: dict, target: dict, first_id: int, *, revoke_unsupported: bool = False) -> list[dict]:
     observed = {row["user_id"]: row for row in target["users"]}
     rows = []
     for offset, original in enumerate(proposal["records"]):
@@ -212,18 +230,34 @@ def _supported_rows(proposal: dict, target: dict, first_id: int) -> list[dict]:
         # without activating the user, changing auth_version or granting access.
         if not original["source_owner_enabled"] and not observed[original["target_user_id"]]["active"]:
             blocked.discard("target_owner_inactive")
-        require(not blocked, "credential_native_semantics_unsupported")
         row = json.loads(canonical(original))
         row["target_credential_id"] = first_id + offset
         row["encrypted_secret_hex"] = None
         status, expiry = row["source_status"], row["expiry"]
         expired = expiry["kind"] != "never" and expiry["source_epoch"] < proposal["snapshot_at"]
         exhausted = not row["quota"]["unlimited"] and row["quota"]["remaining"] <= 0
-        # Native list views derive states 3/4 from expiry/budget, rather than
-        # a stored status. Never turn an expired/exhausted key into disabled 2.
-        require(status not in (3, 4) or (status == 3 and expired) or
-                (status == 4 and not expired and exhausted), "credential_status_native_mismatch")
-        row["enabled"] = status != 2
+        status_mismatch = not (status not in (3, 4) or (status == 3 and expired) or (status == 4 and not expired and exhausted))
+        wire_unsupported = not original["source_ordinary_api_key"] or not original["source_stored_key_roundtrips_relay_parser"]
+        if blocked or wire_unsupported or status_mismatch:
+            if not revoke_unsupported:
+                require(not (blocked or wire_unsupported), "credential_native_semantics_unsupported")
+                require(not status_mismatch, "credential_status_native_mismatch")
+            row["revoked_rekey_required"] = True
+            row["revoked"] = True
+            row["enabled"] = False
+            row["one_time_reveal"] = True
+            if not (1 <= len(row["name"].strip()) <= 128):
+                row["name"] = f"revoked-legacy-key-{row['source_token_id']}"
+            if not (1 <= len(row["group"]["value"]) <= 64) or row["group"]["value"] == "auto":
+                row["group"]["value"] = "default"
+            row["auto_groups"]["values"] = []
+            row["cross_group_retry"] = False
+            row["model_limits_enabled"] = False
+            row["model_limits"] = []
+        else:
+            # Native list views derive states 3/4 from expiry/budget, rather than
+            # a stored status. Never turn an expired/exhausted key into disabled 2.
+            row["enabled"] = status != 2
         rows.append(row)
     require(bool(rows), "credential_batch_empty")
     return rows
@@ -232,7 +266,8 @@ def _supported_rows(proposal: dict, target: dict, first_id: int) -> list[dict]:
 def prepare_material(source: dict, target_projection: dict, proposal: dict, review: dict, *,
                      migration_id: str, snapshot: dict, runtime_roles: list[str], source_files: dict,
                      encryption_key: bytes | None = None) -> dict:
-    validate_wire_source(source)
+    revoke_unsupported = _revoke_unsupported(review)
+    validate_wire_source(source, allow_revoked_unsupported=revoke_unsupported)
     alias_target(snapshot["instance"])
     require(PROPOSAL.plan_api_keys(source, target_projection) == proposal, "credential_proposal_rebuild_mismatch")
     validate_review(review, source, target_projection, proposal)
@@ -240,7 +275,7 @@ def prepare_material(source: dict, target_projection: dict, proposal: dict, revi
     require(snapshot["native_users"] == target_projection["users"], "credential_target_projection_stale")
     state = snapshot["state"]
     first = _next_id(state, CHANGED_SEQUENCES[0], len(proposal["records"]))
-    rows = _supported_rows(proposal, target_projection, first)
+    rows = _supported_rows(proposal, target_projection, first, revoke_unsupported=revoke_unsupported)
     raw = {row["id"]: row for row in source["tokens"]}
     for row in rows:
         token = raw[row["source_token_id"]]
@@ -299,7 +334,9 @@ def validate_material(material: dict) -> None:
             "credential_target_not_empty")
     first = _next_id(state, CHANGED_SEQUENCES[0], len(rows))
     _next_id(state, CHANGED_SEQUENCES[1], len(rows))
-    expected = _supported_rows(material["proposal"], material["target_projection"], first)
+    revoke_unsupported = _revoke_unsupported(material.get("source_review"))
+    expected = _supported_rows(material["proposal"], material["target_projection"], first,
+                               revoke_unsupported=revoke_unsupported)
     require(len(rows) == len(expected) and all(
         {k: v for k, v in actual.items() if k not in {"encrypted_secret_hex", "source_row_sha256", "source_deleted_at"}} ==
         {k: v for k, v in wanted.items() if k != "encrypted_secret_hex"} for actual, wanted in zip(rows, expected)),
@@ -307,7 +344,8 @@ def validate_material(material: dict) -> None:
     for row in rows:
         alias_digest(row["digest_sha256"])
         FIN.checked_hash(row.get("source_row_sha256"))
-        require(PROPOSAL.deleted(row.get("source_deleted_at")) == row["revoked"], "credential_deleted_state_mismatch")
+        require((PROPOSAL.deleted(row.get("source_deleted_at")) or bool(row.get("revoked_rekey_required"))) == row["revoked"],
+                "credential_deleted_state_mismatch")
         encrypted = row.get("encrypted_secret_hex")
         require((row["one_time_reveal"] and encrypted is None) or
                 (not row["one_time_reveal"] and type(encrypted) is str and
@@ -373,7 +411,7 @@ def verify_source_files(material: dict) -> None:
     for item in files.values():
         require(FIN.sha(private_bytes(Path(item["path"]))) == item["sha256"], "credential_source_file_changed")
     source, target, proposal, review = (load_json(Path(files[name]["path"])) for name in FILES)
-    validate_wire_source(source)
+    validate_wire_source(source, allow_revoked_unsupported=_revoke_unsupported(review))
     require(PROPOSAL.plan_api_keys(source, target) == proposal == material["proposal"]
         and target == material["target_projection"] and review == material["source_review"], "credential_frozen_inputs_mismatch")
     validate_review(review, source, target, proposal)
@@ -418,7 +456,8 @@ def _sql_body(material: dict) -> str:
         cid, uid, aid = row["target_credential_id"], row["target_user_id"], row["target_personal_account_id"]
         quota = row["quota"]
         expiry = row["expiry"]["native_exclusive_epoch"]
-        revoked = literal(row["source_deleted_at"]) + "::timestamptz" if row["revoked"] else "NULL"
+        revoked = (literal(row["source_deleted_at"]) + "::timestamptz" if PROPOSAL.deleted(row.get("source_deleted_at"))
+                   else f"to_timestamp({material['proposal']['snapshot_at']})" if row["revoked"] else "NULL")
         encrypted = "NULL" if row["one_time_reveal"] else "decode(" + literal(row["encrypted_secret_hex"]) + ",'hex')"
         array = lambda values: "ARRAY[" + ",".join(literal(v) for v in values) + "]::text[]"
         enabled = "TRUE" if row["enabled"] else "FALSE"
@@ -473,7 +512,8 @@ def _readback_sql(material: dict) -> str:
         cid, uid, aid = row["target_credential_id"], row["target_user_id"], row["target_personal_account_id"]
         q = row["quota"]
         encrypted = "NULL" if row["one_time_reveal"] else "decode(" + literal(row["encrypted_secret_hex"]) + ",'hex')"
-        revoked = literal(row["source_deleted_at"]) + "::timestamptz" if row["revoked"] else "NULL"
+        revoked = (literal(row["source_deleted_at"]) + "::timestamptz" if PROPOSAL.deleted(row.get("source_deleted_at"))
+                   else f"to_timestamp({material['proposal']['snapshot_at']})" if row["revoked"] else "NULL")
         accessed = f"to_timestamp({row['accessed_time']})" if row["accessed_time"] else "NULL"
         checks.append(f"""
  IF NOT EXISTS(SELECT 1 FROM core_identity.credentials c JOIN core_identity.api_key_settings s ON s.credential_id=c.id
@@ -624,7 +664,7 @@ def build_alias_manifest(material: dict, receipt_bytes: bytes) -> dict:
         source = json.loads(source_bytes, object_pairs_hook=PROPOSAL.unique_object)
     except (ValueError, UnicodeError, RecursionError):
         raise Error("private_json_invalid") from None
-    validate_wire_source(source)
+    validate_wire_source(source, allow_revoked_unsupported=_revoke_unsupported(material.get("source_review")))
     alias_digest(material["source_archive_sha256"], "credential_alias_source_digest_invalid")
     tokens = {token["id"]: token for token in source["tokens"]}
     require(len(tokens) == len(source["tokens"]) == len(material["records"]), "credential_alias_source_coverage_mismatch")
@@ -635,17 +675,21 @@ def build_alias_manifest(material: dict, receipt_bytes: bytes) -> dict:
         token = tokens.get(row["source_token_id"])
         require(type(token) is dict and digest(token) == row["source_row_sha256"], "credential_source_row_mismatch")
         raw = token["key"]
-        require(ordinary_secret(raw), "credential_ordinary_wire_contract_unsupported")
+        require(ordinary_secret(raw) or bool(row.get("revoked_rekey_required")),
+                "credential_ordinary_wire_contract_unsupported")
         raw_hash = alias_digest(FIN.sha(raw.encode("utf-8")))
         alias_hash = alias_digest(FIN.sha(("sk-" + raw).encode("utf-8")))
         require(raw_hash == row["digest_sha256"], "credential_alias_secret_digest_mismatch")
         for value in (raw_hash, alias_hash):
             require(value not in wire_digests, "credential_alias_digest_collision")
             wire_digests.add(value)
-        keys.append({"source_key_id": row["source_token_id"], "target_credential_id": row["target_credential_id"],
+        binding = {"source_key_id": row["source_token_id"], "target_credential_id": row["target_credential_id"],
             "target_user_id": row["target_user_id"], "target_account_id": row["target_personal_account_id"],
             "credential_user_version": row["target_auth_version"], "source_secret_sha256": raw_hash,
-            "sk_alias_sha256": alias_hash})
+            "sk_alias_sha256": alias_hash}
+        if row.get("revoked_rekey_required"):
+            binding["revoked_rekey_required"] = True
+        keys.append(binding)
         secrets.append(raw)
     manifest = {"version": 1, "scope": "legacy-api-key-wire-aliases-v1",
         "source_archive_sha256": material["source_archive_sha256"],
@@ -807,12 +851,13 @@ def main() -> int:
         connection = target["connection"]
         if args.prepare:
             inputs = {name: load_json(getattr(args, name)) for name in FILES}
-            validate_wire_source(inputs["source"])
+            revoke_unsupported = _revoke_unsupported(inputs["review"])
+            validate_wire_source(inputs["source"], allow_revoked_unsupported=revoke_unsupported)
             alias_target(target["instance_identity"])
             require(PROPOSAL.plan_api_keys(inputs["source"], inputs["target_projection"]) == inputs["proposal"],
                     "credential_proposal_rebuild_mismatch")
             validate_review(inputs["review"], inputs["source"], inputs["target_projection"], inputs["proposal"])
-            _supported_rows(inputs["proposal"], inputs["target_projection"], 1)
+            _supported_rows(inputs["proposal"], inputs["target_projection"], 1, revoke_unsupported=revoke_unsupported)
             files = {name: {"path": str(IDENTITY.private_backup_path(getattr(args, name))),
                            "sha256": FIN.sha(private_bytes(getattr(args, name)))} for name in FILES}
             key = None

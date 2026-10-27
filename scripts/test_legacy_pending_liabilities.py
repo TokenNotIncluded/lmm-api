@@ -33,7 +33,7 @@ class PendingLiabilityTest(unittest.TestCase):
                  "trade_no": "SUB-10", "money": 4},
             ],
             "top_ups": [
-                {"id": 5, "user_id": 71, "status": "pending", "payment_provider": "fastpay",
+                {"id": 5, "user_id": 71, "status": "pending", "payment_provider": "epay",
                  "trade_no": "TOP-5", "amount": 2, "money": 2, "settlement_currency": "CNY",
                  "provider_transaction_id": None},
                 {"id": 6, "user_id": 73, "status": "failed", "payment_provider": "epay",

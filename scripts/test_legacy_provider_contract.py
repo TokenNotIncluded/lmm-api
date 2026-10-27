@@ -78,8 +78,8 @@ def evidence(record, provider="epay"):
 
 
 class ProviderContractTests(unittest.TestCase):
-    def test_fastpay_is_explicitly_unsupported_and_fenced(self):
-        result = MODULE.analyze(base("fastpay"))
+    def test_retired_or_unknown_provider_is_unsupported_and_fenced(self):
+        result = MODULE.analyze(base("retired_provider"))
         self.assertEqual(result["classification"], "UNSUPPORTED_PROVIDER_CONTRACT")
         self.assertIn("provider_contract", result["missing"])
         self.assertEqual(result["settlement_state"], "unknown")
@@ -119,12 +119,12 @@ class ProviderContractTests(unittest.TestCase):
         self.assertEqual(result["missing"], ["evidence_shape"])
 
     def test_summary_never_claims_settlement(self):
-        result = MODULE.summarize([base("epay"), base("fastpay"), base("waffo_pancake")])
+        result = MODULE.summarize([base("epay"), base("retired_provider"), base("waffo_pancake")])
         self.assertEqual(
             result["classification_counts_by_provider"],
             {
                 "epay": {"INCOMPLETE_PROVIDER_EVIDENCE": 1},
-                "fastpay": {"UNSUPPORTED_PROVIDER_CONTRACT": 1},
+                "retired_provider": {"UNSUPPORTED_PROVIDER_CONTRACT": 1},
                 "waffo_pancake": {"INCOMPLETE_PROVIDER_EVIDENCE": 1},
             },
         )

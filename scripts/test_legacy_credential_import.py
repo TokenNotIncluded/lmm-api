@@ -609,6 +609,45 @@ class ProducerTests(unittest.TestCase):
             self.assertIn("credential_target_receipt_required", stderr.getvalue())
             run.assert_not_called()
 
+    def test_revoke_unsupported_decision_revokes_unimportable_keys_and_marks_alias_manifest(self):
+        _, target, _, _, snapshot, files = fixture()
+        managed_secret = "oauth_managed_" + "A" * 32
+        source, _ = inputs([
+            token(),
+            token(id=18, key=managed_secret, oauth_managed=True, one_time_reveal=False),
+            token(id=19, key="SyntheticDynamicGroupKeyBytes01234567890", group=""),
+        ])
+        proposal = IMPORT.PROPOSAL.plan_api_keys(source, target)
+        review = fixture()[3]
+        review["decision"] = "approve-offline-revoke-unsupported-credentials"
+        review["source_input_sha256"] = IMPORT.PROPOSAL.sha256(source)
+        review["proposal_sha256"] = proposal["proposal_sha256"]
+        files = {name: {"path": "/home/lightjunction/Backups/synthetic-credential-test/" + name,
+                        "sha256": "a" * 64} for name in IMPORT.FILES}
+        material = IMPORT.prepare_material(source, target, proposal, review, migration_id="synthetic-import",
+            snapshot=snapshot, runtime_roles=["synthetic_runtime"], source_files=files)
+        self.assertEqual(len(material["records"]), 3)
+        self.assertNotIn("revoked_rekey_required", material["records"][0])
+        self.assertFalse(material["records"][0]["revoked"])
+        self.assertTrue(material["records"][0]["enabled"])
+        for idx in (1, 2):
+            self.assertTrue(material["records"][idx]["revoked_rekey_required"])
+            self.assertTrue(material["records"][idx]["revoked"])
+            self.assertFalse(material["records"][idx]["enabled"])
+            self.assertTrue(material["records"][idx]["one_time_reveal"])
+            self.assertIsNone(material["records"][idx]["encrypted_secret_hex"])
+            self.assertEqual(material["records"][idx]["group"]["value"], "paid" if idx == 1 else "default")
+        sql = IMPORT.build_apply_sql(material)
+        self.assertIn("to_timestamp(1000)", sql)
+        receipt_bytes = (IMPORT.canonical(material["credential_receipt"]) + "\n").encode()
+        source_bytes = (IMPORT.canonical(source) + "\n").encode()
+        material["source_files"]["source"]["sha256"] = IMPORT.FIN.sha(source_bytes)
+        with patch.object(IMPORT, "private_bytes", return_value=source_bytes):
+            manifest = IMPORT.build_alias_manifest(material, receipt_bytes)
+        self.assertNotIn("revoked_rekey_required", manifest["keys"][0])
+        self.assertTrue(manifest["keys"][1]["revoked_rekey_required"])
+        self.assertTrue(manifest["keys"][2]["revoked_rekey_required"])
+
 
 if __name__ == "__main__":
     unittest.main()

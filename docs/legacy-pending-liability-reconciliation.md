@@ -42,7 +42,7 @@ post a wallet, reserved, debt, affiliate, refund, or ledger entry. Terminal
 payment settlement requires a separate reviewed Core payment proof and ledger
 contract; a receipt alone cannot authorize credit.
 
-Until provider-specific verification contracts exist for ePay, FastPay and
+Until provider-specific verification contracts exist for ePay and
 Waffo Pancake, keep every unresolved row fenced. Run the validator again after
 the final writer fence and a fresh frozen capture; any archive, mapping,
 source-row, target, or provider-evidence drift requires a new review.

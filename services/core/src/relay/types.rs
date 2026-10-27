@@ -54,6 +54,7 @@ pub enum RelayError {
     RouteUnavailable,
     BillingUnavailable,
     Unauthorized,
+    RevokedLegacyKey,
     Forbidden,
     NoFunds,
     Conflict,
@@ -77,6 +78,7 @@ impl RelayError {
             Self::RouteUnavailable => "route_unavailable",
             Self::BillingUnavailable => "billing_unavailable",
             Self::Unauthorized => "unauthorized",
+            Self::RevokedLegacyKey => "legacy_key_revoked_recreate_required",
             Self::Forbidden => "forbidden",
             Self::NoFunds => "insufficient_funds",
             Self::Conflict => "request_conflict",
@@ -87,7 +89,7 @@ impl RelayError {
     }
     pub fn status(&self) -> u16 {
         match self {
-            Self::Unauthorized => 401,
+            Self::Unauthorized | Self::RevokedLegacyKey => 401,
             Self::Forbidden => 403,
             Self::NoFunds => 402,
             Self::Conflict => 409,
@@ -115,6 +117,11 @@ impl fmt::Display for RelayError {
             }
             Self::Timeout(p) => write!(f, "relay_timeout: {p:?}"),
             Self::UpstreamStatus(s) => write!(f, "upstream_error: HTTP {s}"),
+            Self::RevokedLegacyKey => write!(
+                f,
+                "{}: this legacy API key could not be migrated and has been revoked; please create a new API key in the console (该旧版 API Key 无法迁移且已吊销，请在控制台重新创建密钥)",
+                self.code()
+            ),
             _ => f.write_str(self.code()),
         }
     }

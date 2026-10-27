@@ -1,7 +1,7 @@
 # Legacy provider verification contract
 
 This is a source-only contract for reviewing the pending legacy rows. It does
-not contact ePay, FastPay or Waffo Pancake, verify a signature, append a
+not contact ePay or Waffo Pancake, verify a signature, append a
 receipt, close a liability, or post a ledger entry. Every result remains
 `verification_status=UNVERIFIED`, `settlement_state=unknown`,
 `spendable=false`, and `spendable_units=0`.
@@ -17,7 +17,6 @@ credential or replay source.
 | Provider | Source fields required before review | Evidence bindings required | Current state |
 | --- | --- | --- | --- |
 | ePay | `trade_no`, explicit raw amount and explicit currency | merchant hash, environment, CNY currency, raw amount hash, transaction hash, event hash, payload hash, signature hash, provider status and observation time | The legacy adapter is Go-only; Core has no ePay proof verifier. A CNY assumption cannot replace a missing source currency. |
-| FastPay | No reviewed source/provider contract exists | No generic evidence is accepted | Explicitly unsupported and fenced. |
 | Waffo Pancake | `trade_no`, provider transaction/event IDs, store ID, product ID and settlement currency | merchant/environment, amount and currency, transaction/event/store/product hashes, payload/signature hashes, provider status and observation time | The old monolith has a callback verifier, but the new Extensions/Core boundary has no approved verifier or receipt contract. |
 
 The checker compares hashes to the frozen source row and raw amount/currency

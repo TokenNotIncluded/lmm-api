@@ -42,10 +42,6 @@ PROVIDERS = {
             "signature_verification", "provider_status", "observed_at",
         ),
     },
-    # No reviewed FastPay wire contract or independent verifier exists in the
-    # new architecture.  Keeping this explicit prevents a generic parser from
-    # accidentally turning a pending row into accepted evidence.
-    "fastpay": None,
 }
 
 BASE_EVIDENCE_FIELDS = frozenset({

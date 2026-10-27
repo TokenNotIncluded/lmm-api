@@ -41,6 +41,8 @@ struct KeyBinding {
     credential_user_version: i64,
     source_secret_sha256: String,
     sk_alias_sha256: String,
+    #[serde(default)]
+    revoked_rekey_required: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -96,6 +98,7 @@ struct CredentialRow {
     owner_account_id: i64,
     personal_account_id: i64,
     owner_kind: String,
+    revoked: bool,
     settings_present: bool,
 }
 
@@ -236,7 +239,7 @@ impl Aliases {
         let digests: Vec<Vec<u8>> = self.wire.keys().map(|value| value.to_vec()).collect();
         // Include every matching digest, even if owned by an unlisted, revoked or
         // non-API credential. An exact credential can never become a fallback.
-        let found = sqlx::query("SELECT c.id,c.digest,c.kind,c.user_id,c.user_version,c.owner_account_id,u.personal_account_id,a.kind AS owner_kind,EXISTS(SELECT 1 FROM core_identity.api_key_settings s WHERE s.credential_id=c.id) AS settings_present FROM core_identity.credentials c JOIN core_identity.users u ON u.id=c.user_id JOIN core_identity.accounts a ON a.id=c.owner_account_id WHERE c.id=ANY($1::bigint[]) OR c.digest=ANY($2::bytea[])")
+        let found = sqlx::query("SELECT c.id,c.digest,c.kind,c.user_id,c.user_version,c.owner_account_id,u.personal_account_id,a.kind AS owner_kind,c.revoked_at IS NOT NULL AS revoked,EXISTS(SELECT 1 FROM core_identity.api_key_settings s WHERE s.credential_id=c.id) AS settings_present FROM core_identity.credentials c JOIN core_identity.users u ON u.id=c.user_id JOIN core_identity.accounts a ON a.id=c.owner_account_id WHERE c.id=ANY($1::bigint[]) OR c.digest=ANY($2::bytea[])")
             .bind(ids).bind(digests).fetch_all(&mut *tx).await.map_err(|_| RelayError::BillingUnavailable)?;
         let rows = found
             .into_iter()
@@ -250,6 +253,7 @@ impl Aliases {
                     owner_account_id: row.try_get("owner_account_id")?,
                     personal_account_id: row.try_get("personal_account_id")?,
                     owner_kind: row.try_get("owner_kind")?,
+                    revoked: row.try_get("revoked")?,
                     settings_present: row.try_get("settings_present")?,
                 })
             })
@@ -281,6 +285,7 @@ impl Aliases {
                 || row.owner_account_id != key.target_account_id
                 || row.personal_account_id != key.target_account_id
                 || row.owner_kind != "personal"
+                || (key.revoked_rekey_required && !row.revoked)
                 || !row.settings_present
             {
                 return Err(invalid());
@@ -349,6 +354,9 @@ impl Aliases {
                     Spelling::Raw => wire,
                     Spelling::SkPrefix => wire.strip_prefix("sk-").ok_or_else(invalid)?,
                 };
+                if self.manifest.keys[*index].revoked_rekey_required {
+                    return Err(RelayError::RevokedLegacyKey);
+                }
                 if !ordinary(canonical)
                     || hash(canonical.as_bytes())
                         != digest(&self.manifest.keys[*index].source_secret_sha256)?
@@ -465,6 +473,7 @@ mod tests {
             owner_account_id: 1,
             personal_account_id: 1,
             owner_kind: "personal".into(),
+            revoked: false,
             settings_present: true,
         }
     }
@@ -667,6 +676,44 @@ mod tests {
                     aliases.normalize("/v1/models", None, &mut headers).is_err(),
                     "reserved spelling"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_wire_revoked_rekey_required_returns_explicit_recreate_prompt() {
+        let managed = format!("oauth_managed_{}", "a".repeat(32));
+        for key in [KEY.to_owned(), managed] {
+            let (mut manifest, receipt) = fixture_with_key(&key);
+            manifest["keys"][0]["revoked_rekey_required"] = json!(true);
+            let mut aliases =
+                Aliases::parse(&serde_json::to_vec(&manifest).unwrap(), &receipt).unwrap();
+            let target = aliases.manifest.target.clone();
+            let mut unrevoked = row();
+            unrevoked.digest = hash(key.as_bytes()).to_vec();
+            assert!(
+                aliases.verify_rows(&target, &[unrevoked]).is_err(),
+                "revoked_rekey_required binding must reject unrevoked database row"
+            );
+            let mut revoked_row = row();
+            revoked_row.digest = hash(key.as_bytes()).to_vec();
+            revoked_row.revoked = true;
+            assert!(aliases.verify_rows(&target, &[revoked_row]).is_ok());
+            aliases.verified = true;
+            for value in [
+                key.clone(),
+                format!("sk-{key}"),
+                format!("Bearer {key}"),
+                format!("Bearer sk-{key}"),
+            ] {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+                let err = aliases
+                    .normalize("/v1/chat/completions", None, &mut headers)
+                    .unwrap_err();
+                assert_eq!(err, RelayError::RevokedLegacyKey);
+                assert_eq!(err.status(), 401);
+                assert!(err.to_string().contains("recreate") || err.to_string().contains("重新创建"));
             }
         }
     }
