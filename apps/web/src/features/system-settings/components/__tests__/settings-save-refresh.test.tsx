@@ -341,6 +341,43 @@ for (const capabilities of [
   })
 }
 
+test('read_only false does not enable non-allowlisted settings', async () => {
+  read = async (config) =>
+    response(config, 200, {
+      success: true,
+      message: '',
+      capabilities: {
+        read_only: false,
+        partial: false,
+        writable_keys: [
+          'Notice',
+          'Announcements',
+          'console_setting.announcements',
+        ],
+      },
+      data: [
+        { key: 'Notice', value: 'Maintenance notice' },
+        { key: 'AssistantPersona', value: 'Current persona' },
+      ],
+    })
+  await renderPage(false)
+  await until(
+    () => Boolean(container.textContent?.includes('Current persona')),
+    'the returned non-allowlisted value remains visible'
+  )
+  assert.equal(container.querySelector('form'), null)
+  assert.equal(container.querySelector('input'), null)
+  assert.match(container.textContent ?? '', /AssistantPersona/)
+  assert.match(container.textContent ?? '', /Read only/)
+  assert.equal(
+    [...container.querySelectorAll('button')].some(
+      (button) => button.textContent === 'Save Settings' && !button.disabled
+    ),
+    false
+  )
+  assert.ok(requests.every((request) => request.method === 'get'))
+})
+
 test('a partial read-only refresh removes cached editable defaults and disables saving', async () => {
   await renderPage()
   await until(
