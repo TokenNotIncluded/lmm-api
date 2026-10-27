@@ -415,6 +415,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                     ),
                 ));
             }
+            routes = routes.merge(lmm_core::topup_info_http::unconfigured_router(store.clone()));
             routes = routes.merge(lmm_core::legacy_auth::router(store, config.auth));
             capabilities.legacy_web_auth = true;
         }
