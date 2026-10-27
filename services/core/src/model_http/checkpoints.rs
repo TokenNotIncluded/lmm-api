@@ -97,6 +97,32 @@ fn validate_cache_write_dimensions(
 }
 
 impl Bridge {
+    pub(super) async fn persist_provider_observation(
+        &self,
+        id: &str,
+        worker: &[u8; 32],
+        route_id: &str,
+        usage: crate::relay::Usage,
+        input_token_ceiling: i64,
+        output_token_ceiling: u32,
+    ) -> Result<(), RelayError> {
+        // @context-fold begin bridge-provider-observation
+        let raw_usage = serde_json::to_value(usage).map_err(|_| RelayError::BillingUnavailable)?;
+        super::billing::retry(|| {
+            self.charging.record_provider_observation(
+                id,
+                worker,
+                route_id,
+                &raw_usage,
+                input_token_ceiling,
+                output_token_ceiling,
+            )
+        })
+        .await
+        .map_err(super::billing::error)
+        // @context-fold end bridge-provider-observation
+    }
+
     pub(super) async fn reconcile_completed_streams(
         &self,
         limit: i32,
@@ -228,6 +254,17 @@ impl Bridge {
                     .ok_or(RelayError::RouteUnavailable)?,
             )
         };
+        if checkpoint.terminal_observed {
+            self.persist_provider_observation(
+                &reservation.id,
+                &worker,
+                &selected.route_id,
+                checkpoint.usage,
+                selected.input_token_ceiling,
+                output_ceiling,
+            )
+            .await?;
+        }
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
         let tiered_tariff = selected.price.tiered.as_ref();
         validate_cache_write_dimensions(checkpoint.usage, &selected.price)?;

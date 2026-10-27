@@ -359,6 +359,18 @@ impl Billing for Bridge {
                 {
                     return Err(RelayError::Conflict);
                 }
+                if report.upstream_attempted && report.provider_complete {
+                    stage = "provider_observation";
+                    self.persist_provider_observation(
+                        &reservation.id,
+                        &worker,
+                        &selected.route_id,
+                        report.usage,
+                        selected.input_token_ceiling,
+                        output_ceiling,
+                    )
+                    .await?;
+                }
                 stage = "usage";
                 let (usage, outcome) = if !report.upstream_attempted {
                     (
