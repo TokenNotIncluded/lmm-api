@@ -64,7 +64,7 @@ func validatePaymentSelection(cfg Config) error {
 	return nil
 }
 
-// Only the Core's existing Stripe test/USD policy is supported. This private
+// Stripe direct-account channels use the Core's fixed USD policy. This private
 // document has no webhook secret or exchange-rate field. The isolated lab is
 // a separate provider selection with a bound numeric-loopback capability.
 func loadPaymentAdapters(path string, runtimeCredentials ...[]byte) ([]payments.Adapter, error) {
@@ -89,10 +89,10 @@ func loadPaymentAdaptersForHost(ctx context.Context, path, hostOrigin string, lo
 			return nil, errors.New("unknown private payment configuration field")
 		}
 	}
-	if cfg.Version != 1 || (cfg.Provider != "stripe-test" && cfg.Provider != "stripe-isolated-test") || !meta.IsDefined("channels") || len(cfg.Channels) > 16 {
-		return nil, errors.New("payments require explicit bounded Stripe test channels")
+	if cfg.Version != 1 || (cfg.Provider != "stripe-test" && cfg.Provider != "stripe-live" && cfg.Provider != "stripe-isolated-test") || !meta.IsDefined("channels") || len(cfg.Channels) > 16 {
+		return nil, errors.New("payments require explicit bounded Stripe direct USD channels")
 	}
-	if cfg.Provider == "stripe-test" {
+	if cfg.Provider != "stripe-isolated-test" {
 		for _, key := range meta.Keys() {
 			if strings.HasPrefix(key.String(), "channels.isolated_") {
 				return nil, errors.New("isolated fields require explicit isolated payments provider")
@@ -118,7 +118,11 @@ func loadPaymentAdaptersForHost(ctx context.Context, path, hostOrigin string, lo
 				return nil, errors.New("invalid private payment API credential")
 			}
 		}
-		stripeCfg := payments.StripeConfig{Channel: payments.Channel{ID: c.ID, Provider: "stripe", Merchant: c.Merchant, Environment: "test", Currency: "USD", Enabled: c.Enabled}, APIKey: key, APIVersion: c.APIVersion, SuccessURL: c.SuccessURL, CancelURL: c.CancelURL}
+		environment := "test"
+		if cfg.Provider == "stripe-live" {
+			environment = "live"
+		}
+		stripeCfg := payments.StripeConfig{Channel: payments.Channel{ID: c.ID, Provider: "stripe", Merchant: c.Merchant, Environment: environment, Currency: "USD", Enabled: c.Enabled}, APIKey: key, APIVersion: c.APIVersion, SuccessURL: c.SuccessURL, CancelURL: c.CancelURL}
 		var adapter *payments.Stripe
 		if cfg.Provider == "stripe-isolated-test" {
 			if hostOrigin == "" || c.IsolatedReturnOrigin != hostOrigin || (!localHTTP && strings.HasPrefix(hostOrigin, "http:")) || !loadedPaymentHostCredential(runtimeCredentials) || !cleanPaymentPath(c.IsolatedSecretDirectory) || !isolatedPaymentAPIFile(c.APIKeyFile, c.IsolatedSecretDirectory) || c.APIKeyFile == c.IsolatedBindingTokenFile {
@@ -132,7 +136,7 @@ func loadPaymentAdaptersForHost(ctx context.Context, path, hostOrigin string, lo
 			adapter, err = payments.NewStripe(stripeCfg)
 		}
 		if err != nil {
-			return nil, errors.New("invalid Stripe test channel configuration")
+			return nil, errors.New("invalid Stripe channel configuration")
 		}
 		ids[c.ID], merchants[c.Merchant] = true, true
 		adapters = append(adapters, adapter)

@@ -234,6 +234,243 @@ async fn journals(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
+// These keys and events are synthetic even though the channel selects live mode.
+async fn fresh_live(pool: &PgPool) -> Fixture {
+    let mut f = fresh(pool).await;
+    f.store = IngressStore(
+        PaymentsStore::new(
+            pool.clone(),
+            vec![Channel::stripe_live(
+                1,
+                MERCHANT.into(),
+                SECRET.into(),
+                100_000,
+            )],
+        )
+        .unwrap(),
+    );
+    f
+}
+fn live_event(intent: &pb::PaymentIntent, id: &str) -> Value {
+    let mut value = event(intent, id, None);
+    value["livemode"] = json!(true);
+    value["data"]["object"]["livemode"] = json!(true);
+    value
+}
+fn live_proof(value: Value) -> pb::ProviderEvidence {
+    let mut evidence = proof(value);
+    evidence.payment.as_mut().unwrap().environment = "live".into();
+    evidence
+}
+
+#[sqlx::test]
+async fn stripe_live_rejects_environment_signature_and_amount_mismatch_before_proof(pool: PgPool) {
+    let f = fresh_live(&pool).await;
+    let intent = prepare(&f, "prepare_live_reject_01", 137).await;
+    assert_eq!(intent.environment, "live");
+    let valid = live_event(&intent, "evt_live_reject");
+    let mut cases = Vec::new();
+    let mut evidence = live_proof(valid.clone());
+    evidence.payment.as_mut().unwrap().environment = "test".into();
+    cases.push(("reference environment", evidence, Error::Denied));
+    let mut evidence = live_proof(valid.clone());
+    evidence.payment.as_mut().unwrap().merchant = "acct_other_synthetic".into();
+    cases.push(("reference merchant", evidence, Error::Denied));
+    let mut value = valid.clone();
+    value["account"] = json!("acct_other_synthetic");
+    cases.push(("signed account", live_proof(value), Error::Denied));
+    let mut value = valid.clone();
+    value["data"]["object"]["metadata"]["lmm_merchant"] = json!("acct_other_synthetic");
+    cases.push(("signed metadata merchant", live_proof(value), Error::Denied));
+    let mut value = valid.clone();
+    value["data"]["object"]["currency"] = json!("eur");
+    cases.push(("signed currency", live_proof(value), Error::Conflict));
+    let mut value = valid.clone();
+    value["data"]["object"]["metadata"]["lmm_core_intent_id"] =
+        json!((intent.intent_id + 1).to_string());
+    cases.push(("signed intent", live_proof(value), Error::Conflict));
+    for field in ["envelope mode", "object mode"] {
+        let mut value = valid.clone();
+        if field == "envelope mode" {
+            value["livemode"] = json!(false);
+        } else {
+            value["data"]["object"]["livemode"] = json!(false);
+        }
+        cases.push((field, live_proof(value), Error::Denied));
+    }
+    let mut evidence = live_proof(valid.clone());
+    // Correctly shaped signature from an unrelated endpoint key.
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec_unrelated_synthetic_only").unwrap();
+    let header = std::str::from_utf8(&evidence.signature).unwrap();
+    let timestamp = header
+        .split(',')
+        .next()
+        .unwrap()
+        .strip_prefix("t=")
+        .unwrap();
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(&evidence.signed_payload);
+    use std::fmt::Write;
+    let mut signature = format!("t={timestamp},v1=");
+    for byte in mac.finalize().into_bytes() {
+        write!(&mut signature, "{byte:02x}").unwrap();
+    }
+    evidence.signature = signature.into_bytes();
+    cases.push(("wrong endpoint secret", evidence, Error::Denied));
+    for field in ["amount", "amount_received"] {
+        for amount in [136, 138] {
+            let mut value = valid.clone();
+            value["data"]["object"][field] = json!(amount);
+            cases.push((field, live_proof(value), Error::Conflict));
+        }
+    }
+    for (case, evidence, expected) in cases {
+        assert_eq!(
+            f.store
+                .accept_proof(pb::AcceptProviderProofRequest {
+                    intent_id: intent.intent_id,
+                    evidence: Some(evidence),
+                })
+                .await
+                .unwrap_err(),
+            expected,
+            "live rejection case: {case}"
+        );
+        let state: (i64, i64, Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM core_payments.accepted_proofs), \
+             (SELECT count(*) FROM core_payments.receipts WHERE method='credit'), \
+             provider_transaction,credit_journal_id FROM core_payments.intents WHERE id=$1",
+        )
+        .bind(intent.intent_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            state,
+            (0, 0, None, None),
+            "rejected {case} persisted authority"
+        );
+        assert_eq!(journals(&pool).await, 0, "rejected {case} posted money");
+    }
+}
+
+#[sqlx::test]
+async fn stripe_live_durable_proof_posts_exact_ledger_once(pool: PgPool) {
+    let f = fresh_live(&pool).await;
+    let intent = prepare(&f, "prepare_live_ledger_01", 137).await;
+    assert_eq!((intent.amount_minor, intent.credit_units), (137, 685_000));
+    assert_eq!(intent.credit_unit, "credit_500k_usd");
+    let value = live_event(&intent, "evt_live_ledger");
+    let mut evidence = live_proof(value.clone());
+    let accept = pb::AcceptProviderProofRequest {
+        intent_id: intent.intent_id,
+        evidence: Some(evidence.clone()),
+    };
+    let accepted = f.store.accept_proof(accept.clone()).await.unwrap();
+    assert_eq!(f.store.accept_proof(accept).await.unwrap(), accepted);
+    assert_eq!(accepted.payment, evidence.payment);
+    assert_eq!(
+        f.store
+            .get_proof(pb::GetProviderProofRequest {
+                intent_id: intent.intent_id,
+                provider_event_id: evidence.provider_event_id.clone(),
+                payload_sha256: accepted.payload_sha256.clone(),
+            })
+            .await
+            .unwrap(),
+        accepted
+    );
+    assert_eq!(journals(&pool).await, 0, "proof acceptance must not credit");
+    // The actual settlement entry requires a durable proof; bypass the convenience
+    // ingress wrapper so this assertion cannot accept a proof on our behalf.
+    assert_eq!(
+        f.store
+            .0
+            .credit(credit_request(
+                &intent,
+                "credit_live_ledger_01",
+                evidence.clone()
+            ))
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    evidence.accepted_proof_id = accepted.proof_id;
+    let request = credit_request(&intent, "credit_live_ledger_01", evidence);
+    let receipt = f.store.0.credit(request.clone()).await.unwrap();
+    assert_eq!(receipt.state, 1);
+    assert!(receipt.journal_id > 0);
+    assert_eq!(f.store.0.credit(request).await.unwrap(), receipt);
+    let mut changed = value.clone();
+    changed["ignored_provider_field"] = json!("changed signed bytes");
+    assert_eq!(
+        f.store
+            .accept_proof(pb::AcceptProviderProofRequest {
+                intent_id: intent.intent_id,
+                evidence: Some(live_proof(changed)),
+            })
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    // A new signed event for the same transaction is evidence, not new value.
+    let mut second = value;
+    second["id"] = json!("evt_live_ledger_duplicate");
+    let duplicate = f
+        .store
+        .credit(credit_request(
+            &intent,
+            "credit_live_duplicate_01",
+            live_proof(second),
+        ))
+        .await
+        .unwrap();
+    assert_eq!((duplicate.state, duplicate.journal_id), (6, 0));
+    assert_eq!(duplicate.rejection_code, "already_credited");
+    balance(&f, 685_000, 0).await;
+    assert_eq!(journals(&pool).await, 1);
+    let bound: (String, String, i64, i64) = sqlx::query_as(
+        "SELECT environment,provider_transaction,amount_minor,credit_journal_id \
+         FROM core_payments.intents WHERE id=$1",
+    )
+    .bind(intent.intent_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        bound,
+        (
+            "live".into(),
+            format!("pi_{}", intent.intent_id),
+            137,
+            receipt.journal_id
+        )
+    );
+    let journal: (String, i64) =
+        sqlx::query_as("SELECT kind,amount_units FROM core_billing.ledger_journals WHERE id=$1")
+            .bind(receipt.journal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(journal, ("credit".into(), 685_000));
+    let legs: Vec<(Option<i64>, String, i64)> = sqlx::query_as(
+        "SELECT a.owner_account_id,a.bucket,e.delta_units FROM core_billing.ledger_entries e \
+         JOIN core_billing.ledger_accounts a ON a.id=e.ledger_account_id \
+         WHERE e.journal_id=$1 ORDER BY a.owner_account_id NULLS FIRST,a.bucket",
+    )
+    .bind(receipt.journal_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        legs,
+        vec![
+            (None, "clearing".into(), -685_000),
+            (Some(f.account), "wallet".into(), 685_000)
+        ]
+    );
+}
+
 #[sqlx::test]
 async fn prepare_freezes_policy_credit_receipt_and_replay_are_atomic(pool: PgPool) {
     let f = fresh(&pool).await;

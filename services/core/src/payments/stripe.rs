@@ -509,6 +509,96 @@ mod tests {
         assert!(check(value).is_ok());
     }
 
+    #[tokio::test]
+    async fn live_and_test_channels_cannot_share_endpoint_secrets() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
+            .unwrap();
+        let test = channel();
+        let shared = Channel::stripe_live(8, test.merchant.clone(), SECRET.into(), 1000);
+        assert!(
+            super::super::PaymentsStore::new(pool.clone(), vec![test.clone(), shared]).is_err()
+        );
+        let live = Channel::stripe_live(
+            8,
+            test.merchant.clone(),
+            "whsec_synthetic_distinct_live_endpoint".into(),
+            1000,
+        );
+        assert!(super::super::PaymentsStore::new(pool, vec![test, live]).is_ok());
+    }
+
+    #[test]
+    fn live_direct_payment_requires_live_event_and_its_own_endpoint_secret() {
+        let live_secret = "whsec_synthetic_live_endpoint_secret";
+        let live = Channel::stripe_live(8, "acct_local_test".into(), live_secret.into(), 1000);
+        assert!(live.validate());
+        let mut value = event();
+        value["livemode"] = json!(true);
+        value["data"]["object"]["livemode"] = json!(true);
+        let raw = serde_json::to_vec(&value).unwrap();
+        let signature = signed(&raw, live_secret, NOW);
+        assert!(verify(&raw, &signature, &live, 42, "USD", 100, NOW).is_ok());
+        assert!(verify(&raw, &signature, &channel(), 42, "USD", 100, NOW).is_err());
+        assert!(verify(&raw, &signed(&raw, SECRET, NOW), &live, 42, "USD", 100, NOW).is_err());
+        for (field, replacement) in [("livemode", json!(false)), ("account", json!("acct_other"))] {
+            let mut wrong = value.clone();
+            wrong[field] = replacement;
+            let raw = serde_json::to_vec(&wrong).unwrap();
+            assert!(
+                verify(
+                    &raw,
+                    &signed(&raw, live_secret, NOW),
+                    &live,
+                    42,
+                    "USD",
+                    100,
+                    NOW
+                )
+                .is_err()
+            );
+        }
+        for (field, replacement) in [
+            ("livemode", json!(false)),
+            ("amount", json!(99)),
+            ("amount_received", json!(99)),
+            ("currency", json!("cny")),
+            (
+                "metadata",
+                json!({"lmm_core_intent_id": "42", "lmm_merchant": "acct_other"}),
+            ),
+        ] {
+            let mut wrong = value.clone();
+            wrong["data"]["object"][field] = replacement;
+            let raw = serde_json::to_vec(&wrong).unwrap();
+            assert!(
+                verify(
+                    &raw,
+                    &signed(&raw, live_secret, NOW),
+                    &live,
+                    42,
+                    "USD",
+                    100,
+                    NOW
+                )
+                .is_err()
+            );
+        }
+        let raw = serde_json::to_vec(&event()).unwrap();
+        assert!(
+            verify(
+                &raw,
+                &signed(&raw, live_secret, NOW),
+                &live,
+                42,
+                "USD",
+                100,
+                NOW
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn signature_covers_exact_bytes_and_trusted_secret() {
         let raw = serde_json::to_vec(&event()).unwrap();

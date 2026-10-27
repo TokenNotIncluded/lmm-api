@@ -32,7 +32,7 @@ func TestPaymentProviderDocument(t *testing.T) {
 	}
 	for _, raw := range []string{
 		strings.Replace(empty, "version=1", "version=2", 1),
-		strings.Replace(empty, "stripe-test", "stripe-live", 1),
+		strings.Replace(empty, "stripe-test", "stripe", 1),
 		// Legacy provider rows are intentionally not accepted by the new
 		// composition boundary. They need an independently reviewed Core proof
 		// verifier before they can participate in settlement.
@@ -75,6 +75,32 @@ func TestPaymentProviderDocument(t *testing.T) {
 		t.Fatal("public payment document accepted")
 	}
 }
+func TestPaymentLiveDirectUSDConfiguration(t *testing.T) {
+	for _, prefix := range []string{"sk_live_", "rk_live_"} {
+		key := paymentPrivate(t, "live-key", prefix+"synthetic_host_key_0000001")
+		base := "version=1\nprovider='stripe-live'\n[[channels]]\nid=1\nmerchant='acct_synthetic_live'\nenabled=true\napi_key_file='" + key + "'\napi_version='2025-02-24.acacia'\nsuccess_url='https://example.test/success'\ncancel_url='https://example.test/cancel'\n"
+		adapters, err := loadPaymentAdapters(paymentPrivate(t, "payment.toml", base))
+		if err != nil || len(adapters) != 1 {
+			t.Fatal(adapters, err)
+		}
+		channel := adapters[0].Channel()
+		if channel.Environment != "live" || channel.Currency != "USD" || channel.Provider != "stripe" || channel.Merchant != "acct_synthetic_live" || !channel.Enabled {
+			t.Fatal("incorrect live binding", channel)
+		}
+		for _, extra := range []string{"environment='test'", "currency='CNY'", "webhook_secret_file='/synthetic/secret'", "isolated_test_mode=false", "isolated_provider_url=''"} {
+			if _, err := loadPaymentAdapters(paymentPrivate(t, "payment.toml", base+extra+"\n")); err == nil {
+				t.Fatal("ambiguous live configuration accepted", extra)
+			}
+		}
+		for _, wrong := range []string{"sk_test_synthetic_key_000001", "rk_test_synthetic_key_000001"} {
+			wrongKey := paymentPrivate(t, "test-key", wrong)
+			if _, err := loadPaymentAdapters(paymentPrivate(t, "payment.toml", strings.Replace(base, key, wrongKey, 1))); err == nil {
+				t.Fatal("test API credential accepted for live channel")
+			}
+		}
+	}
+}
+
 func TestPaymentConfigurationRequiresExplicitSelection(t *testing.T) {
 	for _, cfg := range []Config{
 		{PaymentTokenFile: "/nonexistent-payment"},
