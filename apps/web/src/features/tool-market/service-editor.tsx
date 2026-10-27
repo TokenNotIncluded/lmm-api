@@ -21,10 +21,13 @@ import {
   marketAPI,
   MarketAPIError,
   marketQuota,
+  marketSupports,
   type DraftInput,
+  type MarketAuthentication,
   type MarketDetail,
   type MarketService,
   type ToolInput,
+  type TregConnectionCheck,
 } from './api'
 import { marketNetQuota } from './money'
 import { useMarketTranslation as useTranslation } from './provider-i18n'
@@ -36,16 +39,27 @@ import {
   type ToolDefinitionChanges,
 } from './service-editor-utils'
 import { MarketNextStep } from './setup-guide'
+import {
+  tregCheckCopy,
+  tregCheckFailure,
+  tregDiscoveryFailure,
+  tregEndpoints,
+  tregSurface,
+  type TregSurface,
+} from './treg-connection'
+import { TregQuickConnect } from './treg-quick-connect'
 import { maximumUsageQuota, usageMetrics } from './usage-pricing'
 import { UsagePricingEditor } from './usage-pricing-editor'
 
 export function ServiceEditor({
   initial: initialDetail,
+  initialTregSurface,
   feeBps,
   onSaved,
   onCancel,
 }: {
   initial?: MarketDetail
+  initialTregSurface?: TregSurface
   units?: number
   feeBps?: number
   onSaved: (id: string) => void
@@ -70,11 +84,17 @@ export function ServiceEditor({
     Record<string, { key: string; input: string }>
   >({})
   const cache = useQueryClient()
-  const [name, setName] = useState(initial?.version.name ?? '')
+  const [name, setName] = useState(
+    initial?.version.name ?? (initialTregSurface ? 'treg' : '')
+  )
   const [description, setDescription] = useState(
     initial?.version.description ?? ''
   )
-  const [endpoint, setEndpoint] = useState(initial?.version.endpoint ?? '')
+  const [endpoint, setEndpoint] = useState(
+    initial?.version.endpoint ??
+      (initialTregSurface ? tregEndpoints[initialTregSurface] : '')
+  )
+  const treg = tregSurface(endpoint)
   const [presetID, setPresetID] = useState(
     initial?.tools.find((tool) => tool.provider_pricing)?.provider_pricing
       ?.provider ?? ''
@@ -151,8 +171,9 @@ export function ServiceEditor({
   const [changes, setChanges] = useState<ToolDefinitionChanges>()
   const [newToolsNeedSelection, setNewToolsNeedSelection] = useState(false)
   const [reviewedChanges, setReviewedChanges] = useState(false)
-  const [authMode, setAuthMode] =
-    useState<StoredEditorCredentials['mode']>('none')
+  const [authMode, setAuthMode] = useState<StoredEditorCredentials['mode']>(
+    treg ? 'bearer' : 'none'
+  )
   const [secret, setSecret] = useState('')
   const authEdited = useRef(false)
   const hasInspected = useRef(Boolean(initial))
@@ -162,6 +183,9 @@ export function ServiceEditor({
     { fingerprint: string; service: MarketService } | undefined
   >(undefined)
   const [inspectPending, setInspectPending] = useState(false)
+  const [checkPending, setCheckPending] = useState(false)
+  const [connectionCheck, setConnectionCheck] = useState<TregConnectionCheck>()
+  const [connectionError, setConnectionError] = useState<string>()
   const [savePending, setSavePending] = useState(false)
   const [error, setError] = useState<
     | 'operation'
@@ -186,12 +210,21 @@ export function ServiceEditor({
   })
   useEffect(() => {
     if (credentials.data && !authEdited.current) {
-      setAuthMode(credentials.data.mode)
+      setAuthMode(treg ? 'bearer' : credentials.data.mode)
     }
-  }, [credentials.data])
+  }, [credentials.data, treg])
   const credentialsReady = !initial || credentials.isSuccess
+  const checkSupported =
+    config.isSuccess && marketSupports(config.data, 'treg_connection_check')
+  const tregVerified =
+    connectionCheck?.status === 'verified' &&
+    connectionCheck.authentication === 'verified' &&
+    connectionCheck.surface === treg
   const pending =
-    inspectPending || savePending || (Boolean(initial) && credentials.isPending)
+    inspectPending ||
+    checkPending ||
+    savePending ||
+    (Boolean(initial) && credentials.isPending)
   const requiresReview = Boolean(
     changes?.endpointChanged ||
     changes?.changed.length ||
@@ -249,29 +282,107 @@ export function ServiceEditor({
       storedVersionID: initial?.version.id,
       sameEndpoint: initial?.version.endpoint === endpoint,
     })
+  const inspectionAuthentication = () => {
+    const choice = credentialChoice()
+    const reference =
+      choice.copy_from_version_id && initial
+        ? {
+            service_id: initial.service.id,
+            version_id: choice.copy_from_version_id,
+          }
+        : undefined
+    return {
+      reference,
+      authentication: reference
+        ? undefined
+        : { mode: choice.mode, secret: choice.secret },
+    }
+  }
+  const clearConnectionCheck = () => {
+    setConnectionCheck(undefined)
+    setConnectionError(undefined)
+  }
+  const resetConnectionDraft = () => {
+    setSecret('')
+    setTools([])
+    setSelected([])
+    setPrices({})
+    setBillingModes({})
+    setPriceDrafts({})
+    setInspectVersion(0)
+    hasInspected.current = false
+    setChanges(undefined)
+    setReviewedChanges(false)
+    setError(undefined)
+    clearConnectionCheck()
+  }
+  const verifyTreg = async (
+    authentication: MarketAuthentication | undefined,
+    reference: { service_id: string; version_id: string } | undefined
+  ) => {
+    if (!treg || !checkSupported) {
+      setConnectionError(
+        'This service does not support treg credential verification yet.'
+      )
+      return false
+    }
+    setCheckPending(true)
+    try {
+      const result = await marketAPI.checkTregConnection(
+        endpoint,
+        authentication,
+        reference
+      )
+      if (result.surface !== treg) {
+        throw new MarketAPIError('TOOL_MARKET_CONNECTION_RESPONSE')
+      }
+      setConnectionCheck(result)
+      return (
+        result.authentication === 'verified' && result.status === 'verified'
+      )
+    } catch (cause) {
+      setConnectionError(tregCheckFailure(cause))
+      return false
+    } finally {
+      setCheckPending(false)
+    }
+  }
+  const checkConnection = async () => {
+    if (operationLock.current || !credentialsReady || !checkSupported) return
+    operationLock.current = true
+    setInspectVersion(0)
+    setError(undefined)
+    clearConnectionCheck()
+    try {
+      const { authentication, reference } = inspectionAuthentication()
+      await verifyTreg(authentication, reference)
+    } catch (cause) {
+      setError(
+        cause instanceof Error && cause.message === 'Credential required'
+          ? 'credential-required'
+          : cause instanceof Error && cause.message === 'Invalid credential'
+            ? 'credential-invalid'
+            : 'operation'
+      )
+    } finally {
+      operationLock.current = false
+    }
+  }
   const inspect = async () => {
     if (operationLock.current || !credentialsReady) return
     operationLock.current = true
     setInspectPending(true)
     setInspectVersion(0)
     setError(undefined)
+    clearConnectionCheck()
     try {
-      const choice = credentialChoice()
-      const reference =
-        choice.copy_from_version_id && initial
-          ? {
-              service_id: initial.service.id,
-              version_id: choice.copy_from_version_id,
-            }
-          : undefined
-      const authentication = reference
-        ? undefined
-        : { mode: choice.mode, secret: choice.secret }
+      const { authentication, reference } = inspectionAuthentication()
+      if (treg && !(await verifyTreg(authentication, reference))) return
       const discovered = await marketAPI.inspect(
         endpoint,
         authentication,
         reference,
-        presetID
+        treg ? undefined : presetID
       )
       const ceiling = Math.ceil(Number(config.data?.credits_per_usd ?? '0'))
       const data = discovered.map((tool) =>
@@ -335,6 +446,11 @@ export function ServiceEditor({
       setInspectedEndpoint(endpoint)
       setInspectVersion((value) => value + 1)
     } catch (cause) {
+      const discoveryFailure = treg ? tregDiscoveryFailure(cause) : undefined
+      if (discoveryFailure) {
+        setConnectionError(discoveryFailure)
+        return
+      }
       setError(
         cause instanceof Error && cause.message === 'Credential required'
           ? 'credential-required'
@@ -369,6 +485,7 @@ export function ServiceEditor({
       if (
         !inspectVersion ||
         inspectedEndpoint !== endpoint ||
+        (treg && (!checkSupported || !tregVerified)) ||
         (requiresReview && !reviewedChanges)
       ) {
         throw new Error('Inspect the current endpoint before saving')
@@ -471,30 +588,35 @@ export function ServiceEditor({
         }}
       >
         <FieldGroup className='[&_input]:min-h-11'>
-          <ProviderPresetFields
-            presets={config.data?.provider_presets ?? []}
-            selected={presetID}
-            multiplier={multiplier}
+          <TregQuickConnect
+            surface={treg}
             disabled={pending}
-            onMultiplier={setMultiplier}
-            onSelect={(preset) => {
-              setPresetID(preset?.id ?? '')
-              setEndpoint(preset?.endpoint ?? '')
-              if (!name && preset) setName(preset.name)
+            onSelect={(surface) => {
+              setPresetID('')
+              setEndpoint(surface ? tregEndpoints[surface] : '')
+              if (!name && surface) setName('treg')
               authEdited.current = true
-              setAuthMode(preset ? 'bearer' : 'none')
-              setSecret('')
-              setTools([])
-              setSelected([])
-              setPrices({})
-              setBillingModes({})
-              setPriceDrafts({})
-              setInspectVersion(0)
-              hasInspected.current = false
-              setChanges(undefined)
-              setReviewedChanges(false)
+              setAuthMode(surface ? 'bearer' : 'none')
+              resetConnectionDraft()
             }}
           />
+          {!treg && (
+            <ProviderPresetFields
+              presets={config.data?.provider_presets ?? []}
+              selected={presetID}
+              multiplier={multiplier}
+              disabled={pending}
+              onMultiplier={setMultiplier}
+              onSelect={(preset) => {
+                setPresetID(preset?.id ?? '')
+                setEndpoint(preset?.endpoint ?? '')
+                if (!name && preset) setName(preset.name)
+                authEdited.current = true
+                setAuthMode(preset ? 'bearer' : 'none')
+                resetConnectionDraft()
+              }}
+            />
+          )}
           <Field>
             <FieldLabel htmlFor='market-name'>{t('Name')}</FieldLabel>
             <Input
@@ -531,8 +653,13 @@ export function ServiceEditor({
               placeholder='https://example.com/mcp'
               onChange={(e) => {
                 setEndpoint(e.target.value)
+                if (tregSurface(e.target.value)) {
+                  authEdited.current = true
+                  setAuthMode('bearer')
+                }
                 setSecret('')
                 setInspectVersion(0)
+                clearConnectionCheck()
               }}
             />
             <FieldDescription>
@@ -547,7 +674,12 @@ export function ServiceEditor({
               id='market-authentication'
               className='border-input bg-background focus-visible:ring-ring min-h-11 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-2 sm:text-sm'
               value={authMode}
-              disabled={pending || !credentialsReady || Boolean(presetID)}
+              disabled={
+                pending ||
+                !credentialsReady ||
+                Boolean(presetID) ||
+                Boolean(treg)
+              }
               onChange={(event) => {
                 authEdited.current = true
                 setAuthMode(
@@ -555,6 +687,7 @@ export function ServiceEditor({
                 )
                 setSecret('')
                 setInspectVersion(0)
+                clearConnectionCheck()
               }}
             >
               <option value='none'>{t('No authentication')}</option>
@@ -585,6 +718,7 @@ export function ServiceEditor({
                   onChange={(event) => {
                     setSecret(event.target.value)
                     setInspectVersion(0)
+                    clearConnectionCheck()
                   }}
                 />
                 <FieldDescription>
@@ -616,6 +750,62 @@ export function ServiceEditor({
                 </Button>
               </>
             )}
+            {treg && (
+              <div className='space-y-3'>
+                <p className='text-muted-foreground text-sm leading-6'>
+                  {t(
+                    'Verification reads treg account identity without spending. A public tool list alone does not verify your key.'
+                  )}
+                </p>
+                <Button
+                  type='button'
+                  variant='outline'
+                  className='min-h-11'
+                  disabled={pending || !credentialsReady || !checkSupported}
+                  onClick={() => void checkConnection()}
+                >
+                  {checkPending ? t('Checking…') : t('Verify treg credential')}
+                </Button>
+                {!checkSupported && (
+                  <div
+                    role={config.isError ? 'alert' : 'status'}
+                    className='text-muted-foreground space-y-2 text-sm'
+                  >
+                    <p>
+                      {config.isPending
+                        ? t('Loading…')
+                        : config.isError
+                          ? t('Could not load market settings')
+                          : t(
+                              'This service does not support treg credential verification yet.'
+                            )}
+                    </p>
+                    {config.isError && (
+                      <Button
+                        type='button'
+                        variant='outline'
+                        onClick={() => void config.refetch()}
+                      >
+                        {t('Retry')}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {connectionCheck && (
+                  <p
+                    role={tregVerified ? 'status' : 'alert'}
+                    className='text-sm leading-6'
+                  >
+                    {t(tregCheckCopy[connectionCheck.status])}
+                  </p>
+                )}
+                {connectionError && (
+                  <p role='alert' className='text-destructive text-sm'>
+                    {t(connectionError)}
+                  </p>
+                )}
+              </div>
+            )}
             <Button
               type='button'
               variant={
@@ -623,11 +813,30 @@ export function ServiceEditor({
                   ? 'default'
                   : 'outline'
               }
-              disabled={pending || !endpoint || !credentialsReady}
+              disabled={
+                pending ||
+                !endpoint ||
+                !credentialsReady ||
+                (Boolean(treg) && !checkSupported)
+              }
               onClick={() => void inspect()}
             >
               {inspectPending ? t('Checking…') : t('Read tool definitions')}
             </Button>
+            {treg && inspectVersion > 0 && inspectedEndpoint === endpoint && (
+              <p role='status' className='text-sm leading-6'>
+                {tools.length
+                  ? t(
+                      'Discovered {{count}} treg tools. Review them before saving.',
+                      {
+                        count: tools.length,
+                      }
+                    )
+                  : t(
+                      'The treg connection returned no tools. Nothing can be saved; retry discovery or choose the other surface.'
+                    )}
+              </p>
+            )}
             {tools.length > 0 &&
               (!inspectVersion || inspectedEndpoint !== endpoint) && (
                 <FieldDescription>
@@ -672,9 +881,13 @@ export function ServiceEditor({
               {t('Tools and prices')}
             </legend>
             <p className='text-muted-foreground max-w-[70ch] text-sm leading-6'>
-              {t(
-                'Choose free or paid pricing for each tool. Charges apply only to successful calls; failed and expired calls are refunded.'
-              )}
+              {treg
+                ? t(
+                    'Set the LMM price for each tool. Upstream treg usage may still cost money; connecting does not authorize calls.'
+                  )
+                : t(
+                    'Choose free or paid pricing for each tool. Charges apply only to successful calls; failed and expired calls are refunded.'
+                  )}
             </p>
             <p className='text-muted-foreground max-w-[70ch] text-sm leading-6'>
               {t(
@@ -1130,6 +1343,7 @@ export function ServiceEditor({
                 !selected.length ||
                 hasInvalidPrice ||
                 !inspectVersion ||
+                (Boolean(treg) && (!checkSupported || !tregVerified)) ||
                 (requiresReview && !reviewedChanges)
               }
             >

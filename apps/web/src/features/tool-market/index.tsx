@@ -67,6 +67,7 @@ import { ServiceEditor } from './service-editor'
 import { parseMarketServiceID } from './service-link'
 import { MarketNextStep, MarketUsageGuide } from './setup-guide'
 import { CallDialog, CallResult, GrantDialog } from './tool-actions'
+import type { TregSurface } from './treg-connection'
 import {
   usagePriceLabel,
   usageQuantityLabel,
@@ -165,6 +166,7 @@ function ToolMarketWorkspace({
   } | null>(null)
   const [editor, setEditor] = useState(false)
   const [editorInitial, setEditorInitial] = useState<MarketDetail>()
+  const [editorTregSurface, setEditorTregSurface] = useState<TregSurface>()
   const [client, setClient] = useState('web-market')
   const [grantTool, setGrantTool] = useState<MarketTool | null>(null)
   const [callTool, setCallTool] = useState<{
@@ -361,6 +363,7 @@ function ToolMarketWorkspace({
     (!client.startsWith('oauth:') ||
       (oauthClients.isSuccess && eligibleOAuthIDs.includes(client)))
   const openPublisher = () => {
+    setEditorTregSurface(undefined)
     setSelected(null)
     setEditorInitial(undefined)
     setEditor(true)
@@ -384,6 +387,7 @@ function ToolMarketWorkspace({
       setSelected({ id: source.service.id, mode: 'draft' })
       return
     }
+    setEditorTregSurface(undefined)
     setEditorInitial(source)
     setEditor(true)
   }
@@ -466,6 +470,16 @@ function ToolMarketWorkspace({
         <Button
           variant='outline'
           className='min-h-11'
+          onClick={() => {
+            openPublisher()
+            setEditorTregSurface('team')
+          }}
+        >
+          {t('Connect treg')}
+        </Button>
+        <Button
+          variant='outline'
+          className='min-h-11'
           onClick={() => chooseTab('connections')}
         >
           {t('Connect MCP')}
@@ -545,8 +559,9 @@ function ToolMarketWorkspace({
           )}
           {editor ? (
             <ServiceEditor
-              key={selected?.id ?? 'new'}
+              key={selected?.id ?? editorTregSurface ?? 'new'}
               initial={editorInitial}
+              initialTregSurface={editorTregSurface}
               feeBps={config.data?.fee_bps}
               onCancel={() => setEditor(false)}
               onSaved={(id) => {

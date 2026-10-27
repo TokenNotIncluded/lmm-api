@@ -66,7 +66,7 @@ export function ChannelsHealthStrip() {
 
   const opsQuery = useQuery({
     queryKey: ['channel-ops'],
-    queryFn: getChannelOps,
+    queryFn: () => getChannelOps(),
     retry: false,
     staleTime: 5 * 60 * 1000,
   })

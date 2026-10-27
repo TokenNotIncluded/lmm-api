@@ -49,16 +49,14 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 
 import './settings-workspace.css'
 import { Button } from '@/components/ui/button'
+import { useCapabilityFreshness } from '@/hooks/use-capability-freshness'
 
-import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import {
   settingsUseRestrictedView,
   writableOptionKey,
 } from '../hooks/option-writability'
-import type {
-  SystemOption,
-  SystemOptionsCapabilities,
-} from '../types'
+import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
+import type { SystemOption, SystemOptionsCapabilities } from '../types'
 import { lazyNamedSection } from '../utils/lazy-section'
 import { getSettingsErrorMessage } from '../utils/settings-error-message'
 import { SettingsPageProvider } from './settings-page-context'
@@ -91,6 +89,7 @@ type SettingsPageProps<
 type SettingsPageFrameProps = {
   title: ReactNode
   children: ReactNode
+  writesBlocked?: boolean
 }
 
 export function SettingsPageFrame(props: SettingsPageFrameProps) {
@@ -124,6 +123,7 @@ export function SettingsPageFrame(props: SettingsPageFrameProps) {
           <SettingsSearch />
           <div
             ref={setActionsContainer}
+            inert={props.writesBlocked}
             className='flex flex-wrap items-center justify-end gap-2'
           />
         </SectionPageLayout.Actions>
@@ -136,6 +136,7 @@ export function SettingsPageFrame(props: SettingsPageFrameProps) {
               </span>
               <div
                 ref={setFormActionsContainer}
+                inert={props.writesBlocked}
                 className='settings-save-target flex flex-wrap items-center justify-end gap-2'
               />
             </div>
@@ -253,12 +254,9 @@ function LimitedSettings({
         <LimitedAnnouncementsSection
           enabled={(() => {
             const enabledOption = options.find(
-              (option) =>
-                option.key === 'console_setting.announcements_enabled'
+              (option) => option.key === 'console_setting.announcements_enabled'
             )
-            return enabledOption
-              ? enabledOption.value === 'true'
-              : undefined
+            return enabledOption ? enabledOption.value === 'true' : undefined
           })()}
           enabledWritable={false}
           data={announcementOption.value}
@@ -293,8 +291,10 @@ export function SettingsPage<
   resolveSettings,
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
-  const { data, isLoading, isError, error, isFetching, refetch } =
-    useSystemOptions()
+  const optionsQuery = useSystemOptions()
+  const { data, isLoading, isError, error, isFetching, refetch } = optionsQuery
+  const phase = useCapabilityFreshness(optionsQuery)
+  const writesBlocked = phase !== 'fresh'
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = useParams({ from: routePath as any })
   const activeSection = (params?.section ?? defaultSection) as TSectionId
@@ -358,7 +358,10 @@ export function SettingsPage<
     )
 
   return (
-    <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+    <SettingsPageFrame
+      title={t(sectionMeta.titleKey)}
+      writesBlocked={writesBlocked}
+    >
       {isError ? (
         <Alert className='mb-4'>
           <AlertTitle>{t('Unable to refresh settings')}</AlertTitle>
@@ -386,9 +389,38 @@ export function SettingsPage<
           </AlertDescription>
         </Alert>
       ) : null}
-      <Suspense fallback={<LoadingState message={t(loadingMessage)} />}>
-        {sectionContent}
-      </Suspense>
+      {writesBlocked && !isError ? (
+        <Alert className='mb-4' role='status'>
+          <AlertDescription>
+            <p>
+              {t(
+                'Capability information is not current. Refresh before making changes.'
+              )}
+            </p>
+            <Button
+              type='button'
+              variant='outline'
+              className='mt-2 min-h-11'
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              {t('Refresh capabilities')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {writesBlocked && isError ? (
+        <p className='text-muted-foreground mb-4 text-sm'>
+          {t(
+            'Capability information is not current. Refresh before making changes.'
+          )}
+        </p>
+      ) : null}
+      <fieldset disabled={writesBlocked} className='min-w-0 border-0 p-0'>
+        <Suspense fallback={<LoadingState message={t(loadingMessage)} />}>
+          {sectionContent}
+        </Suspense>
+      </fieldset>
     </SettingsPageFrame>
   )
 }

@@ -15,6 +15,7 @@ const pluginSchema = z.object({
   available: z.boolean(),
   installed: z.boolean(),
   enabled: z.boolean(),
+  registration_sha256: z.string(),
 })
 
 const pluginListSchema = z.object({

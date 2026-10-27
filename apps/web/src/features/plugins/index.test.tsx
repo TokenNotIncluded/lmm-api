@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
 
+import { AxiosError } from 'axios'
 import { Window } from 'happy-dom'
 
 const dom = new Window()
@@ -129,6 +130,7 @@ test('administrator sees plugin state and refreshes with a scoped read only requ
             name: 'store',
             version: '1.0.0',
             api_version: 1,
+            registration_sha256: 'a'.repeat(64),
             available: true,
             installed: true,
             enabled: calls === 1,
@@ -143,7 +145,7 @@ test('administrator sees plugin state and refreshes with a scoped read only requ
   assert.match(container.textContent ?? '', /Installed/)
   assert.match(
     container.textContent ?? '',
-    /Capability details are not reported by this API/
+    /Registry entries are declarations, not service health checks/
   )
   assert.deepEqual(
     [...container.querySelectorAll('button')].map(
@@ -183,5 +185,66 @@ test('non-admin cannot query, and invalid API responses render an error', async 
     () => container.textContent?.includes('Oops! Something went wrong') === true
   )
   assert.equal(calls, 1)
+  assert.match(
+    container.textContent ?? '',
+    /The plugin response does not match this release/
+  )
   assert.doesNotMatch(container.textContent ?? '', /No data available/)
+})
+
+test('failed refresh retains the last registry as stale and distinguishes an upstream 503', async () => {
+  login(100)
+  let calls = 0
+  api.defaults.adapter = async (config) => {
+    if (++calls > 1) {
+      throw new AxiosError(
+        'unavailable',
+        'ERR_BAD_RESPONSE',
+        config,
+        undefined,
+        {
+          config,
+          headers: {},
+          status: 503,
+          statusText: 'Unavailable',
+          data: { success: false, message: 'synthetic outage' },
+        }
+      )
+    }
+    return {
+      config,
+      headers: {},
+      status: 200,
+      statusText: 'OK',
+      data: {
+        success: true,
+        data: [
+          {
+            name: 'toolmarket',
+            version: '1.0.0',
+            api_version: 1,
+            registration_sha256: 'b'.repeat(64),
+            available: true,
+            installed: true,
+            enabled: true,
+          },
+        ],
+      },
+    }
+  }
+  const container = await mount()
+  await until(() => container.textContent?.includes('toolmarket') === true)
+  assert.match(container.textContent ?? '', /Registration fingerprint/)
+  assert.match(container.textContent ?? '', /Route configuration/)
+  await act(async () => container.querySelector('button')?.click())
+  await until(
+    () =>
+      container.textContent?.includes('Plugin status is not current') === true
+  )
+  assert.match(container.textContent ?? '', /toolmarket/)
+  assert.match(
+    container.textContent ?? '',
+    /extension service is unavailable \(503\)/
+  )
+  assert.equal(calls, 2)
 })

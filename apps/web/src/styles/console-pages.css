@@ -164,6 +164,9 @@ For commercial licensing, please contact support@quantumnous.com
   .console-editorial .console-page-actions {
     justify-content: flex-start;
   }
+  .console-editorial .console-page-actions > :is(button, a) {
+    min-height: 2.75rem;
+  }
   .console-editorial .console-page-heading {
     align-items: flex-start;
   }
@@ -214,9 +217,8 @@ For commercial licensing, please contact support@quantumnous.com
   padding-inline: 0.75rem;
 }
 
-.console-editorial .console-page h1,
-.console-editorial .console-page h2 {
-  font-family: var(--font-sans);
+.console-editorial .console-page :is(h1, h2, h3) {
+  font-family: var(--font-body);
 }
 
 /* Balance restrictions remain visible without pushing both order views away. */

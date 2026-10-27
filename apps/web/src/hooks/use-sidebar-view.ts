@@ -22,7 +22,9 @@ import { useTranslation } from 'react-i18next'
 
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
 import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import { useRuntimeCapabilities } from '@/context/runtime-capabilities-context'
 import { ROLE } from '@/lib/roles'
+import { applyRuntimeNavigation } from '@/lib/runtime-capabilities'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useSidebarConfig } from './use-sidebar-config'
@@ -50,6 +52,7 @@ export function useSidebarView(): ResolvedSidebarView {
   const userRole = useAuthStore((s) => s.auth.user?.role)
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
+  const runtime = useRuntimeCapabilities()
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
     const role = userRole ?? ROLE.GUEST
@@ -77,6 +80,11 @@ export function useSidebarView(): ResolvedSidebarView {
   return {
     key: ROOT_VIEW_KEY,
     view: null,
-    navGroups: rootNavGroups,
+    navGroups: runtime?.hasPluginInventoryAccess
+      ? applyRuntimeNavigation(rootNavGroups, runtime.plugins, {
+          unknown: t('Capability unknown'),
+          unavailable: t('Capability unavailable'),
+        })
+      : rootNavGroups,
   }
 }

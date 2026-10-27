@@ -1,5 +1,5 @@
 /* Copyright (C) 2026 LIghtJUNction. SPDX-License-Identifier: AGPL-3.0-or-later */
-import { useQuery } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 import { useTranslation } from 'react-i18next'
 import { ZodError } from 'zod'
 
@@ -8,34 +8,46 @@ import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useRuntimeCapabilities } from '@/context/runtime-capabilities-context'
 import {
   readNativeUsersScope,
   type NativeUsersScope,
 } from '@/features/native-users/access'
+import { useCapabilityFreshness } from '@/hooks/use-capability-freshness'
 import { getServerErrorMessage } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getPlugins } from './api'
+import { usePlugins } from './use-plugins'
 
 // @context-fold begin plugin-inventory
 function PluginInventory({ scope }: { scope: NativeUsersScope }) {
   const { t } = useTranslation()
-  const query = useQuery({
-    queryKey: ['extension-plugins', scope.userId, scope.sessionId, scope.role],
-    queryFn: ({ signal }) => getPlugins(scope, signal),
-    retry: false,
-  })
+  const runtime = useRuntimeCapabilities()
+  const localQuery = usePlugins(runtime ? undefined : scope)
+  const query = runtime?.plugins ?? localQuery
+  const phase = useCapabilityFreshness(query)
+  const status = isAxiosError(query.error)
+    ? query.error.response?.status
+    : undefined
+  const errorMessage =
+    query.error instanceof ZodError
+      ? t('The plugin response does not match this release.')
+      : status === 401
+        ? t('Your session has expired. Sign in again.')
+        : status === 403
+          ? t('You do not have permission to read the plugin registry.')
+          : status === 503
+            ? t('The extension service is unavailable (503).')
+            : (getServerErrorMessage(query.error) ??
+              t(
+                'The service is temporarily unavailable. Please try again later.'
+              ))
 
   if (query.isPending) return <p>{t('Loading...')}</p>
-  if (query.isError) {
+  if (!query.data) {
     return (
       <ErrorState
-        description={
-          (query.error instanceof ZodError
-            ? null
-            : getServerErrorMessage(query.error)) ??
-          t('The service is temporarily unavailable. Please try again later.')
-        }
+        description={errorMessage}
         onRetry={() => void query.refetch()}
       />
     )
@@ -44,8 +56,25 @@ function PluginInventory({ scope }: { scope: NativeUsersScope }) {
   const enabled = query.data.filter((plugin) => plugin.enabled)
   return (
     <div className='min-w-0 space-y-5'>
+      {phase !== 'fresh' && (
+        <Alert role='status'>
+          <AlertDescription>
+            <p>
+              {t('Plugin status is not current. Refresh before relying on it.')}
+            </p>
+            {query.isError && <p>{errorMessage}</p>}
+          </AlertDescription>
+        </Alert>
+      )}
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <Badge variant='outline'>{t('Read only')}</Badge>
+        <div className='min-w-0 space-y-2'>
+          <Badge variant='outline'>{t('Read only')}</Badge>
+          <p className='text-muted-foreground text-xs tabular-nums'>
+            {t('Last successful read: {{time}}', {
+              time: new Date(query.dataUpdatedAt).toLocaleString(),
+            })}
+          </p>
+        </div>
         <Button
           variant='outline'
           className='min-h-11'
@@ -96,11 +125,19 @@ function PluginInventory({ scope }: { scope: NativeUsersScope }) {
                   {t('Version')} {plugin.version} · {t('API version')}{' '}
                   {plugin.api_version}
                 </p>
+                <details className='mt-1 text-xs'>
+                  <summary className='text-muted-foreground flex min-h-11 cursor-pointer items-center focus-visible:outline-2 focus-visible:outline-offset-2'>
+                    {t('Registration fingerprint')}
+                  </summary>
+                  <code className='block [overflow-wrap:anywhere]'>
+                    {plugin.registration_sha256}
+                  </code>
+                </details>
               </div>
               <dl className='grid min-w-0 grid-cols-2 gap-3 text-sm sm:grid-cols-3'>
                 <div>
                   <dt className='text-muted-foreground'>
-                    {t('Module availability')}
+                    {t('Registered in this instance')}
                   </dt>
                   <dd>
                     {plugin.available ? t('Available') : t('Unavailable')}
@@ -115,7 +152,9 @@ function PluginInventory({ scope }: { scope: NativeUsersScope }) {
                   </dd>
                 </div>
                 <div>
-                  <dt className='text-muted-foreground'>{t('Status')}</dt>
+                  <dt className='text-muted-foreground'>
+                    {t('Route configuration')}
+                  </dt>
                   <dd>{plugin.enabled ? t('Enabled') : t('Disabled')}</dd>
                 </div>
               </dl>
@@ -124,7 +163,12 @@ function PluginInventory({ scope }: { scope: NativeUsersScope }) {
         </div>
       </section>
       <p className='text-muted-foreground text-sm'>
-        {t('Capability details are not reported by this API.')}
+        {t('Registry entries are declarations, not service health checks.')}
+      </p>
+      <p className='text-muted-foreground text-sm'>
+        {t(
+          'Lifecycle changes are unavailable: this service does not provide permitted actions or an atomic change receipt.'
+        )}
       </p>
     </div>
   )

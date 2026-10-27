@@ -88,7 +88,11 @@ function submitForm(container: HTMLElement) {
   form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
 }
 
-async function renderEditor(initial?: MarketDetail, feeBps = 1000) {
+async function renderEditor(
+  initial?: MarketDetail,
+  feeBps = 1000,
+  initialTregSurface?: import('./treg-connection').TregSurface
+) {
   resetMarketCurrencyTest()
   useWalletCurrencyPreferenceStore.getState().setPreference('CNY')
   const client = new QueryClient({
@@ -107,6 +111,7 @@ async function renderEditor(initial?: MarketDetail, feeBps = 1000) {
           <I18nextProvider i18n={i18n}>
             <ServiceEditor
               initial={displayedInitial}
+              initialTregSurface={initialTregSurface}
               units={500000}
               feeBps={displayedFeeBps}
               onSaved={(id) => saved.push(id)}
@@ -1293,5 +1298,373 @@ test('provider switching clears secrets and locks endpoints without issuing a pr
   } finally {
     await view.dispose()
     api.defaults.adapter = originalAdapter
+  }
+})
+
+// Component-level adapter fixtures exercise our UI/API boundary. They do not
+// establish that an external treg account, browser, or provider call works.
+function tregRequests() {
+  const originalAdapter = api.defaults.adapter
+  const requests: { url: string; input: Record<string, unknown> }[] = []
+  const state = {
+    check: {
+      provider: 'treg',
+      surface: 'team',
+      authentication: 'verified',
+      status: 'verified',
+    } as unknown,
+    supported: true,
+    discoveryCode: '',
+    definitions: ['catalog_search', 'call_media', 'my_tools'].map((name) => ({
+      name,
+      description: name,
+      input_schema: { type: 'object' },
+      permissions: ['network'],
+      price_quota: 0,
+    })),
+  }
+  api.defaults.adapter = async (config) => {
+    const url = config.url ?? ''
+    const input =
+      typeof config.data === 'string' ? JSON.parse(config.data) : config.data
+    let data: unknown
+    if (url === '/api/tool-market/config') {
+      data = {
+        provider_presets: [],
+        capabilities: { treg_connection_check: state.supported },
+      }
+    } else if (config.method === 'get' && url.endsWith('/credentials')) {
+      data = { mode: 'bearer', configured: true, updated_at: 1 }
+    } else {
+      requests.push({ url, input })
+      if (url.endsWith('/connection/check')) data = state.check
+      else if (url.endsWith('/inspect')) {
+        if (state.discoveryCode) {
+          return {
+            config,
+            status: 502,
+            statusText: 'Bad Gateway',
+            headers: {},
+            data: { success: false, code: state.discoveryCode },
+          }
+        }
+        data = state.definitions
+      } else if (url.endsWith('/services') || url.endsWith('/draft')) {
+        data = {
+          ...initial.service,
+          id: 'service-treg',
+          draft_version_id: 'version-treg',
+        }
+      } else if (url.endsWith('/credentials')) {
+        data = { mode: 'bearer', configured: true, updated_at: 2 }
+      } else assert.fail(`Unexpected treg request: ${config.method} ${url}`)
+    }
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true, data },
+    }
+  }
+  return {
+    state,
+    requests,
+    restore: () => {
+      api.defaults.adapter = originalAdapter
+    },
+  }
+}
+
+test('treg starts with full team and a surface change clears its key and verification', async () => {
+  const transport = tregRequests()
+  const view = await renderEditor(undefined, 1000, 'team')
+  try {
+    const endpoint =
+      view.container.querySelector<HTMLInputElement>('#market-endpoint')!
+    assert.equal(endpoint.value, 'https://treg.to/mcp/')
+    assert.equal(
+      view.container.querySelector<HTMLSelectElement>('#market-authentication')
+        ?.value,
+      'bearer'
+    )
+    assert.equal(
+      view.container.querySelector<HTMLInputElement>('#market-secret')?.type,
+      'password'
+    )
+    assert.equal(view.container.querySelector('#market-multiplier'), null)
+    await view.input('#market-secret', 'fixture-upstream-key')
+    await view.click('Verify treg credential')
+    assert.match(
+      view.container.textContent ?? '',
+      /treg team credential verified/
+    )
+    assert.deepEqual(
+      transport.requests.map((request) => request.url),
+      ['/api/tool-market/connection/check']
+    )
+    await view.select('#market-treg-surface', 'catalog')
+    assert.equal(endpoint.value, 'https://treg.to/mcp/v2/')
+    assert.equal(
+      view.container.querySelector<HTMLInputElement>('#market-secret')?.value,
+      ''
+    )
+    assert.doesNotMatch(
+      view.container.textContent ?? '',
+      /treg team credential verified/
+    )
+    assert.match(
+      view.container.textContent ?? '',
+      /Media generation and custom team tools are not included/
+    )
+    assert.equal(view.button('Save draft').disabled, true)
+    assert.equal(
+      transport.requests.length,
+      1,
+      'surface selection does not contact or call treg'
+    )
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('treg verifies before discovery and saves every returned tool through existing credential storage', async () => {
+  const transport = tregRequests()
+  const view = await renderEditor(undefined, 1000, 'team')
+  const secret = 'fixture-treg-key-no-real-account'
+  try {
+    await view.input('#market-secret', secret)
+    await view.click('Read tool definitions')
+    assert.deepEqual(
+      transport.requests.map((request) => request.url),
+      ['/api/tool-market/connection/check', '/api/tool-market/inspect']
+    )
+    assert.deepEqual(transport.requests[0].input, {
+      provider: 'treg',
+      endpoint: 'https://treg.to/mcp/',
+      authentication: { mode: 'bearer', secret },
+    })
+    assert.deepEqual(transport.requests[1].input, {
+      endpoint: 'https://treg.to/mcp/',
+      authentication: { mode: 'bearer', secret },
+    })
+    assert.equal(view.button('Save draft').disabled, false)
+    assert.match(view.container.textContent ?? '', /Discovered 3 treg tools/)
+    assert.match(
+      view.container.textContent ?? '',
+      /Upstream treg usage may still cost money/
+    )
+    assert.equal(
+      JSON.stringify(view.client.getQueryCache().getAll()).includes(secret),
+      false
+    )
+    assert.equal(view.client.getMutationCache().getAll().length, 0)
+    assert.equal(JSON.stringify(localStorage).includes(secret), false)
+    await view.click('Save draft')
+    const draft = transport.requests.find((request) =>
+      request.url.endsWith('/services')
+    )!
+    assert.deepEqual(
+      (draft.input.tools as DraftInput['tools']).map((tool) => tool.name),
+      ['catalog_search', 'call_media', 'my_tools']
+    )
+    assert.equal(JSON.stringify(draft.input).includes(secret), false)
+    const credentials = transport.requests.find((request) =>
+      request.url.endsWith('/credentials')
+    )!
+    assert.deepEqual(credentials.input, {
+      version_id: 'version-treg',
+      mode: 'bearer',
+      secret,
+    })
+    assert.equal(
+      view.container.querySelector<HTMLInputElement>('#market-secret')?.value,
+      ''
+    )
+    assert.deepEqual(view.saved, ['service-treg'])
+    assert.equal(
+      transport.requests.some((request) =>
+        /invoke|tools\/call/.test(request.url)
+      ),
+      false
+    )
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('treg rejects auth, network, timeout and malformed checks without trusting a public tool list', async () => {
+  const transport = tregRequests()
+  const view = await renderEditor(undefined, 1000, 'team')
+  try {
+    await view.input('#market-secret', 'fixture-key')
+    for (const [status, expected] of [
+      ['unauthorized', /rejected this credential \(401\)/],
+      ['forbidden', /refused access \(403\)/],
+      ['network_error', /Could not reach treg/],
+      ['timeout', /treg verification timed out/],
+      ['team_required', /does not identify a team/],
+    ] as const) {
+      transport.state.check = {
+        provider: 'treg',
+        surface: 'team',
+        authentication: 'not_verified',
+        status,
+      }
+      await view.click('Read tool definitions')
+      assert.match(view.container.textContent ?? '', expected)
+      assert.equal(view.button('Save draft').disabled, true)
+    }
+    transport.state.check = {
+      provider: 'treg',
+      surface: 'team',
+      authentication: 'not_verified',
+      status: 'verified',
+    }
+    await view.click('Read tool definitions')
+    assert.match(
+      view.container.textContent ?? '',
+      /invalid verification response/
+    )
+    assert.equal(
+      transport.requests.some((request) => request.url.endsWith('/inspect')),
+      false
+    )
+    assert.equal(
+      transport.requests.some((request) => request.url.endsWith('/services')),
+      false
+    )
+    assert.doesNotMatch(
+      view.container.textContent ?? '',
+      /treg team credential verified/
+    )
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('empty treg discovery is visible and changing the key invalidates a successful check', async () => {
+  const transport = tregRequests()
+  transport.state.definitions = []
+  const view = await renderEditor(undefined, 1000, 'team')
+  try {
+    await view.input('#market-secret', 'fixture-key')
+    await view.click('Read tool definitions')
+    assert.match(
+      view.container.textContent ?? '',
+      /treg connection returned no tools/
+    )
+    assert.match(
+      view.container.textContent ?? '',
+      /treg team credential verified/
+    )
+    assert.equal(view.button('Save draft').disabled, true)
+    await view.input('#market-secret', 'replacement-fixture-key')
+    assert.doesNotMatch(
+      view.container.textContent ?? '',
+      /treg team credential verified/
+    )
+    assert.doesNotMatch(
+      view.container.textContent ?? '',
+      /treg connection returned no tools/
+    )
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('missing treg verification capability leaves preparation available but blocks network actions', async () => {
+  const transport = tregRequests()
+  transport.state.supported = false
+  const view = await renderEditor(undefined, 1000, 'team')
+  try {
+    assert.equal(view.button('Verify treg credential').disabled, true)
+    assert.equal(view.button('Read tool definitions').disabled, true)
+    assert.equal(view.button('Save draft').disabled, true)
+    assert.match(
+      view.container.textContent ?? '',
+      /does not support treg credential verification/
+    )
+    assert.deepEqual(transport.requests, [])
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('treg rechecks saved masked credentials by reference and never forwards them across surfaces', async () => {
+  const transport = tregRequests()
+  const saved = {
+    ...initial,
+    version: { ...initial.version, endpoint: 'https://treg.to/mcp/' },
+  }
+  const view = await renderEditor(saved)
+  try {
+    assert.equal(
+      view.container.querySelector<HTMLInputElement>('#market-secret')?.value,
+      ''
+    )
+    await view.click('Verify treg credential')
+    assert.deepEqual(transport.requests[0].input, {
+      provider: 'treg',
+      endpoint: 'https://treg.to/mcp/',
+      service_id: initial.service.id,
+      version_id: initial.version.id,
+    })
+    await view.select('#market-treg-surface', 'catalog')
+    await view.click('Verify treg credential')
+    assert.equal(
+      transport.requests.length,
+      1,
+      'old stored credentials cannot be copied to the other endpoint'
+    )
+    assert.match(
+      view.container.textContent ?? '',
+      /Enter a credential for this endpoint/
+    )
+    assert.equal(view.button('Save draft').disabled, true)
+  } finally {
+    await view.dispose()
+    transport.restore()
+  }
+})
+
+test('treg MCP discovery failures stay distinct from a successful identity check', async () => {
+  const transport = tregRequests()
+  const view = await renderEditor(undefined, 1000, 'team')
+  try {
+    await view.input('#market-secret', 'fixture-key')
+    for (const [code, expected] of [
+      [
+        'TOOL_MARKET_REMOTE_UNAUTHORIZED',
+        /MCP rejected this credential \(401\)/,
+      ],
+      ['TOOL_MARKET_REMOTE_FORBIDDEN', /MCP refused tool discovery \(403\)/],
+      ['TOOL_MARKET_REMOTE_TIMEOUT', /tool discovery timed out/],
+      [
+        'TOOL_MARKET_REMOTE_CONNECTION',
+        /Could not reach the treg MCP endpoint/,
+      ],
+    ] as const) {
+      transport.state.discoveryCode = code
+      await view.click('Read tool definitions')
+      assert.match(view.container.textContent ?? '', expected)
+      assert.match(
+        view.container.textContent ?? '',
+        /treg team credential verified/
+      )
+      assert.equal(view.button('Save draft').disabled, true)
+    }
+    assert.equal(
+      transport.requests.some((request) => request.url.endsWith('/services')),
+      false
+    )
+  } finally {
+    await view.dispose()
+    transport.restore()
   }
 })

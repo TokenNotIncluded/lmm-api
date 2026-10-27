@@ -88,11 +88,11 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
               <div className='mb-2 sm:mb-3'>{breadcrumb}</div>
             )}
             <div className='console-page-heading flex flex-wrap items-center justify-between gap-x-4 gap-y-3'>
-              <div className='min-w-0 flex-1'>
+              <div className='w-full min-w-0 sm:w-auto sm:flex-1'>
                 <h1 className='console-page-title break-words'>{title}</h1>
               </div>
               {actions != null && (
-                <div className='console-page-actions flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2'>
+                <div className='console-page-actions flex w-full max-w-full min-w-0 shrink-0 flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end'>
                   {actions}
                 </div>
               )}
@@ -104,8 +104,8 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
           data-mobile-scroll-root=''
           className={
             props.fixedContent
-              ? 'console-section-content min-h-0 flex-1 overflow-auto px-4 pt-2 pb-6 sm:overflow-hidden sm:px-6 sm:pb-8'
-              : 'console-section-content min-h-0 flex-1 overflow-auto px-4 pt-2 pb-6 sm:px-6 sm:pb-8'
+              ? 'console-section-content min-h-0 min-w-0 flex-1 overflow-auto px-4 pt-2 pb-6 sm:overflow-hidden sm:px-6 sm:pb-8'
+              : 'console-section-content min-h-0 min-w-0 flex-1 overflow-auto px-4 pt-2 pb-6 sm:px-6 sm:pb-8'
           }
         >
           {content}
