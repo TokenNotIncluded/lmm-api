@@ -37,7 +37,7 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
-import { parseTags } from '../lib/filters'
+import { filterByQuotaType, parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
@@ -193,17 +193,17 @@ export function PricingSidebar(props: PricingSidebarProps) {
     {
       value: QUOTA_TYPES.TOKEN,
       label: quotaTypeLabels[QUOTA_TYPES.TOKEN],
-      count: countBy(props.models, (model) => model.quota_type === 0),
+      count: filterByQuotaType(props.models, QUOTA_TYPES.TOKEN).length,
     },
     {
       value: QUOTA_TYPES.REQUEST,
       label: quotaTypeLabels[QUOTA_TYPES.REQUEST],
-      count: countBy(props.models, (model) => model.quota_type === 1),
+      count: filterByQuotaType(props.models, QUOTA_TYPES.REQUEST).length,
     },
     {
       value: QUOTA_TYPES.UPSTREAM_COST,
       label: quotaTypeLabels[QUOTA_TYPES.UPSTREAM_COST],
-      count: countBy(props.models, (model) => model.quota_type === 3),
+      count: filterByQuotaType(props.models, QUOTA_TYPES.UPSTREAM_COST).length,
     },
   ]
 

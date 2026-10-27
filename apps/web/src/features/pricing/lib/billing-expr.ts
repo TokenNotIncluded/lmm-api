@@ -658,6 +658,117 @@ function parseRestrictedExpr(exprStr: string): ExprNode {
   return new RestrictedExprParser(tokenizeExpr(body)).parse()
 }
 
+/** Classify tiered billing outputs conservatively. */
+export function classifyBillingExpression(
+  expression: string
+): 'token' | 'request' | null {
+  try {
+    if (stripExprVersion(expression.trim()).version !== 1) return null
+    const root = parseRestrictedExpr(expression)
+    const allowedVariables = new Set(BILLING_VARS.map((item) => item.key))
+
+    const hasTier = (node: ExprNode): boolean => {
+      if (node.kind === 'call') return node.name === 'tier' || node.args.some(hasTier)
+      if (node.kind === 'binary') return hasTier(node.left) || hasTier(node.right)
+      if (node.kind === 'unary') return hasTier(node.value)
+      if (node.kind === 'conditional') {
+        return hasTier(node.test) || hasTier(node.consequent) || hasTier(node.alternate)
+      }
+      return false
+    }
+
+    const isConditionValue = (node: ExprNode): boolean => {
+      if (node.kind === 'literal') return true
+      if (node.kind === 'identifier' && node.name === 'nil') return true
+      if (node.kind === 'call' && (TIME_FUNCS.includes(node.name as TimeFunc) || ['param', 'header'].includes(node.name))) {
+        return node.args.length === 1 && node.args[0].kind === 'literal' && typeof node.args[0].value === 'string'
+      }
+      return isNumeric(node)
+    }
+
+    const isCondition = (node: ExprNode): boolean => {
+      if (node.kind === 'binary') {
+        if (['&&', '||'].includes(node.op)) return isCondition(node.left) && isCondition(node.right)
+        if (!['==', '!=', '<', '<=', '>', '>='].includes(node.op)) return false
+        return isConditionValue(node.left) && isConditionValue(node.right)
+      }
+      if (node.kind === 'unary' && node.op === '!') return isCondition(node.value)
+      if (node.kind === 'literal') return typeof node.value === 'boolean'
+      if (node.kind === 'call' && node.name === 'has') {
+        return node.args.length === 2 && isConditionValue(node.args[0]) && isConditionValue(node.args[1])
+      }
+      if (node.kind === 'call' && TIME_FUNCS.includes(node.name as TimeFunc)) {
+        return node.args.length === 1 && node.args[0].kind === 'literal' && typeof node.args[0].value === 'string'
+      }
+      return isNumeric(node)
+    }
+
+    const isNumeric = (node: ExprNode): boolean => {
+      if (node.kind === 'literal') return typeof node.value === 'number' && Number.isFinite(node.value)
+      if (node.kind === 'identifier') return allowedVariables.has(node.name)
+      if (node.kind === 'unary') return node.op !== '!' && isNumeric(node.value)
+      if (node.kind === 'binary') {
+        return !['&&', '||', '==', '!=', '<', '<=', '>', '>='].includes(node.op) && isNumeric(node.left) && isNumeric(node.right)
+      }
+      if (node.kind === 'conditional') return isCondition(node.test) && isNumeric(node.consequent) && isNumeric(node.alternate)
+      if (node.kind !== 'call') return false
+      if (node.name === 'fixed') return node.args.length === 1 && numericLiteral(node.args[0]) !== null
+      if (node.name === 'tier') {
+        return node.args.length === 2 && node.args[0].kind === 'literal' && typeof node.args[0].value === 'string' && isNumeric(node.args[1])
+      }
+      if (node.name === 'min' || node.name === 'max') return node.args.length > 0 && node.args.every(isNumeric)
+      return ['abs', 'ceil', 'floor'].includes(node.name) && node.args.length === 1 && isNumeric(node.args[0])
+    }
+
+    const isMultiplier = (node: ExprNode): boolean => {
+      if (node.kind === 'literal') return typeof node.value === 'number' && Number.isFinite(node.value)
+      if (node.kind === 'unary') return node.op !== '!' && isMultiplier(node.value)
+      if (node.kind === 'binary') return ['+', '-', '*', '/', '%'].includes(node.op) && isMultiplier(node.left) && isMultiplier(node.right)
+      if (node.kind === 'conditional') return isCondition(node.test) && isMultiplier(node.consequent) && isMultiplier(node.alternate)
+      return false
+    }
+
+    const isPricingOutput = (node: ExprNode): 'token' | 'request' | null => {
+      if (node.kind === 'conditional') {
+        if (!isCondition(node.test)) return null
+        const yes = isPricingOutput(node.consequent)
+        const no = isPricingOutput(node.alternate)
+        if (!yes || !no) return null
+        return yes === 'token' || no === 'token' ? 'token' : 'request'
+      }
+      if (node.kind === 'call' && node.name === 'tier') {
+        if (node.args.length !== 2 || node.args[0].kind !== 'literal' || typeof node.args[0].value !== 'string') return null
+        const amount = node.args[1]
+        if (!isNumeric(amount)) return null
+        return amount.kind === 'call' && amount.name === 'fixed' ? 'request' : 'token'
+      }
+      if (node.kind === 'binary' && (node.op === '*' || node.op === '/')) {
+        if (isMultiplier(node.right)) return isPricingOutput(node.left)
+        if (node.op === '*' && isMultiplier(node.left)) return isPricingOutput(node.right)
+      }
+      if (!isNumeric(node)) return null
+      if (node.kind === 'call' && node.name === 'fixed') return 'request'
+      if (node.kind === 'unary') return isPricingOutput(node.value)
+      const operands = node.kind === 'binary'
+        ? [node.left, node.right]
+        : node.kind === 'call'
+          ? node.args
+          : null
+      if (operands) {
+        const categories = operands.map(isPricingOutput)
+        if (categories.some((category) => category === null)) return null
+        return categories.includes('token') ? 'token' : 'request'
+      }
+      return 'token'
+    }
+
+    if (!hasTier(root)) return null
+    return isPricingOutput(root)
+  } catch {
+    return null
+  }
+}
+
 function numericLiteral(node: ExprNode): number | null {
   if (node.kind === 'literal' && typeof node.value === 'number') {
     return node.value
