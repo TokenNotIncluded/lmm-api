@@ -103,6 +103,81 @@ func TestPluginManagerRejectsUnknownOrMismatchedInstall(t *testing.T) {
 	}
 }
 
+func TestPluginManagerInstallPersistenceFailurePreservesStateAndCanRetry(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "plugins.json")
+	manager, err := NewPluginManager(&pluginTestReloader{}, []Module{
+		pluginTestModule{"alpha", "1.0.0"},
+	}, statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Disable("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Uninstall("alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := manager.List()
+	if len(before) != 1 || before[0].Installed || before[0].Enabled || manager.IsEnabled("alpha") {
+		t.Fatalf("unexpected initial state: list=%+v enabled=%t", before, manager.IsEnabled("alpha"))
+	}
+	persisted, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	request := PluginInstallRequest{
+		Name: "alpha", Version: before[0].Version, APIVersion: before[0].APIVersion,
+		RegistrationSHA256: before[0].RegistrationSHA256,
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := manager.Install(request); err == nil {
+			t.Fatalf("attempt %d unexpectedly succeeded with an invalid state path", attempt)
+		}
+		if got := manager.List(); !reflect.DeepEqual(got, before) {
+			t.Fatalf("attempt %d changed plugin state: got=%+v want=%+v", attempt, got, before)
+		}
+		if manager.IsEnabled("alpha") {
+			t.Fatalf("attempt %d changed enabled state", attempt)
+		}
+	}
+
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, persisted, 0600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := manager.Install(request)
+	if err != nil {
+		t.Fatalf("retry after restoring state file: %v", err)
+	}
+	if !installed.Installed || installed.Enabled || manager.IsEnabled("alpha") {
+		t.Fatalf("unexpected successful retry result: %+v", installed)
+	}
+
+	reloaded, err := NewPluginManager(&pluginTestReloader{}, []Module{
+		pluginTestModule{"alpha", "1.0.0"},
+	}, statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.List(); len(got) != 1 || !got[0].Installed || got[0].Enabled {
+		t.Fatalf("persisted retry state=%+v", got)
+	}
+}
+
 func TestRouterReloadDisablesNewModuleRequests(t *testing.T) {
 	credential := []byte(strings.Repeat("router-test-", 4))
 	router, err := NewRouter([]Module{pluginTestModule{"alpha", "1.0.0"}, pluginTestModule{"zeta", "1.0.0"}}, credential)
