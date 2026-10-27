@@ -77,8 +77,9 @@ type Announcement = {
 }
 
 type AnnouncementsSectionProps = {
-  enabled: boolean
+  enabled?: boolean
   data: string
+  enabledWritable?: boolean
 }
 
 const announcementSchema = z.object({
@@ -149,11 +150,12 @@ const typeOptions = [
 export function AnnouncementsSection({
   enabled,
   data,
+  enabledWritable = true,
 }: AnnouncementsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
-  const [isEnabled, setIsEnabled] = useState(enabled)
+  const [isEnabled, setIsEnabled] = useState(enabled === true)
   const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showDialog, setShowDialog] = useState(false)
@@ -192,10 +194,11 @@ export function AnnouncementsSection({
   }, [data])
 
   useEffect(() => {
-    setIsEnabled(enabled)
+    setIsEnabled(enabled === true)
   }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
+    if (!enabledWritable) return
     try {
       const response = await updateOption.mutateAsync({
         key: 'console_setting.announcements_enabled',
@@ -378,12 +381,22 @@ export function AnnouncementsSection({
               {updateOption.isPending ? t('Saving...') : t('Save Settings')}
             </Button>
           </div>
-          <SettingsSwitchField
-            checked={isEnabled}
-            onCheckedChange={handleToggleEnabled}
-            label={t('Enabled')}
-            className='py-0'
-          />
+          {enabledWritable ? (
+            <SettingsSwitchField
+              checked={isEnabled}
+              onCheckedChange={handleToggleEnabled}
+              label={t('Enabled')}
+              className='py-0'
+            />
+          ) : (
+            <p className='text-muted-foreground text-sm' aria-readonly='true'>
+              {t('Enabled')}:{' '}
+              {enabled === undefined
+                ? t('Not reported')
+                : t(enabled ? 'Enabled' : 'Disabled')}{' '}
+              · {t('Read only')}
+            </p>
+          )}
         </div>
 
         <StaticDataTable

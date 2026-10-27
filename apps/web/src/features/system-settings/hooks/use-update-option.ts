@@ -39,7 +39,9 @@ import type {
   UpdateAssistantOptionsRequest,
   UpdateOptionRequest,
   UpdateOptionResponse,
+  SystemOptionsResponse,
 } from '../types'
+import { writableOptionKey } from './option-writability'
 import { showOptionUpdateToast } from '../utils/option-update-toast'
 import { getSettingsErrorMessage } from '../utils/settings-error-message'
 
@@ -199,12 +201,19 @@ export function useUpdateOption() {
   const queryClient = useQueryClient()
   return useMutation({
     retry: false,
-    mutationFn: async (request: UpdateOptionRequest) =>
-      acceptSettingsSave(
+    mutationFn: async (request: UpdateOptionRequest) => {
+      const options = queryClient.getQueryData<SystemOptionsResponse>([
+        'system-options',
+      ])
+      const key = writableOptionKey(options?.capabilities, request.key)
+      if (!key) throw new Error(i18next.t('Read only'))
+      const allowedRequest = { ...request, key }
+      return acceptSettingsSave(
         request.key === 'PublicCreditsPerUSD'
-          ? await updatePublicCreditUnitOption(request)
-          : await updateSystemOption(request, { silent: true })
-      ),
+          ? await updatePublicCreditUnitOption(allowedRequest)
+          : await updateSystemOption(allowedRequest, { silent: true })
+      )
+    },
     onSuccess: (data, variables) =>
       refreshAcknowledgedOptions(queryClient, data, [variables.key]),
     onError: reportSaveFailure,
@@ -215,8 +224,26 @@ export function useUpdateOptions() {
   const queryClient = useQueryClient()
   return useMutation({
     retry: false,
-    mutationFn: async (values: Record<string, string>) =>
-      acceptSettingsSave(await updateSystemOptions(values, { silent: true })),
+    mutationFn: async (values: Record<string, string>) => {
+      const options = queryClient.getQueryData<SystemOptionsResponse>([
+        'system-options',
+      ])
+      const allowedValues: Record<string, string> = {}
+      for (const [key, value] of Object.entries(values)) {
+        const allowedKey = writableOptionKey(options?.capabilities, key)
+        if (!allowedKey) throw new Error(i18next.t('Read only'))
+        if (
+          allowedValues[allowedKey] !== undefined &&
+          allowedValues[allowedKey] !== value
+        ) {
+          throw new Error(i18next.t('Read only'))
+        }
+        allowedValues[allowedKey] = value
+      }
+      return acceptSettingsSave(
+        await updateSystemOptions(allowedValues, { silent: true })
+      )
+    },
     onSuccess: (data, variables) =>
       refreshAcknowledgedOptions(queryClient, data, Object.keys(variables)),
     onError: reportSaveFailure,
@@ -227,10 +254,21 @@ export function useUpdateAssistantOptions() {
   const queryClient = useQueryClient()
   return useMutation({
     retry: false,
-    mutationFn: async (request: UpdateAssistantOptionsRequest) =>
-      acceptSettingsSave(
+    mutationFn: async (request: UpdateAssistantOptionsRequest) => {
+      const options = queryClient.getQueryData<SystemOptionsResponse>([
+        'system-options',
+      ])
+      if (
+        Object.keys(request.values).some(
+          (key) => !writableOptionKey(options?.capabilities, key)
+        )
+      ) {
+        throw new Error(i18next.t('Read only'))
+      }
+      return acceptSettingsSave(
         await updateAssistantSystemOptions(request, { silent: true })
-      ),
+      )
+    },
     onSuccess: (data, request) =>
       refreshAcknowledgedOptions(
         queryClient,
