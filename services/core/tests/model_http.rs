@@ -49,6 +49,16 @@ fn routes(
     request_fee: u64,
     policy: PayloadPolicy,
 ) -> Arc<lmm_core::routing::Router> {
+    routes_with_payloads(endpoint, cache_write, request_fee, &[policy])
+}
+
+fn routes_with_payloads(
+    endpoint: &str,
+    cache_write: u64,
+    request_fee: u64,
+    payloads: &[PayloadPolicy],
+) -> Arc<lmm_core::routing::Router> {
+    // @context-fold begin model-route-payload-fixture
     let prices = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
@@ -78,34 +88,47 @@ fn routes(
                     name: "allowed".into(),
                     enabled: true,
                 }],
-                upstreams: vec![UpstreamConfig {
-                    id: 1,
-                    endpoint: if endpoint.starts_with("https:") {
-                        endpoint.to_owned().try_into().unwrap()
-                    } else {
-                        Endpoint::local_loopback(endpoint.to_owned()).unwrap()
-                    },
-                    protocol: Protocol::OpenAiChat,
-                    credential: CredentialRef { id: 7, revision: 1 },
-                    enabled: true,
-                }],
+                upstreams: payloads
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| UpstreamConfig {
+                        id: (index + 1) as u64,
+                        endpoint: if endpoint.starts_with("https:") {
+                            endpoint.to_owned().try_into().unwrap()
+                        } else {
+                            Endpoint::local_loopback(endpoint.to_owned()).unwrap()
+                        },
+                        protocol: Protocol::OpenAiChat,
+                        credential: CredentialRef { id: 7, revision: 1 },
+                        enabled: true,
+                    })
+                    .collect(),
                 routes: vec![ModelRoute {
                     id: 1,
                     model: "local-model".into(),
                     group: "allowed".into(),
                     enabled: true,
                     speeds: vec![Speed::Standard],
-                    targets: vec![RouteTarget {
-                        id: 1,
-                        upstream_id: 1,
-                        upstream_model: "provider-model".into(),
-                        enabled: true,
-                        priority: 0,
-                        weight: 1,
-                        speeds: vec![Speed::Standard],
-                        payload: policy,
-                        timeout_ms: 5_000,
-                    }],
+                    targets: payloads
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &payload)| RouteTarget {
+                            id: (index + 1) as u64,
+                            upstream_id: (index + 1) as u64,
+                            upstream_model: if payload == PayloadPolicy::Passthrough {
+                                "local-model"
+                            } else {
+                                "provider-model"
+                            }
+                            .into(),
+                            enabled: true,
+                            priority: index.try_into().unwrap(),
+                            weight: 1,
+                            speeds: vec![Speed::Standard],
+                            payload,
+                            timeout_ms: 5_000,
+                        })
+                        .collect(),
                     failover: FailoverPolicy {
                         max_attempts: 1,
                         retry_on: vec![],
@@ -118,6 +141,7 @@ fn routes(
         )
         .unwrap(),
     )
+    // @context-fold end model-route-payload-fixture
 }
 
 fn gateway(
@@ -1132,6 +1156,30 @@ async fn idempotency_survives_gateway_reconstruction_and_changed_body(pool: PgPo
 }
 
 #[sqlx::test(migrations = false)]
+async fn passthrough_priority_does_not_mask_adapt_target(pool: PgPool) {
+    // @context-fold begin gateway-adapt-priority-test
+    let (_, ledger, _, key, key_id, account) = fixture(&pool, 1000).await;
+    let provider = Provider::start(true).await;
+    let gateway = gateway_with_routes(
+        &pool,
+        routes_with_payloads(
+            &provider.endpoint,
+            0,
+            0,
+            &[PayloadPolicy::Passthrough, PayloadPolicy::Adapt],
+        ),
+        key_id,
+    );
+    let (status, response) = call(&gateway, Some(&key), "/v1/chat/completions", chat(), None).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+    let balance = ledger.balance(account).await.unwrap();
+    assert_eq!((balance.available_units, balance.reserved_units), (951, 0));
+    balanced(&pool).await;
+    // @context-fold end gateway-adapt-priority-test
+}
+
+#[sqlx::test(migrations = false)]
 async fn unsupported_price_payload_and_stream_reject_without_funds_or_provider_use(pool: PgPool) {
     let (_, ledger, _, key, key_id, account) = fixture(&pool, 1000).await;
     let provider = Provider::start(true).await;
@@ -1141,12 +1189,13 @@ async fn unsupported_price_payload_and_stream_reject_without_funds_or_provider_u
         (0, 0, PayloadPolicy::Passthrough),
     ] {
         let gateway = gateway(&pool, &provider, key_id, cache_write, request_fee, payload);
-        assert_ne!(
-            call(&gateway, Some(&key), "/v1/chat/completions", chat(), None)
-                .await
-                .0,
-            StatusCode::OK
-        );
+        let (status, error) =
+            call(&gateway, Some(&key), "/v1/chat/completions", chat(), None).await;
+        assert_ne!(status, StatusCode::OK, "{error}");
+        if payload == PayloadPolicy::Passthrough {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error}");
+            assert_eq!(error["error"]["code"], "route_unavailable");
+        }
     }
     let gateway = gateway(&pool, &provider, key_id, 0, 0, PayloadPolicy::Adapt);
     let mut body = chat();
@@ -1160,6 +1209,13 @@ async fn unsupported_price_payload_and_stream_reject_without_funds_or_provider_u
     assert_eq!(provider.hits.load(Ordering::SeqCst), 0);
     let balance = ledger.balance(account).await.unwrap();
     assert_eq!((balance.available_units, balance.reserved_units), (1000, 0));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_charging.requests")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 #[sqlx::test(migrations = false)]

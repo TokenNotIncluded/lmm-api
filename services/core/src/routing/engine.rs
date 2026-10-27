@@ -350,10 +350,27 @@ impl Router {
         self.route_with_rng(request, &mut rand::thread_rng())
     }
 
+    /// Restrict candidates to payloads supported by the model gateway's encoder.
+    pub(crate) fn route_adapted(
+        &self,
+        request: RouteRequest<'_>,
+    ) -> Result<RoutePlan, RoutingError> {
+        self.route_with_payload_support(request, &mut rand::thread_rng(), false)
+    }
+
     pub(super) fn route_with_rng<R: Rng + ?Sized>(
         &self,
         request: RouteRequest<'_>,
         rng: &mut R,
+    ) -> Result<RoutePlan, RoutingError> {
+        self.route_with_payload_support(request, rng, true)
+    }
+
+    fn route_with_payload_support<R: Rng + ?Sized>(
+        &self,
+        request: RouteRequest<'_>,
+        rng: &mut R,
+        allow_passthrough: bool,
     ) -> Result<RoutePlan, RoutingError> {
         if !valid_group(request.group) {
             return Err(RoutingError::InvalidRequest);
@@ -382,6 +399,8 @@ impl Router {
             .prices
             .quote(canonical, request.group, speed)
             .ok_or(RoutingError::MissingPrice)?;
+        // Apply encoder support before priority and weight selection.
+        // @context-fold begin route-payload-candidates
         let mut pool: Vec<_> = route
             .targets
             .iter()
@@ -392,7 +411,8 @@ impl Router {
                         .config
                         .payload
                         .adapts(request.protocol, target.upstream.config.protocol)
-                        || (target.upstream.config.protocol == request.protocol
+                        || (allow_passthrough
+                            && target.upstream.config.protocol == request.protocol
                             && target.config.upstream_model == request.model))
             })
             .cloned()
@@ -400,6 +420,7 @@ impl Router {
         if pool.is_empty() {
             return Err(RoutingError::NoEligibleUpstream);
         }
+        // @context-fold end route-payload-candidates
         let capacity = usize::from(route.config.failover.max_attempts).min(pool.len());
         let mut candidates = Vec::with_capacity(capacity);
         for _ in 0..capacity {

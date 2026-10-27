@@ -462,6 +462,10 @@ fn passthrough_never_silently_rewrites_model_or_protocol() {
         .unwrap();
     assert_eq!(attempt.payload_policy(), PayloadPolicy::Passthrough);
     assert_eq!(attempt.upstream_model(), "model-a");
+    assert_eq!(
+        router.route_adapted(request()).unwrap_err(),
+        RoutingError::NoEligibleUpstream
+    );
     for req in [
         RouteRequest {
             model: "preferred",
@@ -481,6 +485,24 @@ fn passthrough_never_silently_rewrites_model_or_protocol() {
             RoutingError::NoEligibleUpstream
         );
     }
+}
+
+#[test]
+fn adapted_routing_filters_passthrough_before_priority_selection() {
+    // @context-fold begin adapted-routing-priority-test
+    let (mut config, prices) = fixture(1);
+    config.routes[0].targets[0].payload = PayloadPolicy::Passthrough;
+    config.routes[0].targets[1].priority = 1;
+    let router = build(config, prices);
+
+    let passthrough = router.route(request()).unwrap().start().unwrap();
+    assert_eq!(passthrough.target_id(), 1);
+    assert_eq!(passthrough.payload_policy(), PayloadPolicy::Passthrough);
+
+    let adapted = router.route_adapted(request()).unwrap().start().unwrap();
+    assert_eq!(adapted.target_id(), 2);
+    assert_eq!(adapted.payload_policy(), PayloadPolicy::Adapt);
+    // @context-fold end adapted-routing-priority-test
 }
 
 #[test]
