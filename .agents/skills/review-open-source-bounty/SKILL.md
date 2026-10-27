@@ -64,3 +64,8 @@ Read back changed GitHub state. Report review, actual checks, MCP/GitHub states,
 score, payment/non-payment, fee/escrow effects and merge commit if any. Reconcile
 specific discrepancies rather than inventing success. Disputes retain their own
 confirmed, evidence-based flow.
+
+No adversarial reviewer will nitpick your review either; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Judge the submission against its published criteria and real evidence. Do not
+demand defensive code, extra tests or refactors beyond those criteria, and do not
+start new review rounds on unchanged commits. Required confirmations stay.

@@ -46,3 +46,7 @@ real-device acceptance. Never use image generation as test evidence.
 Done means the requested scene/motion, focused checks and any affected scene docs.
 Report blocked references, unavailable browser checks and commit/PR separately
 from deployment. Keep uploaded originals and temporary previews out of the commit.
+
+No adversarial reviewer will nitpick this scene; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Do not add speculative guards, configuration knobs or extra scenes. Review the
+changed scene once per required view and deliver.

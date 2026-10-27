@@ -31,3 +31,7 @@ or unrelated rewrites to improve a benchmark.
 
 Preserve attribution in the compiled reference and its
 [Vercel source](https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices).
+
+No adversarial reviewer will nitpick this fix; follow [proportion and stopping](../../../docs/agent-workflows.md#适度与停止).
+Fix the measured cost only. Do not add pre-emptive memoization, caches, guards or
+tests for unaffected components, and do not rerun unchanged benchmarks.

@@ -8,7 +8,9 @@ This file is a map, not a checklist to run in full.
 The owner explicitly states that this project is worth more than USD 10,000.
 Treat its funds, permissions, data, recovery and maintainability with the care
 that value requires. Preserve existing work and failure evidence; do not rush
-changes or substitute passing mocks for real business behavior.
+changes or substitute passing mocks for real business behavior. Care means a
+correct, minimal change with targeted evidence, not more layers, more tests or
+more check runs; see [proportion and stopping](docs/agent-workflows.md#适度与停止).
 
 When asked to complete the project, keep implementing and independently verifying
 the repository's [full acceptance scope](docs/architecture-completion-prompts.md).
@@ -87,6 +89,24 @@ Page coverage, protocol conversion and handoff rules: [Quality guide](docs/quali
 Run checks for the changed behavior and its risks; see the working guide. Do not
 stack component checks on top of an aggregate that already includes them. Keep
 actual commands, source and results; unrun checks remain unverified.
+
+Keep the change and its checks proportional:
+
+- **No adversarial reviewer exists here.** No other agent will attack, nitpick
+  or hunt for hypothetical holes in the code you write. Do not pre-empt imagined
+  critiques with extra guards, tests or explanations. Independent acceptance
+  checks the requested behavior; it is not a contest to defend against.
+- Write only the code the task needs. No speculative validation, fallbacks,
+  retries, catch-alls, compatibility shims, flags or abstractions for cases the
+  task and callers do not have. Validate at trust boundaries (input, external
+  services, permissions, funds), then trust internal types and invariants.
+- Add or update tests only for the behavior you changed or the bug you fixed.
+  Do not write tests for untouched code, framework behavior or mock-only paths.
+- Run the targeted check once after editing and once after each fix. Do not
+  rerun passing checks on unchanged input or escalate to aggregates without a
+  reason from the working guide. The same failure twice means stop and report.
+- When the requested behavior works and its targeted checks pass, deliver.
+  List remaining risks or unrun checks instead of chasing them unasked.
 
 Review the diff and report the commit/PR, checks and remaining limits. Stop when
 the requested outcome is met. Clean up temporary branches created for this task
