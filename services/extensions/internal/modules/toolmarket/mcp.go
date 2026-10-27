@@ -19,6 +19,14 @@ type rpcEnvelope struct {
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   json.RawMessage `json:"error,omitempty"`
 }
+
+// Preserve the upstream HTTP status while retaining the native MCP auth error
+// contract. Web discovery translates this before crossing the LMM API boundary.
+type mcpAuthError struct{ status int }
+
+func (e *mcpAuthError) Error() string { return ErrAuth.Error() }
+func (e *mcpAuthError) Unwrap() error { return ErrAuth }
+
 type mcpSession struct {
 	maxResponse  int64
 	net          *network
@@ -124,7 +132,7 @@ func (c *mcpSession) rpc(ctx context.Context, method string, params any) (json.R
 	}
 	defer r.Body.Close()
 	if r.StatusCode == 401 || r.StatusCode == 403 {
-		return nil, ErrAuth
+		return nil, &mcpAuthError{status: r.StatusCode}
 	}
 	if r.StatusCode == 429 {
 		return nil, ErrLimit

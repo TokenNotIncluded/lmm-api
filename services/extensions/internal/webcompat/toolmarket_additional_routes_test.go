@@ -8,6 +8,7 @@ import (
 
 func TestMarketReportIncomeAndDelegationRoutesPreserveAuthority(t *testing.T) {
 	for _, tc := range []struct{ method, path, body, action, permission, id, kind string }{
+		{"POST", "/api/tool-market/connection/check", `{"provider":"treg","endpoint":"https://treg.to/mcp/","authentication":{"mode":"bearer","secret":"fixture-team-key"}}`, "connection.check", "toolmarket.manage", "", ""},
 		{"GET", "/api/tool-market/executions/by-request/original-request", "", "call.lookup", "toolmarket.read", "original-request", ""},
 		{"POST", "/api/tool-market/calls/call-1/resume", `{"request_state":"` + strings.Repeat("a", 64) + `"}`, "call.resume", "toolmarket.execute", "call-1", ""},
 		{"POST", "/api/tool-market/calls/call-1/report", `{"reason":"reason"}`, "report", "toolmarket.read", "call-1", ""},

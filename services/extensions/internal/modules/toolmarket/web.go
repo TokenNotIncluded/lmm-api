@@ -26,7 +26,7 @@ func WebPermission(action string) string {
 		return "toolmarket.review"
 	case "configure":
 		return "toolmarket.config"
-	case "credential.configure", "save", "validate", "submit", "activate", "pause", "delete", "inspect":
+	case "credential.configure", "save", "validate", "submit", "activate", "pause", "delete", "inspect", "connection.check":
 		return "toolmarket.manage"
 	case "invoke", "call.resume":
 		return "toolmarket.execute"
@@ -74,7 +74,7 @@ func (m *Module) PublicWebConfig(ctx context.Context) (map[string]any, error) {
 		"enabled": false, "builtin_enabled": false, "fee_bps": 0, "recipient_id": 0,
 		"quota_per_unit": 500000, "credits_per_usd": "500000", "web_client_id": "web-market", "mcp_path": "/mcp/market",
 		"provider_presets": []any{}, "execution_ready": false,
-		"capabilities": map[string]bool{"service_deletion": true, "client_record_cleanup": false, "meta_delegation": false, "mcp_oauth": false, "metamcp": false, "native_runtime": !m.webOnly},
+		"capabilities": map[string]bool{"service_deletion": true, "client_record_cleanup": false, "meta_delegation": false, "mcp_oauth": false, "metamcp": false, "native_runtime": !m.webOnly, "treg_connection_check": true},
 	}
 	if _, ok := m.authority.(CoreLegacyConfig); ok {
 		policy, err := m.LegacyReadConfig(ctx)
@@ -379,6 +379,15 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 		return m.webReviews(in.Offset, in.Limit)
 	case "inspect":
 		value, err := m.webInspect(ctx, user, in.Body)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = m.WebAuthorize(ctx, credential, account, permission); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case "connection.check":
+		value, err := m.webConnectionCheck(ctx, user, in.Body)
 		if err != nil {
 			return nil, err
 		}
