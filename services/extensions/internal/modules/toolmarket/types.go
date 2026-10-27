@@ -27,6 +27,10 @@ var (
 	ErrLimit       = errors.New("rate_limited")
 	ErrPending     = errors.New("execution_in_doubt")
 	ErrConsent     = errors.New("execution_consent_required")
+	// Remote failures must not be mistaken for the caller's LMM session state.
+	ErrRemoteUnauthorized = fmt.Errorf("%w: unauthorized", ErrUpstream)
+	ErrRemoteForbidden    = fmt.Errorf("%w: forbidden", ErrUpstream)
+	ErrRemoteTimeout      = fmt.Errorf("%w: timeout", ErrUpstream)
 )
 
 // Authority is implemented by the integration layer using the Rust control RPC.

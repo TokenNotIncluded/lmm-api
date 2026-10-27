@@ -5,6 +5,7 @@ package toolmarket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/TokenNotIncluded/lmm-api/extensions/internal/modules/assistant/redaction"
 	"strings"
 	"unicode"
@@ -155,12 +156,12 @@ func (m *Module) webRemoteCredential(ctx context.Context, endpoint string, crede
 	}
 	connection, err := m.connectLegacy(ctx, server, secret)
 	if err != nil {
-		return nil, err
+		return nil, webDiscoveryError(err)
 	}
 	defer connection.close(ctx)
 	tools, err := connection.legacyTools(ctx)
 	if err != nil {
-		return nil, err
+		return nil, webDiscoveryError(err)
 	}
 	raw, err := json.Marshal(tools)
 	if err != nil {
@@ -174,4 +175,15 @@ func (m *Module) webRemoteCredential(ctx context.Context, endpoint string, crede
 		return nil, ErrUpstream
 	}
 	return tools, nil
+}
+
+func webDiscoveryError(err error) error {
+	var remote *mcpAuthError
+	if errors.As(err, &remote) {
+		if remote.status == 403 {
+			return ErrRemoteForbidden
+		}
+		return ErrRemoteUnauthorized
+	}
+	return err
 }

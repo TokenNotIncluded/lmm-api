@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -28,7 +29,10 @@ func newNetwork() *network {
 			return nil, ErrDenied
 		}
 		ips, e := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if e != nil || len(ips) == 0 {
+		if e != nil {
+			return nil, e
+		}
+		if len(ips) == 0 {
 			return nil, ErrUpstream
 		}
 		// Validate every answer, then dial a checked IP directly. There is no second
@@ -38,13 +42,15 @@ func newNetwork() *network {
 				return nil, ErrDenied
 			}
 		}
+		var lastError error
 		for _, ip := range ips {
 			c, e := dialer.DialContext(ctx, kind, net.JoinHostPort(ip.String(), port))
 			if e == nil {
 				return c, nil
 			}
+			lastError = e
 		}
-		return nil, ErrUpstream
+		return nil, lastError
 	}
 	return &network{client: &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
@@ -103,6 +109,9 @@ func (n *network) request(ctx context.Context, method, endpoint string, body []b
 	r.Header = headers.Clone()
 	resp, e := n.client.Do(r)
 	if e != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || remoteTimeout(e) {
+			return nil, ErrRemoteTimeout
+		}
 		return nil, ErrUpstream
 	}
 	return resp, nil
@@ -111,10 +120,18 @@ func readBody(r *http.Response) ([]byte, error) { return readBodyLimit(r, maxBod
 func readBodyLimit(r *http.Response, limit int64) ([]byte, error) {
 	defer r.Body.Close()
 	b, e := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if remoteTimeout(e) {
+		return nil, ErrRemoteTimeout
+	}
 	if e != nil || int64(len(b)) > limit {
 		return nil, ErrUpstream
 	}
 	return b, nil
+}
+
+func remoteTimeout(err error) bool {
+	var networkError net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRemoteTimeout) || errors.As(err, &networkError) && networkError.Timeout()
 }
 func (n *network) getJSON(ctx context.Context, endpoint string, v any) error {
 	r, e := n.request(ctx, "GET", endpoint, nil, http.Header{"Accept": []string{"application/json"}, "Mcp-Protocol-Version": []string{ProtocolVersion}})

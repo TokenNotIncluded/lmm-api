@@ -142,6 +142,7 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 		{"GET /api/tool-market/services/{id}/review", "review_detail", false, false},
 		{"POST /api/tool-market/services/{id}/review", "review", true, false},
 		{"POST /api/tool-market/inspect", "inspect", true, false},
+		{"POST /api/tool-market/connection/check", "connection.check", true, false},
 		{"GET /api/tool-market/calls", "calls", false, true},
 		{"GET /api/tool-market/calls/{id}/result", "call.result", false, false},
 		{"GET /api/tool-market/executions/by-request/{id}", "call.lookup", false, false},
@@ -362,6 +363,12 @@ func toolMarketRespond(w http.ResponseWriter, value any, err error) {
 		label, message := "TOOL_MARKET_UNAVAILABLE", "Tool market operation could not be completed."
 		code = http.StatusServiceUnavailable
 		switch {
+		case errors.Is(err, toolmarket.ErrRemoteUnauthorized):
+			code, label = http.StatusBadGateway, "TOOL_MARKET_REMOTE_UNAUTHORIZED"
+		case errors.Is(err, toolmarket.ErrRemoteForbidden):
+			code, label = http.StatusBadGateway, "TOOL_MARKET_REMOTE_FORBIDDEN"
+		case errors.Is(err, toolmarket.ErrRemoteTimeout):
+			code, label = http.StatusGatewayTimeout, "TOOL_MARKET_REMOTE_TIMEOUT"
 		case errors.Is(err, toolmarket.ErrInvalid):
 			code, label = http.StatusUnprocessableEntity, "TOOL_MARKET_INVALID_INPUT"
 		case errors.Is(err, toolmarket.ErrAuth):
