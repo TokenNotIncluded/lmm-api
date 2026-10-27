@@ -23,6 +23,13 @@ import {
   LaptopIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  Code2,
+  MessageSquare,
+  Monitor,
+  Smartphone,
+  Terminal,
+} from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -66,6 +73,8 @@ import {
   selectGuideModel,
   type AssistantSetupPlatform,
 } from './setup-guide'
+
+import './assistant-setup-public.css'
 
 const CHERRY_DOWNLOAD = 'https://www.cherry-ai.com/download'
 const CHERRY_DOCS =
@@ -128,9 +137,9 @@ function detectBrowserSetupPlatform(): AssistantSetupPlatform {
 
 function CodeSnippet(props: { label: string; value: string }) {
   return (
-    <div className='grid gap-2'>
+    <div className='setup-snippet grid gap-2'>
       <span className='text-muted-foreground text-xs'>{props.label}</span>
-      <div className='bg-background flex items-start gap-2 rounded-lg border p-3'>
+      <div className='setup-snippet-body bg-background flex items-start gap-2 rounded-lg border p-3'>
         <pre className='min-w-0 flex-1 overflow-x-auto font-mono text-xs leading-5 break-all whitespace-pre-wrap'>
           {props.value}
         </pre>
@@ -142,7 +151,7 @@ function CodeSnippet(props: { label: string; value: string }) {
 
 function ConnectionValue(props: { label: string; value: string }) {
   return (
-    <div className='flex flex-wrap items-center justify-between gap-2 border-b py-3 last:border-b-0'>
+    <div className='setup-connection-value flex flex-wrap items-center justify-between gap-2 border-b py-3 last:border-b-0'>
       <span className='text-muted-foreground text-xs'>{props.label}</span>
       <div className='flex min-w-0 items-center gap-1.5'>
         <code className='text-xs break-all'>{props.value}</code>
@@ -177,10 +186,10 @@ function SetupStep(props: {
   description: string
 }) {
   return (
-    <li className='flex items-start gap-3'>
+    <li className='setup-step flex items-start gap-3'>
       <Badge
         variant='secondary'
-        className='mt-0.5 size-6 shrink-0 justify-center rounded-full p-0'
+        className='setup-step-number mt-0.5 size-6 shrink-0 justify-center rounded-full p-0'
       >
         {props.number}
       </Badge>
@@ -314,34 +323,97 @@ export function AssistantSetupTool(props: {
               { platform: PLATFORM_LABELS[platform] }
             )
 
-  return (
-    <Card className='border-foreground/10 min-w-0 overflow-hidden rounded-2xl shadow-sm'>
-      <CardHeader className='bg-muted/20 gap-4 border-b p-5 sm:p-7'>
-        <div className='flex items-start justify-between gap-4'>
-          <div className='min-w-0'>
-            <p className='text-muted-foreground mb-2 font-mono text-[11px] font-semibold tracking-[0.16em] uppercase'>
-              {t('Client setup')}
-            </p>
-            <CardTitle className='flex items-center gap-2 text-xl sm:text-2xl'>
-              <HugeiconsIcon
-                icon={LaptopIcon}
-                className='size-5'
-                strokeWidth={2}
-                aria-hidden='true'
-              />
-              {t('Client setup guide')}
-            </CardTitle>
-          </div>
+  const modelSelection = oauthClient ? null : !canConnect ? (
+    <Alert className='setup-access-note border-primary/20 bg-primary/[0.04] rounded-xl'>
+      <AlertTitle>
+        {t(
+          props.publicGuide
+            ? 'Start with the installation'
+            : 'Request API access'
+        )}
+      </AlertTitle>
+      <AlertDescription>
+        {t(
+          props.publicGuide
+            ? 'Browse the download and setup steps freely. Sign in and complete access setup to see your connection values and create an API key.'
+            : 'You can install clients during review. API requests become available after access is approved.'
+        )}
+      </AlertDescription>
+    </Alert>
+  ) : (
+    <div className='setup-model-selection bg-muted/20 rounded-xl border p-4 sm:p-5'>
+      <div className='mb-3 flex items-end justify-between gap-3'>
+        <div>
+          <label className='text-sm font-semibold' htmlFor='guide-model-id'>
+            {t('Model ID')}
+          </label>
         </div>
-        <CardDescription className='max-w-2xl text-sm leading-6'>
-          {t(
-            'Choose your device and app. Follow the steps from download to your first reply, with help whenever you need it.'
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className='grid gap-7 px-5 py-6 sm:gap-8 sm:px-7 sm:py-7'>
-        <div className='grid gap-3'>
-          <div className='flex items-end justify-between gap-3'>
+        <span className='text-muted-foreground font-mono text-[11px]'>
+          {props.publicGuide ? '03' : '02 / 03'}
+        </span>
+      </div>
+      <NativeSelect
+        id='guide-model-id'
+        value={model || ''}
+        disabled={props.modelsLoading || eligibleModels.length === 0}
+        onChange={(event) => setSelectedModel(event.target.value)}
+        aria-label={t('Model ID')}
+      >
+        {props.modelsLoading || eligibleModels.length === 0 ? (
+          <NativeSelectOption value='' disabled>
+            {t(
+              props.modelsLoading
+                ? 'Loading current models...'
+                : 'No available models'
+            )}
+          </NativeSelectOption>
+        ) : (
+          eligibleModels.map((item) => (
+            <NativeSelectOption key={item} value={item}>
+              {item}
+            </NativeSelectOption>
+          ))
+        )}
+      </NativeSelect>
+    </div>
+  )
+
+  return (
+    <Card
+      className={
+        props.publicGuide
+          ? 'setup-public min-w-0'
+          : 'border-foreground/10 min-w-0 overflow-hidden rounded-2xl shadow-sm'
+      }
+    >
+      {!props.publicGuide && (
+        <CardHeader className='bg-muted/20 gap-4 border-b p-5 sm:p-7'>
+          <div className='flex items-start justify-between gap-4'>
+            <div className='min-w-0'>
+              <p className='text-muted-foreground mb-2 font-mono text-[11px] font-semibold tracking-[0.16em] uppercase'>
+                {t('Client setup')}
+              </p>
+              <CardTitle className='flex items-center gap-2 text-xl sm:text-2xl'>
+                <HugeiconsIcon
+                  icon={LaptopIcon}
+                  className='size-5'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
+                {t('Client setup guide')}
+              </CardTitle>
+            </div>
+          </div>
+          <CardDescription className='max-w-2xl text-sm leading-6'>
+            {t(
+              'Choose your device and app. Follow the steps from download to your first reply, with help whenever you need it.'
+            )}
+          </CardDescription>
+        </CardHeader>
+      )}
+      <CardContent className='setup-content grid gap-7 px-5 py-6 sm:gap-8 sm:px-7 sm:py-7'>
+        <div className='setup-platform-selection grid gap-3'>
+          <div className='setup-selection-heading flex items-end justify-between gap-3'>
             <div>
               <p className='text-sm font-semibold'>{t('Platform')}</p>
               <p className='text-muted-foreground mt-1 text-xs leading-5'>
@@ -349,11 +421,12 @@ export function AssistantSetupTool(props: {
               </p>
             </div>
             <span className='text-muted-foreground font-mono text-[11px]'>
-              01 / 03
+              {props.publicGuide ? '01' : '01 / 03'}
             </span>
           </div>
           <div
-            className='grid grid-cols-2 gap-2 sm:flex sm:flex-wrap'
+            className='setup-platforms grid grid-cols-2 gap-2 sm:flex sm:flex-wrap'
+            role='group'
             aria-label={t('Platform')}
           >
             {(Object.keys(PLATFORM_LABELS) as AssistantSetupPlatform[]).map(
@@ -362,7 +435,7 @@ export function AssistantSetupTool(props: {
                   key={item}
                   type='button'
                   size='sm'
-                  className='min-h-11 justify-start px-3.5 sm:min-w-28 sm:justify-center'
+                  className='setup-platform min-h-11 justify-start px-3.5 sm:min-w-28 sm:justify-center'
                   variant={platform === item ? 'default' : 'outline'}
                   aria-pressed={platform === item}
                   onClick={() => {
@@ -380,6 +453,12 @@ export function AssistantSetupTool(props: {
                     }
                   }}
                 >
+                  {props.publicGuide &&
+                    (isMobileSetupPlatform(item) ? (
+                      <Smartphone className='size-4' aria-hidden='true' />
+                    ) : (
+                      <Monitor className='size-4' aria-hidden='true' />
+                    ))}
                   {PLATFORM_LABELS[item]}
                 </Button>
               )
@@ -394,63 +473,7 @@ export function AssistantSetupTool(props: {
           ) : null}
         </div>
 
-        {oauthClient ? null : !canConnect ? (
-          <Alert className='border-primary/20 bg-primary/[0.04] rounded-xl'>
-            <AlertTitle>
-              {t(
-                props.publicGuide
-                  ? 'Start with the installation'
-                  : 'Request API access'
-              )}
-            </AlertTitle>
-            <AlertDescription>
-              {t(
-                props.publicGuide
-                  ? 'Browse the download and setup steps freely. Sign in and complete access setup to see your connection values and create an API key.'
-                  : 'You can install clients during review. API requests become available after access is approved.'
-              )}
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <div className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
-            <div className='mb-3 flex items-end justify-between gap-3'>
-              <div>
-                <label
-                  className='text-sm font-semibold'
-                  htmlFor='guide-model-id'
-                >
-                  {t('Model ID')}
-                </label>
-              </div>
-              <span className='text-muted-foreground font-mono text-[11px]'>
-                02 / 03
-              </span>
-            </div>
-            <NativeSelect
-              id='guide-model-id'
-              value={model || ''}
-              disabled={props.modelsLoading || eligibleModels.length === 0}
-              onChange={(event) => setSelectedModel(event.target.value)}
-              aria-label={t('Model ID')}
-            >
-              {props.modelsLoading || eligibleModels.length === 0 ? (
-                <NativeSelectOption value='' disabled>
-                  {t(
-                    props.modelsLoading
-                      ? 'Loading current models...'
-                      : 'No available models'
-                  )}
-                </NativeSelectOption>
-              ) : (
-                eligibleModels.map((item) => (
-                  <NativeSelectOption key={item} value={item}>
-                    {item}
-                  </NativeSelectOption>
-                ))
-              )}
-            </NativeSelect>
-          </div>
-        )}
+        {!props.publicGuide && modelSelection}
 
         <Tabs
           value={clientTab}
@@ -459,36 +482,51 @@ export function AssistantSetupTool(props: {
             props.onClientChange?.(value as ClientTab)
             saveSetupPreferences({ platform, client: value as ClientTab })
           }}
-          className='min-w-0'
+          className='setup-client-tabs min-w-0'
         >
-          <div className='bg-muted/20 rounded-xl border p-3 sm:p-4'>
-            <div className='mb-3 flex items-end justify-between gap-3'>
+          <div className='setup-client-selection bg-muted/20 rounded-xl border p-3 sm:p-4'>
+            <div className='setup-selection-heading mb-3 flex items-end justify-between gap-3'>
               <div>
                 <p className='text-sm font-semibold'>
                   {t('Choose your client')}
                 </p>
               </div>
               <span className='text-muted-foreground font-mono text-[11px]'>
-                03 / 03
+                {props.publicGuide ? '02' : '03 / 03'}
               </span>
             </div>
-            <TabsList className='bg-background/70 flex h-auto w-full flex-nowrap justify-start gap-1.5 overflow-x-auto p-1.5 group-data-horizontal/tabs:h-auto'>
+            <TabsList
+              className='setup-clients bg-background/70 flex h-auto w-full flex-nowrap justify-start gap-1.5 overflow-x-auto p-1.5 group-data-horizontal/tabs:h-auto'
+              aria-label={t('Choose your client')}
+            >
               {clients.map((client) => (
                 <TabsTrigger
                   key={client}
                   value={client}
-                  className='h-auto min-h-10 min-w-max flex-none gap-2 px-3 py-2 text-xs whitespace-nowrap sm:text-sm'
+                  className='setup-client h-auto min-h-10 min-w-max flex-none gap-2 px-3 py-2 text-xs whitespace-nowrap sm:text-sm'
                 >
-                  {(client === 'pi' ||
-                    client === 'dsh' ||
-                    client === 'codewhale') && (
+                  {client === 'pi' ||
+                  client === 'dsh' ||
+                  client === 'codewhale' ? (
                     <LmmPluginLogo plugin={client} className='size-5' />
-                  )}
-                  {clientNames[client]}
+                  ) : props.publicGuide ? (
+                    client.endsWith('-sdk') || client === 'astrbot' ? (
+                      <Code2 className='size-4' aria-hidden='true' />
+                    ) : ['claude-code', 'codex', 'cc-switch'].includes(
+                        client
+                      ) ? (
+                      <Terminal className='size-4' aria-hidden='true' />
+                    ) : (
+                      <MessageSquare className='size-4' aria-hidden='true' />
+                    )
+                  ) : null}
+                  <span>{clientNames[client]}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
           </div>
+
+          {props.publicGuide && modelSelection}
 
           <div className='sr-only' aria-live='polite'>
             {t('{{client}} setup steps', { client: clientNames[clientTab] })}
