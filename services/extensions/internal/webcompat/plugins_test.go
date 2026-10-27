@@ -131,7 +131,7 @@ func TestPluginInstallRejectsManifestThatExceedsBodyLimitWithWhitespace(t *testi
 }
 
 func TestDisabledPluginRejectsWebCompatibilityRouteBeforeService(t *testing.T) {
-	manager := &pluginControllerFake{enabled: map[string]bool{"store": false}}
+	manager := &pluginControllerFake{enabled: map[string]bool{"store": false, "support": true}}
 	host, err := modules.NewHost(nil, []byte(hostToken))
 	if err != nil {
 		t.Fatal(err)
@@ -139,10 +139,24 @@ func TestDisabledPluginRejectsWebCompatibilityRouteBeforeService(t *testing.T) {
 	if err := host.MarkReady(); err != nil {
 		t.Fatal(err)
 	}
-	handler := Mount(host, newAuth(t, &authCore{}), newStoreTransportFake(), nil, AdditionalServices{Plugins: manager})
+	supportService := &supportFake{}
+	handler := Mount(host, newAuth(t, &authCore{}), newStoreTransportFake(), supportService, AdditionalServices{Plugins: manager})
 	response := pluginRequest(handler, http.MethodGet, "/api/store/products", "", webToken)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "STORE_UNAVAILABLE") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	for _, enabled := range []map[string]bool{
+		{"store": true, "support": false},
+		{"store": false, "support": true},
+	} {
+		manager.enabled = enabled
+		response = pluginRequest(handler, http.MethodGet, "/api/store/support/conversations", "", webToken)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "STORE_UNAVAILABLE") {
+			t.Fatalf("enabled=%v status=%d body=%s", enabled, response.Code, response.Body)
+		}
+	}
+	if len(supportService.calls) != 0 {
+		t.Fatalf("disabled support reached service: %+v", supportService.calls)
 	}
 }
 
