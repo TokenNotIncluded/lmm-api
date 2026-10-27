@@ -22,6 +22,9 @@ use crate::identity::{CredentialKind, IdentityError, IdentityStore};
 pub struct RuntimeOptions {
     pub server_address: String,
     pub registration_enabled: bool,
+    pub password_register_enabled: bool,
+    pub oauth_register_enabled: bool,
+    pub registration_disabled_methods: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -85,6 +88,18 @@ fn runtime_options(runtime: &RuntimeOptions) -> Vec<SystemOption> {
     [
         ("ServerAddress", runtime.server_address.clone()),
         ("RegisterEnabled", runtime.registration_enabled.to_string()),
+        (
+            "PasswordRegisterEnabled",
+            runtime.password_register_enabled.to_string(),
+        ),
+        (
+            "OAuthRegisterEnabled",
+            runtime.oauth_register_enabled.to_string(),
+        ),
+        (
+            "RegistrationDisabledMethods",
+            runtime.registration_disabled_methods.join(","),
+        ),
     ]
     .into_iter()
     .map(|(key, value)| SystemOption {
@@ -213,6 +228,9 @@ mod tests {
         RuntimeOptions {
             server_address: "https://console.example.test".into(),
             registration_enabled: false,
+            password_register_enabled: false,
+            oauth_register_enabled: true,
+            registration_disabled_methods: vec!["github".into(), "linuxdo".into()],
         }
     }
 
@@ -288,6 +306,9 @@ mod tests {
                 .collect();
         assert_eq!(options["Notice"], "Existing notice");
         assert_eq!(options["RegisterEnabled"], "false");
+        assert_eq!(options["PasswordRegisterEnabled"], "false");
+        assert_eq!(options["OAuthRegisterEnabled"], "true");
+        assert_eq!(options["RegistrationDisabledMethods"], "github,linuxdo");
         assert!(!options.contains_key("OAuthSecret"));
         assert_eq!(options["ServerAddress"], runtime().server_address);
         let notice: String =
