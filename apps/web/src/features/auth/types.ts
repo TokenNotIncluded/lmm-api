@@ -156,6 +156,9 @@ export interface SystemStatus {
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
+    configured_components?: {
+      humangrant?: boolean
+    }
     backend_capabilities?: Partial<BackendCapabilities>
     assistant?: AssistantStatus
     [key: string]: unknown
