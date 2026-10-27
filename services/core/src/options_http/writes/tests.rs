@@ -15,6 +15,9 @@ async fn setup(pool: &PgPool) -> (Router, IdentityStore, String) {
         RuntimeOptions {
             server_address: "https://console.example.test".into(),
             registration_enabled: false,
+            password_register_enabled: false,
+            oauth_register_enabled: false,
+            registration_disabled_methods: vec![],
         },
     ));
     (app, identity, root.secret)

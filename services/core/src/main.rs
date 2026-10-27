@@ -415,7 +415,12 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                         store.clone(),
                         lmm_core::options_http::RuntimeOptions {
                             server_address: config::setting("LMM_CORE_WEB_ORIGIN")?,
-                            registration_enabled: config.registration_enabled,
+                            registration_enabled: store.registration_enabled(),
+                            password_register_enabled: store.password_register_enabled(),
+                            oauth_register_enabled: store.oauth_register_enabled(),
+                            registration_disabled_methods: store
+                                .oauth_registration_disabled_methods()
+                                .to_vec(),
                         },
                     ),
                 ));
