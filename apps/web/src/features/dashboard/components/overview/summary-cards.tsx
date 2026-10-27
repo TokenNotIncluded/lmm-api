@@ -139,8 +139,7 @@ export function SummaryCards() {
     projection.history &&
     usageTrendQuery.isSuccess &&
     usageTrendQuery.data.success === true
-  const usageFailed =
-    usageTrendQuery.isError || usageTrendQuery.data?.success === false
+  const usageFailed = usageTrendQuery.isError
   // Without captured bucket units, raw history cannot predict the current wallet's runway.
   const usageComparable = !projection.native && usageReady && recentUsage === 0
   const healthLevel =

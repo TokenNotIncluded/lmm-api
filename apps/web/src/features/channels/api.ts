@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { getGroups as getUserGroups } from '@/features/users/api'
 import { api, type ApiRequestConfig } from '@/lib/api'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import type {
   AddChannelRequest,
@@ -77,13 +78,31 @@ export type CodexCredentialRefreshResponse = {
 // Base Channel CRUD Operations
 // ============================================================================
 
+/** Reject unavailable list projections instead of presenting an empty channel table. */
+function requireChannelList(
+  response: GetChannelsResponse | SearchChannelsResponse
+) {
+  if (
+    response?.success !== true ||
+    !Array.isArray(response.data?.items) ||
+    !Number.isInteger(response.data?.total) ||
+    (response.data?.total ?? -1) < 0
+  ) {
+    throw Object.assign(
+      new Error(getServerErrorMessage(response) ?? 'Failed to load data'),
+      { response: { data: response } }
+    )
+  }
+}
+
 /**
  * Get paginated list of channels
  */
 export async function getChannels(
   params: GetChannelsParams = {}
 ): Promise<GetChannelsResponse> {
-  const res = await api.get('/api/channel', { params })
+  const res = await api.get<GetChannelsResponse>('/api/channel', { params })
+  requireChannelList(res.data)
   return res.data
 }
 
@@ -93,7 +112,10 @@ export async function getChannels(
 export async function searchChannels(
   params: SearchChannelsParams
 ): Promise<SearchChannelsResponse> {
-  const res = await api.get('/api/channel/search', { params })
+  const res = await api.get<SearchChannelsResponse>('/api/channel/search', {
+    params,
+  })
+  requireChannelList(res.data)
   return res.data
 }
 
@@ -109,7 +131,13 @@ export async function getChannel(id: number): Promise<GetChannelResponse> {
  * Get channel operations summary for administrators
  */
 export async function getChannelOps(): Promise<ChannelOpsResponse> {
-  const res = await api.get('/api/channel/ops', channelActionConfig())
+  const res = await api.get<ChannelOpsResponse>(
+    '/api/channel/ops',
+    channelActionConfig()
+  )
+  if (res.data?.success !== true || !res.data.data) {
+    throw new Error(getServerErrorMessage(res.data) ?? 'Failed to load data')
+  }
   return res.data
 }
 

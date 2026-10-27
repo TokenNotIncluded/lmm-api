@@ -21,7 +21,9 @@ import { Link } from '@tanstack/react-router'
 import { Settings2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
+import { LoadingState } from '@/components/loading-state'
 import { Badge } from '@/components/ui/badge'
 import {
   Tooltip,
@@ -29,6 +31,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ROLE } from '@/lib/roles'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getChannelOps } from './api'
@@ -37,6 +40,7 @@ import { ChannelsHealthStrip } from './components/channels-health-strip'
 import { ChannelsPrimaryButtons } from './components/channels-primary-buttons'
 import { ChannelsProvider } from './components/channels-provider'
 import { ChannelsTable } from './components/channels-table'
+import { ReadOnlyChannels } from './components/read-only-channels'
 
 export function Channels() {
   const { t } = useTranslation()
@@ -49,6 +53,32 @@ export function Channels() {
     retry: false,
     staleTime: 5 * 60 * 1000,
   })
+  if (
+    channelOpsQuery.isLoading ||
+    channelOpsQuery.isError ||
+    channelOpsQuery.data?.data?.read_only
+  ) {
+    return (
+      <SectionPageLayout>
+        <SectionPageLayout.Title>{t('Channels')}</SectionPageLayout.Title>
+        <SectionPageLayout.Content>
+          {channelOpsQuery.isLoading ? (
+            <LoadingState />
+          ) : channelOpsQuery.isError ? (
+            <ErrorState
+              description={
+                getServerErrorMessage(channelOpsQuery.error) ??
+                t('Failed to load data')
+              }
+              onRetry={() => void channelOpsQuery.refetch()}
+            />
+          ) : (
+            <ReadOnlyChannels />
+          )}
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+    )
+  }
   const retryTimes = channelOpsQuery.data?.data?.retry_times
   const retryLabel =
     typeof retryTimes === 'number' ? `${t('Max Retries')}: ${retryTimes}` : null

@@ -51,6 +51,7 @@ function knownTotal(
 }
 
 function usageMetadata(inputs: readonly QuotaDataItem[]) {
+  // @context-fold begin aggregate-usage-metadata
   return {
     ...(inputs.some((item) => item.output_image_count !== undefined)
       ? {
@@ -67,10 +68,12 @@ function usageMetadata(inputs: readonly QuotaDataItem[]) {
     ...(inputs.every((item) => item.usage_scope !== undefined)
       ? {
           usage_scope: inputs.some(
-            (item) => item.usage_scope === 'actor_personal_usage'
+            (item) => item.usage_scope === 'administrator_all_accounts'
           )
-            ? ('actor_personal_usage' as const)
-            : ('actor_personal_key' as const),
+            ? ('administrator_all_accounts' as const)
+            : inputs.some((item) => item.usage_scope === 'actor_personal_usage')
+              ? ('actor_personal_usage' as const)
+              : ('actor_personal_key' as const),
         }
       : {}),
     ...(inputs.every((item) => item.settlement_scope === 'settled_requests')
@@ -91,6 +94,7 @@ function usageMetadata(inputs: readonly QuotaDataItem[]) {
       ? { wallet_debit_supported: false as const }
       : {}),
   }
+  // @context-fold end aggregate-usage-metadata
 }
 
 /** Keep model identity intact; translate an empty name only when displaying it. */

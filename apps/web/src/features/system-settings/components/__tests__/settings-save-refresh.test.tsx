@@ -290,6 +290,85 @@ afterEach(async () => {
 })
 after(() => domWindow.close())
 
+for (const capabilities of [
+  { read_only: true, partial: true },
+  { read_only: true, partial: false },
+  { read_only: false, partial: true },
+]) {
+  test(`limited settings ${JSON.stringify(capabilities)} show actual values without editable defaults`, async () => {
+    read = async (config) =>
+      response(config, 200, {
+        success: true,
+        message: '',
+        capabilities,
+        data: [
+          { key: 'ServerAddress', value: 'https://core.example.test' },
+          { key: 'RegisterEnabled', value: 'false' },
+        ],
+      })
+    await renderPage(false)
+    await until(
+      () =>
+        Boolean(container.textContent?.includes('https://core.example.test')),
+      'the actual returned settings must be visible'
+    )
+    assert.equal(container.querySelector('form'), null)
+    assert.equal(container.querySelector('input'), null)
+    assert.doesNotMatch(container.textContent ?? '', /Saved persona/)
+    assert.match(container.textContent ?? '', /ServerAddress/)
+    assert.match(container.textContent ?? '', /RegisterEnabled/)
+    assert.match(container.textContent ?? '', /false/)
+    if (capabilities.partial) {
+      assert.match(
+        container.textContent ?? '',
+        /Only part of the settings is available/
+      )
+    }
+    if (capabilities.read_only) {
+      assert.match(container.textContent ?? '', /Read only/)
+      assert.match(
+        container.textContent ?? '',
+        /host configuration upgrade procedure/
+      )
+    }
+    const saveButton = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Save Settings'
+    )
+    assert.ok(saveButton)
+    assert.equal(saveButton.disabled, true)
+    await act(async () => saveButton.click())
+    assert.ok(requests.every((request) => request.method === 'get'))
+  })
+}
+
+test('a partial read-only refresh removes cached editable defaults and disables saving', async () => {
+  await renderPage()
+  await until(
+    () => container.querySelector('form') !== null,
+    'the cached form must render'
+  )
+  read = async (config) =>
+    response(config, 200, {
+      success: true,
+      capabilities: { read_only: true, partial: true },
+      data: [{ key: 'RegisterEnabled', value: 'true' }],
+    })
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey })
+  })
+  await until(
+    () => container.querySelector('form') === null,
+    'a restricted projection must not retain the editable full-settings form'
+  )
+  assert.doesNotMatch(container.textContent ?? '', /Saved persona/)
+  assert.match(container.textContent ?? '', /RegisterEnabled/)
+  assert.match(
+    container.textContent ?? '',
+    /Only part of the settings is available/
+  )
+  assert.ok(requests.every((request) => request.method === 'get'))
+})
+
 test('a failed background refresh retains the same form node and its editable draft', async () => {
   await renderPage()
   await edit('Unsaved draft')
