@@ -107,7 +107,7 @@ export type SystemInstanceInfo = {
 }
 
 export type SystemResourceSnapshot = {
-  schema_version: number
+  schema_version: 1
   observed_at_unix_ms: number
   sample_window_ms: number
   system: {
@@ -124,10 +124,19 @@ export type SystemResourceSnapshot = {
     memory_usage_percent: number
   }
   processes: {
-    'lmm-core'?: SystemProcessInfo
-    'lmm-extensions'?: SystemProcessInfo
-    [key: string]: SystemProcessInfo | undefined
+    'lmm-core': SystemResourceProcess
+    'lmm-extensions': SystemResourceProcess
   }
+}
+
+export type SystemResourceProcess = {
+  status: 'running' | 'unavailable'
+  version: string | undefined
+  pid: number | undefined
+  cpu_percent: number | undefined
+  memory_bytes: number | undefined
+  memory_percent: number | undefined
+  threads: number | undefined
 }
 
 export type SystemInstance = {
