@@ -249,9 +249,10 @@ func (m *PluginManager) Uninstall(name string) (PluginInfo, error) {
 	if m.enabled[name] {
 		return PluginInfo{}, errors.New("disable plugin before uninstall")
 	}
+	wasInstalled := m.installed[name]
 	m.installed[name] = false
 	if err := m.persistLocked(); err != nil {
-		m.installed[name] = true
+		m.installed[name] = wasInstalled
 		return PluginInfo{}, err
 	}
 	return m.infoLocked(name), nil

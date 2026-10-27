@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -27,8 +28,11 @@ type pluginTestReloader struct {
 
 func (r *pluginTestReloader) ReloadModules(names []string) error {
 	r.calls++
+	if r.err != nil {
+		return r.err
+	}
 	r.last = append([]string(nil), names...)
-	return r.err
+	return nil
 }
 
 func TestPluginManagerLifecyclePersistsAndHotReloads(t *testing.T) {
@@ -200,4 +204,241 @@ func TestRouterReloadDisablesNewModuleRequests(t *testing.T) {
 	if got := request("/extensions/v1/zeta/"); got != http.StatusNotFound {
 		t.Fatalf("disabled status=%d", got)
 	}
+}
+
+func TestPluginManagerMutationPersistenceFailurePreservesStateAndCanRetry(t *testing.T) {
+	// @context-fold begin plugin-mutation-persistence-recovery
+	for _, test := range []struct {
+		name      string
+		enabled   bool
+		installed bool
+		operation func(*PluginManager) (PluginInfo, error)
+		want      PluginInfo
+	}{
+		{"enable", false, true, func(m *PluginManager) (PluginInfo, error) { return m.Enable("alpha") }, PluginInfo{Installed: true, Enabled: true}},
+		{"disable", true, true, func(m *PluginManager) (PluginInfo, error) { return m.Disable("alpha") }, PluginInfo{Installed: true, Enabled: false}},
+		{"uninstall", false, true, func(m *PluginManager) (PluginInfo, error) { return m.Uninstall("alpha") }, PluginInfo{Installed: false, Enabled: false}},
+		{"uninstall-again", false, false, func(m *PluginManager) (PluginInfo, error) { return m.Uninstall("alpha") }, PluginInfo{Installed: false, Enabled: false}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(dir, "plugins.json")
+			registered := []Module{pluginTestModule{"alpha", "1.0.0"}}
+			credential := []byte(strings.Repeat("router-test-", 4))
+			host, err := NewHost(registered, credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := host.MarkReady(); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := NewPluginManager(host, registered, statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Make the initial state durable, even for the already-enabled case.
+			if _, err := manager.Disable("alpha"); err != nil {
+				t.Fatal(err)
+			}
+			if test.enabled {
+				if _, err := manager.Enable("alpha"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !test.installed {
+				if _, err := manager.Uninstall("alpha"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			requestStatus := func() int {
+				request := httptest.NewRequest(http.MethodGet, "/extensions/v1/alpha/", nil)
+				request.Header.Set("Authorization", "Bearer "+string(credential))
+				response := httptest.NewRecorder()
+				host.ServeHTTP(response, request)
+				return response.Code
+			}
+			checkPersisted := func() {
+				t.Helper()
+				restarted, err := NewPluginManager(&pluginTestReloader{}, registered, statePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(restarted.List(), manager.List()) {
+					t.Fatalf("restart=%+v running=%+v", restarted.List(), manager.List())
+				}
+			}
+			checkPersisted()
+			before := manager.List()
+			beforeStatus := requestStatus()
+			persisted, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Rejected directory permissions fail persistence without replacing the file.
+			if err := os.Chmod(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if _, err := test.operation(manager); !errors.Is(err, ErrPluginState) {
+					t.Fatalf("operation error=%v", err)
+				}
+				if got := manager.List(); !reflect.DeepEqual(got, before) {
+					t.Fatalf("failed operation changed state: got=%+v want=%+v", got, before)
+				}
+				if got := requestStatus(); got != beforeStatus {
+					t.Fatalf("failed operation changed route: got=%d want=%d", got, beforeStatus)
+				}
+				got, err := os.ReadFile(statePath)
+				if err != nil || !bytes.Equal(got, persisted) {
+					t.Fatalf("failed operation changed persisted state: err=%v", err)
+				}
+			}
+			if err := os.Chmod(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			info, err := test.operation(manager)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Installed != test.want.Installed || info.Enabled != test.want.Enabled || manager.IsEnabled("alpha") != test.want.Enabled {
+				t.Fatalf("retry state=%+v want=%+v", info, test.want)
+			}
+			wantStatus := http.StatusNotFound
+			if test.want.Enabled {
+				wantStatus = http.StatusOK
+			}
+			if got := requestStatus(); got != wantStatus {
+				t.Fatalf("retry route=%d want=%d", got, wantStatus)
+			}
+			checkPersisted()
+		})
+	}
+	// @context-fold end plugin-mutation-persistence-recovery
+}
+
+func TestPluginManagerReloadReappliesCurrentSnapshotWithoutChangingPersistence(t *testing.T) {
+	// @context-fold begin plugin-reload-snapshot-persistence
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "plugins.json")
+	registered := []Module{pluginTestModule{"alpha", "1.0.0"}}
+	credential := []byte(strings.Repeat("router-test-", 4))
+	host, err := NewHost(registered, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPluginManager(host, registered, statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Disable("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := manager.List()
+	if err := host.ReloadModules([]string{"alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	status := func() int {
+		request := httptest.NewRequest(http.MethodGet, "/extensions/v1/alpha/", nil)
+		request.Header.Set("Authorization", "Bearer "+string(credential))
+		response := httptest.NewRecorder()
+		host.router.ServeHTTP(response, request)
+		return response.Code
+	}
+	if got := status(); got != http.StatusOK {
+		t.Fatalf("fixture did not replace route: %d", got)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(); got != http.StatusNotFound {
+		t.Fatalf("reload did not reapply disabled snapshot: %d", got)
+	}
+	if !reflect.DeepEqual(manager.List(), before) {
+		t.Fatalf("reload changed inventory: %+v", manager.List())
+	}
+	got, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(got, persisted) {
+		t.Fatalf("reload changed persisted state: err=%v", err)
+	}
+	// @context-fold end plugin-reload-snapshot-persistence
+}
+
+func TestPluginManagerReloadFailurePreservesStateAndCanRetry(t *testing.T) {
+	// @context-fold begin plugin-reloader-failure-recovery
+	for _, operation := range []string{"enable", "disable", "reload"} {
+		t.Run(operation, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(dir, "plugins.json")
+			reloader := &pluginTestReloader{}
+			manager, err := NewPluginManager(reloader, []Module{pluginTestModule{"alpha", "1.0.0"}}, statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Disable("alpha"); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "disable" {
+				if _, err := manager.Enable("alpha"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			change := func() error {
+				switch operation {
+				case "enable":
+					_, err := manager.Enable("alpha")
+					return err
+				case "disable":
+					_, err := manager.Disable("alpha")
+					return err
+				default:
+					return manager.Reload()
+				}
+			}
+			before := manager.List()
+			beforeRoutes := append([]string(nil), reloader.last...)
+			persisted, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reloader.err = errors.New("test reload failure")
+			if err := change(); !errors.Is(err, reloader.err) {
+				t.Fatalf("reload failure=%v", err)
+			}
+			if !reflect.DeepEqual(manager.List(), before) {
+				t.Fatalf("reload failure changed inventory: %+v", manager.List())
+			}
+			if !reflect.DeepEqual(reloader.last, beforeRoutes) {
+				t.Fatalf("reload failure changed routes: got=%v want=%v", reloader.last, beforeRoutes)
+			}
+			got, err := os.ReadFile(statePath)
+			if err != nil || !bytes.Equal(got, persisted) {
+				t.Fatalf("reload failure changed persisted state: err=%v", err)
+			}
+			reloader.err = nil
+			if err := change(); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			restarted, err := NewPluginManager(&pluginTestReloader{}, []Module{pluginTestModule{"alpha", "1.0.0"}}, statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(restarted.List(), manager.List()) {
+				t.Fatalf("restart=%+v running=%+v", restarted.List(), manager.List())
+			}
+		})
+	}
+	// @context-fold end plugin-reloader-failure-recovery
 }
