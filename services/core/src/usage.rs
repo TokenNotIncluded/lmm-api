@@ -1,7 +1,9 @@
-//! Read-only Web projections of immutable personal model requests.
+//! Read-only Web projections of immutable model requests.
 //! Self means actor + personal key owner, NOT wallet payer: team-funded personal
 //! keys are included, team-owned keys are not. No provider/channel evidence is
 //! exposed. Core credits are exact (500,000/USD); holds are never consumption.
+//! Administrator data includes all actors/accounts and marks historical imports
+//! as uncovered; neither opening counters nor archived quota become native usage.
 use crate::{
     billing::{
         CREDITS_PER_USD,
@@ -83,7 +85,7 @@ struct Filter {
     offset: i64,
 }
 impl UsageQuery {
-    fn validate(&self, now: i64) -> Result<Filter, Error> {
+    fn validate(&self, now: i64, administrator: bool) -> Result<Filter, Error> {
         let end = self.end_timestamp.unwrap_or(now);
         let start = self
             .start_timestamp
@@ -107,10 +109,13 @@ impl UsageQuery {
                 .as_deref()
                 .is_some_and(|t| !matches!(t, "hour" | "day" | "week" | "month"))
             || self.channel.is_some_and(|c| c != 0)
-            || [&self.username, &self.upstream_request_id]
-                .iter()
-                .any(|s| s.as_deref().is_some_and(|v| !v.is_empty()))
+            || (!administrator && self.username.as_deref().is_some_and(|v| !v.is_empty()))
+            || self
+                .upstream_request_id
+                .as_deref()
+                .is_some_and(|v| !v.is_empty())
             || [
+                &self.username,
                 &self.model_name,
                 &self.token_name,
                 &self.group,
@@ -586,6 +591,7 @@ enum Projection {
     Logs,
     Stats,
     Data,
+    AdministratorData,
 }
 impl UsageStore {
     async fn read(
@@ -594,11 +600,30 @@ impl UsageStore {
         q: UsageQuery,
         projection: Projection,
     ) -> Result<Value, Error> {
+        let administrator = matches!(projection, Projection::AdministratorData);
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *tx)
-            .await?;
-        let actor = identity::authorize_in_transaction(&mut tx, secret).await?;
+        sqlx::query(if administrator {
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+        } else {
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+        })
+        .execute(&mut *tx)
+        .await?;
+        let actor = if administrator {
+            identity::authorize_admin_read_snapshot(&mut tx, secret)
+                .await
+                .map_err(|error| match error {
+                    identity::admin_users::AdminUsersError::Unauthorized => {
+                        Error::Identity(IdentityError::Unauthorized)
+                    }
+                    identity::admin_users::AdminUsersError::Forbidden => {
+                        Error::Identity(IdentityError::Forbidden)
+                    }
+                    _ => Error::Storage,
+                })?
+        } else {
+            identity::authorize_in_transaction(&mut tx, secret).await?
+        };
         if actor.credential_kind != CredentialKind::Session {
             return Err(IdentityError::Forbidden.into());
         }
@@ -612,16 +637,46 @@ impl UsageStore {
             sqlx::query_scalar("SELECT floor(extract(epoch FROM transaction_timestamp()))::bigint")
                 .fetch_one(&mut *tx)
                 .await?;
-        let f = q.validate(now)?;
+        let f = q.validate(now, administrator)?;
+        let selected_user = if administrator {
+            if let Some(username) = q.username.as_deref().filter(|name| !name.is_empty()) {
+                let user = sqlx::query_scalar::<_, i64>(
+                    "SELECT user_id FROM core_identity.user_profiles WHERE username=$1",
+                )
+                .bind(username)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let Some(user) = user else {
+                    tx.commit().await?;
+                    return Ok(json!([]));
+                };
+                Some(user)
+            } else {
+                None
+            }
+        } else {
+            Some(actor.user_id)
+        };
         let mut summary = Summary::default();
         let mut total = 0;
         let mut items = Vec::new();
         let mut ids = HashSet::new();
-        let mut buckets: BTreeMap<(i64, String, String, bool, bool), Bucket> = BTreeMap::new();
+        let mut buckets: BTreeMap<(i64, i64, String, String, bool, bool), Bucket> = BTreeMap::new();
         {
-            let mut rows = sqlx::query(SELECT_REQUESTS)
-                .bind(actor.user_id)
-                .bind(owner)
+            // Keep the indexed personal query unchanged; only the authenticated
+            // administrator projection can omit the user/account restrictions.
+            let selection = if administrator {
+                SELECT_REQUESTS.replace(
+                    "WHERE r.actor_user_id=$1 AND r.owner_account_id=$2",
+                    "WHERE ($1::bigint IS NULL OR r.actor_user_id=$1) \
+                     AND ($2::bigint IS NULL OR r.owner_account_id=$2)",
+                )
+            } else {
+                SELECT_REQUESTS.to_owned()
+            };
+            let mut rows = sqlx::query(&selection)
+                .bind(selected_user)
+                .bind((!administrator).then_some(owner))
                 .bind(f.start)
                 .bind(f.end)
                 .bind(q.r#type.unwrap_or(0))
@@ -647,8 +702,9 @@ impl UsageStore {
                         }
                         items.push(item);
                     }
-                    Projection::Data if r.settled() => {
+                    Projection::Data | Projection::AdministratorData if r.settled() => {
                         let key = (
+                            r.user,
                             r.at / 3600 * 3600,
                             r.price.model.clone(),
                             r.payer_kind.clone(),
@@ -679,17 +735,20 @@ impl UsageStore {
                 json!({"items":items,"total":total,"page":f.page,"page_size":f.size})
             }
             Projection::Stats => summary.project(),
-            Projection::Data => {
+            Projection::Data | Projection::AdministratorData => {
+                // Native buckets keep the actor, funding split and exact net credits.
+                // @context-fold begin native-usage-data-buckets
                 let mut data = Vec::new();
-                for ((at, model, payer_kind, subscription, sponsored), bucket) in buckets {
-                    let mut item = json!({"user_id":actor.user_id,"model_name":model,"created_at":at,"token_used":if bucket.has_images && !bucket.has_text {None}else{Some(bucket.tokens)},
+                for ((user, at, model, payer_kind, subscription, sponsored), bucket) in buckets {
+                    let mut item = json!({"user_id":user,"model_name":model,"created_at":at,"token_used":if bucket.has_images && !bucket.has_text {None}else{Some(bucket.tokens)},
                         "output_image_count":bucket.image_count,"token_count_scope":"settled_text_requests",
                         "platform_sponsored":sponsored,
-                        "count":bucket.count,"payer_kind":payer_kind,"subscription_funded":subscription,"usage_scope":if bucket.has_session_sources {"actor_personal_usage"}else{"actor_personal_key"},"settlement_scope":"settled_requests"});
+                        "count":bucket.count,"payer_kind":payer_kind,"subscription_funded":subscription,"usage_scope":if administrator {"administrator_all_accounts"}else if bucket.has_session_sources {"actor_personal_usage"}else{"actor_personal_key"},"settlement_scope":"settled_requests"});
                     bucket.amounts.project(&mut item);
                     data.push(item);
                 }
                 json!(data)
+                // @context-fold end native-usage-data-buckets
             }
         };
         tx.commit().await?;
@@ -702,6 +761,8 @@ pub fn router(store: UsageStore) -> Router {
         .route("/api/log/self", get(logs))
         .route("/api/log/self/stat", get(stats))
         .route("/api/data/self", get(data))
+        .route("/api/data", get(administrator_data))
+        .route("/api/data/", get(administrator_data))
         .with_state(store)
         .layer(middleware::from_fn(no_store))
 }
@@ -723,6 +784,7 @@ async fn respond(
     query: Result<Query<UsageQuery>, axum::extract::rejection::QueryRejection>,
     projection: Projection,
 ) -> Response {
+    let administrator = matches!(projection, Projection::AdministratorData);
     let result = async {
         if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
             return Err(IdentityError::Unauthorized.into());
@@ -740,11 +802,21 @@ async fn respond(
     }
     .await;
     match result {
-        Ok(data) => (
-            StatusCode::OK,
-            Json(json!({"success":true,"message":"","data":data})),
-        )
-            .into_response(),
+        Ok(data) => {
+            let mut response = json!({"success":true,"message":"","data":data});
+            if administrator {
+                response["availability"] = json!("partial");
+                response["coverage"] = json!({
+                    "source": "core_charging.requests",
+                    "scope": "administrator_all_accounts",
+                    "time_basis": "authorized_at",
+                    "native_requests": true,
+                    "historical_imports": false,
+                    "complete": false
+                });
+            }
+            (StatusCode::OK, Json(response)).into_response()
+        }
         Err(e) => {
             let (status, code, message) = match e {
                 Error::Identity(IdentityError::Unauthorized) => (
@@ -755,7 +827,7 @@ async fn respond(
                 Error::Identity(IdentityError::Forbidden) => (
                     StatusCode::FORBIDDEN,
                     "USAGE_FORBIDDEN",
-                    "A browser session is required",
+                    "An authorized browser session is required",
                 ),
                 Error::Invalid => (
                     StatusCode::BAD_REQUEST,
@@ -806,6 +878,13 @@ async fn data(
     q: Result<Query<UsageQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
     respond(s, h, q, Projection::Data).await
+}
+async fn administrator_data(
+    State(s): State<UsageStore>,
+    h: HeaderMap,
+    q: Result<Query<UsageQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    respond(s, h, q, Projection::AdministratorData).await
 }
 
 /// Scoped OAuth-family activity from real immutable, source-checked ledger
