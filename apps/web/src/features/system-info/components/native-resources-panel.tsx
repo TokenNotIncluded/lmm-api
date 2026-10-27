@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { ErrorState } from '@/components/error-state'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import { getNativeSystemResources } from '../api'
 import type { SystemProcessInfo } from '../types'
@@ -114,6 +115,9 @@ export function NativeResourcesPanel() {
           </div>
         ) : query.isError ? (
           <ErrorState
+            description={
+              getServerErrorMessage(query.error) ?? t('Failed to load data')
+            }
             onRetry={() => void query.refetch()}
             className='min-h-[220px]'
           />

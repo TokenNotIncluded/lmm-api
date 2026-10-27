@@ -73,6 +73,23 @@ function serverErrorPayload(value: unknown): Record<string, unknown> | null {
   return value
 }
 
+/** Read a failure description from either the legacy or Core error envelope. */
+export function getServerErrorMessage(value: unknown): string | null {
+  // @context-fold begin server-error-description
+  const payload = serverErrorPayload(value)
+  if (!payload) return null
+  const nested = isRecord(payload.error) ? payload.error : null
+  for (const message of [
+    nested?.message,
+    payload.message,
+    isRecord(value) ? value.message : null,
+  ]) {
+    if (typeof message === 'string' && message.trim()) return message
+  }
+  return null
+  // @context-fold end server-error-description
+}
+
 export function getServerErrorMessageKey(value: unknown): string | null {
   const payload = serverErrorPayload(value)
   if (!payload) return null

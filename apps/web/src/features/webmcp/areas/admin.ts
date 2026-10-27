@@ -514,7 +514,7 @@ export const adminTools: WebMcpToolFactory = ({ router }) => [
         rows,
         list.data?.total ?? rows.length,
         list.data?.type_counts,
-        ops.data?.retry_times
+        ops.data?.retry_times ?? undefined
       )
       return { ...health, status_filter: status }
     },

@@ -6,6 +6,14 @@ import { after, afterEach, test } from 'node:test'
 import { Window } from 'happy-dom'
 
 const dom = new Window({ url: 'http://localhost/' })
+const matchMedia = dom.matchMedia.bind(dom)
+dom.matchMedia = (query: string) => {
+  const media = matchMedia(query)
+  if (query === '(prefers-reduced-motion)') {
+    Object.defineProperty(media, 'matches', { value: true })
+  }
+  return media
+}
 for (const key of [
   'window',
   'document',
@@ -43,9 +51,12 @@ const { api } = await import('@/lib/api')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { SummaryCards } = await import('./summary-cards')
 const { AdminSiteStatisticsPanel } = await import('./admin-site-statistics')
+const { ApiInfoPanel } = await import('./api-info-panel')
 const { DEFAULT_CURRENCY_CONFIG, useSystemConfigStore } =
   await import('@/stores/system-config-store')
 const { PerformanceHealthPanel } = await import('./performance-health-panel')
+const { NativeResourcesPanel } =
+  await import('@/features/system-info/components/native-resources-panel')
 const { UptimePanel } = await import('./uptime-panel')
 const { PanelWrapper } = await import('../ui/panel-wrapper')
 const originalGet = api.get
@@ -115,6 +126,69 @@ function button(container: HTMLElement, label: string) {
   return found
 }
 
+test('native resource failures show the Core reason and allow retry', async () => {
+  api.get = (async () => {
+    throw Object.assign(new Error('Request failed with status code 503'), {
+      response: { data: { error: { message: 'Resource sample unavailable' } } },
+    })
+  }) as typeof api.get
+  const container = await mount(NativeResourcesPanel)
+  await until(() =>
+    Boolean(container.textContent?.includes('Resource sample unavailable'))
+  )
+  assert.ok(button(container, 'Retry'))
+})
+
+test('native resources use service process keys and leave missing samples unknown', async () => {
+  api.get = (async () => ({
+    data: {
+      schema_version: 1,
+      observed_at_unix_ms: Date.now(),
+      sample_window_ms: 250,
+      system: {
+        cpu_usage_percent: 23,
+        memory_usage_percent: 50,
+        memory_used_bytes: 1048576,
+      },
+      processes: {
+        'lmm-core': {
+          status: 'running',
+          pid: 123,
+          cpu_percent: 2,
+          memory_bytes: 1048576,
+        },
+        'lmm-extensions': {
+          status: 'unavailable',
+          pid: null,
+          cpu_percent: null,
+          memory_bytes: null,
+        },
+      },
+    },
+  })) as typeof api.get
+  const container = await mount(NativeResourcesPanel)
+  await until(() => Boolean(container.textContent?.includes('123')))
+  assert.match(container.textContent ?? '', /23%/)
+  assert.match(container.textContent ?? '', /2%/)
+  const extensions = [...container.querySelectorAll('div')].find(
+    (element) => element.firstElementChild?.textContent === 'Extensions process'
+  )
+  assert.ok(extensions)
+  assert.match(extensions.textContent ?? '', /Not reported/)
+  assert.doesNotMatch(extensions.textContent ?? '', /0%|0 MB/)
+})
+
+test('empty public API info does not claim model routing is unconfigured', async () => {
+  api.get = (async () => ({
+    data: { success: true, data: { api_info: [] } },
+  })) as typeof api.get
+  const container = await mount(ApiInfoPanel)
+  await until(() =>
+    Boolean(container.textContent?.includes('No data available'))
+  )
+  assert.doesNotMatch(container.textContent ?? '', /No API routes configured/)
+})
+
 test('performance distinguishes failed responses from empty results and retries', async () => {
   let calls = 0
   api.get = (async () => ({
@@ -139,6 +213,32 @@ test('performance distinguishes failed responses from empty results and retries'
   assert.equal(container.querySelector('.animate-pulse'), null)
   await act(async () => button(container, 'Refresh').click())
   await until(() => calls === 3)
+})
+
+test('performance shows the Core failure reason without claiming no traffic', async () => {
+  api.get = (async () => {
+    throw Object.assign(new Error('Request failed with status code 503'), {
+      response: {
+        data: {
+          error: {
+            code: 'core_migration_incomplete',
+            message: 'Performance history is unavailable',
+          },
+        },
+      },
+    })
+  }) as typeof api.get
+  const container = await mount(PerformanceHealthPanel)
+  await until(() =>
+    Boolean(
+      container.textContent?.includes('Performance history is unavailable')
+    )
+  )
+  assert.doesNotMatch(
+    container.textContent ?? '',
+    /No data available|Success rate/
+  )
+  assert.ok(button(container, 'Retry'))
 })
 
 for (const [label, response] of [
@@ -383,7 +483,7 @@ function configureCurrencyOverview() {
       language: 'en',
     },
   })
-  api.get = (async (url: string) => {
+  api.get = (async (url: string, config?: Parameters<typeof api.get>[1]) => {
     if (url === '/api/finance/site-statistics') {
       return {
         data: {
@@ -427,7 +527,14 @@ function configureCurrencyOverview() {
       }
     }
     if (url === '/api/data/self') {
-      return { data: { success: true, data: [{ quota: 250000 }] } }
+      const createdAt: unknown = config?.params?.start_timestamp
+      assert.equal(typeof createdAt, 'number')
+      return {
+        data: {
+          success: true,
+          data: [{ created_at: createdAt, quota: 250000 }],
+        },
+      }
     }
     throw new Error(`Unexpected ${url}`)
   }) as typeof api.get

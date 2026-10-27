@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useWalletCurrency } from '@/hooks/use-wallet-currency'
 import { ROLE } from '@/lib/roles'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -77,6 +78,11 @@ export function AdminSiteStatisticsPanel() {
           <AlertTitle>{t('全站统计暂时无法读取')}</AlertTitle>
           <AlertDescription>
             {t('请刷新重试，当前金额未确认。')}
+            {getServerErrorMessage(query.error) ? (
+              <p className='mt-2 break-words'>
+                {getServerErrorMessage(query.error)}
+              </p>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : !data ? (

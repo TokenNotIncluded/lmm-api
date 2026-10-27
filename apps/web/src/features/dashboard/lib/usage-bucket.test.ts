@@ -33,6 +33,11 @@ test('native images preserve absence of tokens and exact consumption metadata', 
   assert.deepEqual(parseUsageBuckets([imageBucket]), [imageBucket])
 })
 
+test('administrator native buckets preserve their all-accounts scope', () => {
+  const bucket = { ...imageBucket, usage_scope: 'administrator_all_accounts' }
+  assert.deepEqual(parseUsageBuckets([bucket]), [bucket])
+})
+
 test('mixed and zero-token native text buckets keep their known text token values', () => {
   for (const token_used of [0, 13]) {
     const value = { ...imageBucket, token_used }

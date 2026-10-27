@@ -187,7 +187,9 @@ export interface ChannelOpsResponse {
   success: boolean
   message?: string
   data?: {
-    retry_times: number
+    retry_times: number | null
+    read_only?: boolean
+    reason?: string
   }
 }
 

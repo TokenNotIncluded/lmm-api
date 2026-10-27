@@ -57,10 +57,9 @@ export function ApiInfoPanel() {
           {t('API Info')}
         </span>
       }
-      description={t('Configured routes and latency checks')}
       loading={loading}
       empty={!list.length}
-      emptyMessage={t('No API routes configured')}
+      emptyMessage={t('No data available')}
       height='h-72'
       contentClassName='p-0'
     >

@@ -20,18 +20,24 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import { usageBucketsSchema, type UsageBucket } from './lib/usage-bucket'
+import { usageBucketsSchema, usageScopeSchema } from './lib/usage-bucket'
 import type { FlowQuotaDataItem, UptimeGroupResult } from './types'
 
 const quotaDataResponseSchema = z.object({
   success: z.literal(true),
   data: usageBucketsSchema.nullable(),
+  availability: z.string().optional(),
+  coverage: z
+    .object({
+      scope: usageScopeSchema,
+      native_requests: z.boolean().optional(),
+      historical_imports: z.boolean(),
+      complete: z.boolean(),
+    })
+    .optional(),
 })
 
-function readQuotaResponse(input: unknown): {
-  success: boolean
-  data: UsageBucket[]
-} {
+function readQuotaResponse(input: unknown) {
   const response = quotaDataResponseSchema.parse(input)
   // Older successful responses explicitly used null for an empty data set.
   return { ...response, data: response.data ?? [] }

@@ -35,6 +35,7 @@ import {
   useDebouncedColumnFilter,
   useDataTable,
 } from '@/components/data-table'
+import { ErrorState } from '@/components/error-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -45,6 +46,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
@@ -220,7 +222,7 @@ export function ChannelsTable() {
 
   // Fetch channels data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
@@ -288,6 +290,7 @@ export function ChannelsTable() {
       }
     },
     placeholderData: (previousData) => previousData,
+    retry: false,
   })
 
   // Apply tag aggregation if tag mode is enabled
@@ -406,6 +409,15 @@ export function ChannelsTable() {
       label: sensitiveVisible ? option.label : '••••',
     })),
   ]
+
+  if (isError) {
+    return (
+      <ErrorState
+        description={getServerErrorMessage(error) ?? t('Failed to load data')}
+        onRetry={() => void refetch()}
+      />
+    )
+  }
 
   return (
     <DataTablePage

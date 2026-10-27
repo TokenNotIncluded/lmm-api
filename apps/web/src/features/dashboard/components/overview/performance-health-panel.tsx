@@ -31,6 +31,7 @@ import {
   getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
 import type { PerfModelSummary } from '@/features/performance-metrics/types'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 const PERFORMANCE_WINDOW_HOURS = 24
@@ -119,7 +120,10 @@ export function PerformanceHealthPanel() {
           role='status'
           className='text-muted-foreground flex flex-wrap items-center gap-3 text-sm'
         >
-          {t('Failed to load data')}
+          <span>
+            {getServerErrorMessage(metricsQuery.error ?? metricsQuery.data) ??
+              t('Failed to load data')}
+          </span>
           <Button
             type='button'
             variant='ghost'

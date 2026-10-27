@@ -20,11 +20,38 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  getServerErrorMessage,
   getServerErrorMessageKey,
   getServerErrorToastId,
 } from './server-error-message'
 
 describe('server error message mapping', () => {
+  test('reads Core and legacy failure reasons before a transport status', () => {
+    assert.equal(
+      getServerErrorMessage({
+        message: 'Request failed with status code 503',
+        response: {
+          data: {
+            error: {
+              code: 'core_migration_incomplete',
+              message: 'Performance history is unavailable',
+            },
+          },
+        },
+      }),
+      'Performance history is unavailable'
+    )
+    assert.equal(
+      getServerErrorMessage({ success: false, message: 'legacy reason' }),
+      'legacy reason'
+    )
+    assert.equal(
+      getServerErrorMessage(new Error('network failure')),
+      'network failure'
+    )
+    assert.equal(getServerErrorMessage({ success: false }), null)
+  })
+
   test('maps nested edge outage responses without claiming a save failed', () => {
     const error = {
       response: {
