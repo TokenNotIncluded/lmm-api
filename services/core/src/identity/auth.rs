@@ -174,6 +174,64 @@ impl IdentityStore {
     pub fn oauth_registration_disabled_methods(&self) -> &[String] {
         &self.oauth_registration_disabled_methods
     }
+    pub fn with_registration_email_verification(mut self, required: bool) -> Self {
+        self.registration_email_verification_required = required;
+        self
+    }
+
+    pub fn with_registration_email_policy(
+        mut self,
+        enabled: bool,
+        domains: &[String],
+    ) -> Result<Self> {
+        let domains: Vec<_> = domains
+            .iter()
+            .map(|domain| domain.trim().to_ascii_lowercase())
+            .collect();
+        if enabled
+            && (domains.is_empty()
+                || domains.iter().any(|domain| {
+                    domain.is_empty()
+                        || !domain.is_ascii()
+                        || domain
+                            .bytes()
+                            .any(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.')))
+                }))
+        {
+            return Err(IdentityError::Invalid);
+        }
+        self.registration_email_domains = enabled.then_some(domains);
+        Ok(self)
+    }
+
+    pub(super) fn require_registration_email(&self, verified_email: Option<&str>) -> Result<()> {
+        if !self.registration_email_verification_required
+            && self.registration_email_domains.is_none()
+        {
+            return Ok(());
+        }
+        let email = verified_email.ok_or(IdentityError::Forbidden)?;
+        let (local, domain) = email.split_once('@').ok_or(IdentityError::Forbidden)?;
+        if local.is_empty()
+            || domain.is_empty()
+            || domain.contains('@')
+            || !email.is_ascii()
+            || email
+                .bytes()
+                .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+            || self
+                .registration_email_domains
+                .as_ref()
+                .is_some_and(|domains| {
+                    !domains
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(domain))
+                })
+        {
+            return Err(IdentityError::Forbidden);
+        }
+        Ok(())
+    }
     pub(super) fn require_oauth_registration(&self, method: &str) -> Result<()> {
         if !self.registration_enabled
             || !self.oauth_register_enabled
@@ -285,6 +343,7 @@ impl IdentityStore {
     }
     pub async fn register(&self, request: &LoginRequest) -> Result<IssuedCredential> {
         self.require_password_registration()?;
+        self.require_registration_email(None)?;
         let name = normalize_login(&request.login_name)?;
         password_policy(&request.password)?;
         let hash = self.hash_password(request.password.clone()).await?;
@@ -765,6 +824,93 @@ mod tests {
             ));
         }
     }
+    // @context-fold begin registration-email-password-test
+    #[sqlx::test(migrations = false)]
+    async fn registration_email_domain_blocks_password_registration_but_preserves_login(
+        pool: PgPool,
+    ) {
+        let store = IdentityStore::from_pool(pool.clone()).with_registration_enabled(true);
+        store.init_database().await.unwrap();
+        let request = LoginRequest {
+            login_name: "existing-email-policy".into(),
+            password: "test-only long passphrase".into(),
+        };
+        let original = store.register(&request).await.unwrap();
+        let restricted = store
+            .clone()
+            .with_registration_email_policy(true, &[" Gmail.COM ".to_owned()])
+            .unwrap();
+        assert!(
+            restricted
+                .require_registration_email(Some("a@GMAIL.com"))
+                .is_ok()
+        );
+        for email in [None, Some(""), Some("a@sub.gmail.com"), Some("a@other.com")] {
+            assert!(matches!(
+                restricted.require_registration_email(email),
+                Err(IdentityError::Forbidden)
+            ));
+        }
+        for restricted in [
+            restricted.clone(),
+            store.with_registration_email_verification(true),
+        ] {
+            let before: i64 = sqlx::query_scalar("SELECT count(*) FROM core_identity.users")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert!(matches!(
+                restricted
+                    .register(&LoginRequest {
+                        login_name: "blocked-email-policy".into(),
+                        password: "test-only long passphrase".into(),
+                    })
+                    .await,
+                Err(IdentityError::Forbidden)
+            ));
+            let browser =
+                super::super::browser::BrowserAuth::new(restricted.clone(), &[43; 32]).unwrap();
+            for email in ["", "claimed@gmail.com"] {
+                assert!(matches!(
+                    browser
+                        .register(&super::super::browser::BrowserRegistration {
+                            username: "blocked-email-policy",
+                            password: "test-only pass",
+                            email,
+                        })
+                        .await,
+                    Err(super::super::browser::BrowserAuthError::Identity(
+                        IdentityError::Forbidden
+                    ))
+                ));
+            }
+            let after: i64 = sqlx::query_scalar("SELECT count(*) FROM core_identity.users")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(before, after);
+            let login = restricted.login(&request).await.unwrap();
+            assert_eq!(
+                restricted
+                    .authorize(&original.secret)
+                    .await
+                    .unwrap()
+                    .user_id,
+                restricted.authorize(&login.secret).await.unwrap().user_id
+            );
+        }
+        for domains in [vec![], vec!["".to_owned()], vec!["*.gmail.com".to_owned()]] {
+            assert!(matches!(
+                restricted
+                    .clone()
+                    .with_registration_email_policy(true, &domains),
+                Err(IdentityError::Invalid)
+            ));
+        }
+    }
+
+    // @context-fold end registration-email-password-test
+
     async fn password_change_fixture(pool: PgPool) -> (IdentityStore, IssuedCredential) {
         let store = IdentityStore::from_pool(pool).with_registration_enabled(true);
         store.init_database().await.unwrap();

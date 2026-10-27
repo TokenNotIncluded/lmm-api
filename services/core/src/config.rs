@@ -133,6 +133,9 @@ struct IdentityFile {
     password_register_enabled: Option<bool>,
     oauth_register_enabled: Option<bool>,
     registration_disabled_methods: Option<Vec<String>>,
+    email_domain_restriction_enabled: Option<bool>,
+    email_verification_enabled: Option<bool>,
+    email_domain_whitelist: Option<Vec<String>>,
     password_slots: u32,
     api_key_encryption_key_file: Option<PathBuf>,
     mfa: Option<MfaFile>,
@@ -153,6 +156,9 @@ impl Default for IdentityFile {
             password_register_enabled: None,
             oauth_register_enabled: None,
             registration_disabled_methods: None,
+            email_domain_restriction_enabled: None,
+            email_verification_enabled: None,
+            email_domain_whitelist: None,
             password_slots: one(),
             api_key_encryption_key_file: None,
             mfa: None,
@@ -369,6 +375,12 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         file.identity.oauth_register_enabled,
         file.identity.registration_disabled_methods.as_deref(),
     )?;
+    validate_registration_email_policy(
+        file.identity.registration_enabled,
+        file.identity.email_verification_enabled,
+        file.identity.email_domain_restriction_enabled,
+        file.identity.email_domain_whitelist.as_deref(),
+    )?;
     if file.database.is_none()
         && (file.identity.registration_enabled
             || file
@@ -448,6 +460,22 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         "LMM_CORE_REGISTRATION_ENABLED",
         file.identity.registration_enabled.to_string(),
     );
+    if let Some(enabled) = file.identity.email_verification_enabled {
+        put("LMM_CORE_EMAIL_VERIFICATION_ENABLED", enabled.to_string());
+    }
+    if let Some(enabled) = file.identity.email_domain_restriction_enabled {
+        put(
+            "LMM_CORE_EMAIL_DOMAIN_RESTRICTION_ENABLED",
+            enabled.to_string(),
+        );
+    }
+    if let Some(domains) = &file.identity.email_domain_whitelist {
+        put(
+            "LMM_CORE_EMAIL_DOMAIN_WHITELIST",
+            serde_json::to_string(domains)
+                .map_err(|_| invalid_config("invalid email domain whitelist"))?,
+        );
+    }
     if let Some(enabled) = file.identity.password_register_enabled {
         put("LMM_CORE_PASSWORD_REGISTER_ENABLED", enabled.to_string());
     }
@@ -913,6 +941,30 @@ pub fn identity_auth(
         .with_oauth_register_enabled(oauth_enabled.unwrap_or(false))
         .with_oauth_registration_disabled_methods(disabled_methods.as_deref().unwrap_or_default())
         .map_err(|_| invalid_config("unknown registration disabled method"))?;
+    let email_verification = optional_bool_setting("LMM_CORE_EMAIL_VERIFICATION_ENABLED")?;
+    let email_domain_restriction =
+        optional_bool_setting("LMM_CORE_EMAIL_DOMAIN_RESTRICTION_ENABLED")?;
+    let email_domains = match setting("LMM_CORE_EMAIL_DOMAIN_WHITELIST") {
+        Ok(value) => Some(
+            serde_json::from_str::<Vec<String>>(&value)
+                .map_err(|_| invalid_config("invalid email domain whitelist"))?,
+        ),
+        Err(env::VarError::NotPresent) => None,
+        Err(_) => return Err(invalid_config("invalid email domain whitelist")),
+    };
+    validate_registration_email_policy(
+        store.registration_enabled(),
+        email_verification,
+        email_domain_restriction,
+        email_domains.as_deref(),
+    )?;
+    store = store
+        .with_registration_email_verification(email_verification.unwrap_or(false))
+        .with_registration_email_policy(
+            email_domain_restriction.unwrap_or(false),
+            email_domains.as_deref().unwrap_or_default(),
+        )
+        .map_err(|_| invalid_config("invalid email domain whitelist"))?;
     if setting_os("LMM_CORE_TELEGRAM_BOT_NAME").is_some()
         || setting_os("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE").is_some()
     {
@@ -1028,6 +1080,31 @@ fn validate_registration_policy(
     {
         return Err(invalid_config(
             "enabled registration requires explicit password_register_enabled, oauth_register_enabled and registration_disabled_methods",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_registration_email_policy(
+    registration_enabled: bool,
+    verification_enabled: Option<bool>,
+    domain_restriction_enabled: Option<bool>,
+    whitelist: Option<&[String]>,
+) -> io::Result<()> {
+    if registration_enabled
+        && (verification_enabled.is_none()
+            || domain_restriction_enabled.is_none()
+            || whitelist.is_none())
+    {
+        return Err(invalid_config(
+            "enabled registration requires explicit email_verification_enabled, email_domain_restriction_enabled and email_domain_whitelist",
+        ));
+    }
+    if domain_restriction_enabled == Some(true)
+        && whitelist.is_none_or(|domains| domains.is_empty())
+    {
+        return Err(invalid_config(
+            "email domain restriction requires a whitelist",
         ));
     }
     Ok(())
@@ -2951,6 +3028,129 @@ pub async fn humangrant(
 mod tests {
     use super::*;
     #[test]
+    fn registration_email_domain_config_loads_and_requires_whitelist() {
+        let document = r#"version = 1
+[identity]
+email_verification_enabled = true
+email_domain_restriction_enabled = true
+email_domain_whitelist = ["gmail.com", "outlook.com"]
+"#;
+        let settings = parse_core_file(document.as_bytes()).unwrap();
+        assert_eq!(
+            settings["LMM_CORE_EMAIL_VERIFICATION_ENABLED"],
+            OsString::from("true")
+        );
+        assert_eq!(
+            settings["LMM_CORE_EMAIL_DOMAIN_RESTRICTION_ENABLED"],
+            OsString::from("true")
+        );
+        assert_eq!(
+            settings["LMM_CORE_EMAIL_DOMAIN_WHITELIST"],
+            OsString::from(r#"["gmail.com","outlook.com"]"#)
+        );
+        assert!(
+            parse_core_file(b"version=1\n[identity]\nemail_domain_restriction_enabled=true")
+                .is_err()
+        );
+    }
+    #[test]
+    fn registration_email_policy_toml_requires_each_explicit_field() {
+        // @context-fold begin explicit-email-policy-toml-cases
+        let base = "version=1\n[database]\nurl_file='/nonexistent-test/database-url'\n[identity]\nregistration_enabled=true\npassword_register_enabled=false\noauth_register_enabled=true\nregistration_disabled_methods=[]\n";
+        let fields = [
+            "email_verification_enabled=false\n",
+            "email_domain_restriction_enabled=false\n",
+            "email_domain_whitelist=[]\n",
+        ];
+        for omitted in 0..=fields.len() {
+            let document = format!(
+                "{base}{}",
+                fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| omitted < fields.len() && *index != omitted)
+                    .map(|(_, field)| *field)
+                    .collect::<String>()
+            );
+            let error = parse_core_file(document.as_bytes()).unwrap_err();
+            assert!(error.to_string().contains("requires explicit email_"));
+        }
+        assert!(parse_core_file(format!("{base}{}", fields.concat()).as_bytes()).is_ok());
+        let disabled =
+            parse_core_file(b"version=1\n[identity]\nregistration_enabled=false").unwrap();
+        for key in [
+            "LMM_CORE_EMAIL_VERIFICATION_ENABLED",
+            "LMM_CORE_EMAIL_DOMAIN_RESTRICTION_ENABLED",
+            "LMM_CORE_EMAIL_DOMAIN_WHITELIST",
+        ] {
+            assert!(!disabled.contains_key(key));
+        }
+        // @context-fold end explicit-email-policy-toml-cases
+    }
+
+    #[tokio::test]
+    async fn registration_email_policy_env_requires_each_explicit_field() {
+        // @context-fold begin explicit-email-policy-env-cases
+        const CASE: &str = "LMM_TEST_EMAIL_POLICY_CASE";
+        if let Ok(case) = env::var(CASE) {
+            initialize(None, true).unwrap();
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://test:test@127.0.0.1:1/unused")
+                .unwrap();
+            let result = identity_auth(crate::identity::IdentityStore::from_pool(pool));
+            if case == "complete" || case == "disabled" {
+                let store = result.unwrap();
+                assert_eq!(store.registration_enabled(), case == "complete");
+            } else {
+                let error = match result {
+                    Ok(_) => panic!("missing email policy was accepted"),
+                    Err(error) => error,
+                };
+                assert!(error.to_string().contains("requires explicit email_"));
+            }
+            return;
+        }
+        let fields = [
+            ("LMM_CORE_EMAIL_VERIFICATION_ENABLED", "false"),
+            ("LMM_CORE_EMAIL_DOMAIN_RESTRICTION_ENABLED", "false"),
+            ("LMM_CORE_EMAIL_DOMAIN_WHITELIST", "[]"),
+        ];
+        for case in ["0", "1", "2", "missing", "complete", "disabled"] {
+            let mut command = std::process::Command::new(env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "config::tests::registration_email_policy_env_requires_each_explicit_field",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CASE, case)
+                .env(
+                    "LMM_CORE_REGISTRATION_ENABLED",
+                    if case == "disabled" { "false" } else { "true" },
+                )
+                .env("LMM_CORE_PASSWORD_REGISTER_ENABLED", "false")
+                .env("LMM_CORE_OAUTH_REGISTER_ENABLED", "true")
+                .env("LMM_CORE_REGISTRATION_DISABLED_METHODS", "[]");
+            for (index, (key, value)) in fields.iter().enumerate() {
+                if case == "complete"
+                    || (case != "missing" && case != "disabled" && case != index.to_string())
+                {
+                    command.env(key, value);
+                }
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "env case {case}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        // @context-fold end explicit-email-policy-env-cases
+    }
+
+    #[test]
     fn identity_registration_disabled_methods_are_loaded_from_core_config() {
         let parsed = parse_core_file(
             br#"
@@ -2962,6 +3162,9 @@ mod tests {
                 password_register_enabled = false
                 oauth_register_enabled = true
                 registration_disabled_methods = ["discord", "github", "linuxdo", "oidc", "telegram", "wechat"]
+                email_verification_enabled = false
+                email_domain_restriction_enabled = false
+                email_domain_whitelist = []
             "#,
         )
         .unwrap();
@@ -2978,7 +3181,7 @@ mod tests {
     #[test]
     fn enabled_registration_rejects_missing_explicit_subpolicy() {
         // @context-fold begin required-registration-subpolicy-cases
-        let base = "version=1\n[database]\nurl_file='/nonexistent-test/database-url'\n[identity]\nregistration_enabled=true\n";
+        let base = "version=1\n[database]\nurl_file='/nonexistent-test/database-url'\n[identity]\nregistration_enabled=true\nemail_verification_enabled=false\nemail_domain_restriction_enabled=false\nemail_domain_whitelist=[]\n";
         let fields = [
             "password_register_enabled=false\n",
             "oauth_register_enabled=true\n",
@@ -3216,10 +3419,10 @@ mod tests {
         let document = b"version=1\n[server]\nlisten='127.0.0.1:8000'\nworker_threads=2\nmax_inflight=8\ndrain_timeout_seconds=15\n[database]\nurl_file='/nonexistent-lmm-test/database'\nmax_connections=3\nacquire_timeout_seconds=7\ncheck_timeout_seconds=60\n[identity]\nregistration_enabled=true\npassword_slots=2\napi_key_encryption_key_file='/nonexistent-lmm-test/api-key'\n[identity.web]\norigin='https://api.example.test'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\nuser_agreement_enabled=false\nprivacy_policy_enabled=true\n[identity.google]\nclient_id='public-client-id'\nclient_secret_file='/nonexistent-lmm-test/google'\nredirect_uri='https://api.example.test/core/v1/auth/oauth/google/callback'\n[rpc]\nsocket='/nonexistent-lmm-test/core.sock'\ntoken_file='/nonexistent-lmm-test/rpc'\nshared_group_id=65534\n[console]\nenabled=true\n[model]\nconfig_file='/nonexistent-lmm-test/model.toml'\nlocal_http=true\n[payments]\nconfig_file='/nonexistent-lmm-test/payments.toml'\ntoken_file='/nonexistent-lmm-test/payments-token'\n[commerce]\nconfig_file='/nonexistent-lmm-test/commerce.toml'\ntoken_file='/nonexistent-lmm-test/commerce-token'\n[ingress]\nack_url='http://127.0.0.1:3000/__ack'\ntoken_file='/nonexistent-lmm-test/ingress'\ninstance='core-test'\n";
         let document = String::from_utf8(document.to_vec()).unwrap().replace(
             "registration_enabled=true\n",
-            "registration_enabled=true\npassword_register_enabled=true\noauth_register_enabled=true\nregistration_disabled_methods=[]\n",
+            "registration_enabled=true\npassword_register_enabled=true\noauth_register_enabled=true\nregistration_disabled_methods=[]\nemail_verification_enabled=false\nemail_domain_restriction_enabled=false\nemail_domain_whitelist=[]\n",
         );
         let parsed = parse_core_file(document.as_bytes()).unwrap();
-        assert_eq!(parsed.len(), 36);
+        assert_eq!(parsed.len(), 39);
         assert_eq!(parsed["LMM_CORE_HUMANGRANT_ENABLED"], "false");
         for (key, expected) in [
             ("LMM_CORE_WORKER_THREADS", "2"),

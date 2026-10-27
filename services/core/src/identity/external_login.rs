@@ -84,6 +84,8 @@ impl IdentityStore {
             return Ok(user);
         }
         self.require_oauth_registration(identity.provider().slug())?;
+        // These providers currently prove only a subject, not an email address.
+        self.require_registration_email(None)?;
         let user = auth::create_user(tx).await?;
         let username = format!("{}_{}", identity.provider().slug(), &new_secret("")?[..12]);
         sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed) VALUES ($1,$2,$2,FALSE)")
