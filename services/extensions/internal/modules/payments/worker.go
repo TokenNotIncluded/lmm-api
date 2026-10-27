@@ -147,7 +147,14 @@ func (s *Service) Step(ctx context.Context, id string) error {
 	switch chosen.Kind {
 	case "refund_dispatch":
 		expected = RefundHeld
-		receipt, callErr = s.core.BeginRefundDispatch(bounded, snapshot.Intent.ID, chosen.Key, snapshot.Refunds[chosen.RefundID].HoldReceipt)
+		// Registration may have committed before its ACK was lost. Recover the
+		// original receipt first; an unavailable lookup is not proof of absence.
+		if chosen.Attempts > 1 {
+			receipt, callErr = s.core.Receipt(bounded, snapshot.Intent.ID, chosen.Key)
+		}
+		if chosen.Attempts == 1 || errors.Is(callErr, ErrNotFound) {
+			receipt, callErr = s.core.BeginRefundDispatch(bounded, snapshot.Intent.ID, chosen.Key, snapshot.Refunds[chosen.RefundID].HoldReceipt)
+		}
 	case "checkout", "refund_submit":
 		// An ambiguous refund is queried by its original provider identity.
 		// Even provider key retention cannot authorize a second POST after
