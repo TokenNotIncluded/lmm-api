@@ -26,11 +26,11 @@ class PendingPreviewTest(unittest.TestCase):
             "\n".join([
                 json.dumps({"kind": "identity", "row": {"database": "fixture"}}),
                 json.dumps({"kind": "row", "table": "top_ups", "row": {
-                    "id": 4, "user_id": 1, "status": "pending", "payment_provider": "fastpay",
+                    "id": 4, "user_id": 1, "status": "pending", "payment_provider": "epay",
                     "trade_no": "TOP-4", "money": 2,
                 }}),
                 json.dumps({"kind": "row", "table": "top_ups", "row": {
-                    "id": 5, "user_id": 1, "status": "success", "payment_provider": "fastpay",
+                    "id": 5, "user_id": 1, "status": "success", "payment_provider": "epay",
                     "trade_no": "TOP-5", "money": 3,
                 }}),
                 json.dumps({"kind": "row", "table": "subscription_orders", "row": {
@@ -79,7 +79,7 @@ class PendingPreviewTest(unittest.TestCase):
             )
         self.assertEqual(summary["pending_record_count"], 2)
         self.assertEqual(summary["pending_counts_by_table"], {"subscription_orders": 1, "top_ups": 1})
-        self.assertEqual(summary["pending_counts_by_provider"], {"fastpay": 1, "waffo_pancake": 1})
+        self.assertEqual(summary["pending_counts_by_provider"], {"epay": 1, "waffo_pancake": 1})
         self.assertEqual(summary["gate"], "BLOCKED_PENDING_PROVIDER_RECONCILIATION")
         self.assertIn("owner_only_receipt_writer_contract_missing", summary["fence_reasons"])
         self.assertFalse(summary["provider_io_performed"])

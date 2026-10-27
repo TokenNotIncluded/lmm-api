@@ -18,7 +18,7 @@ fn request(user_id: i64, account_id: i64) -> Value {
         "owner_account_id": account_id,
         "status": "pending",
         "settlement_state": "unknown",
-        "payload_json": {"provider": "fastpay", "status": "pending"},
+        "payload_json": {"provider": "epay", "status": "pending"},
         "amount_raw_json": {"money": "1.23"},
         "currency_raw_json": {"currency": null},
         "spendable_units": 0,
@@ -99,7 +99,7 @@ async fn pending_liabilities_are_owner_only_append_only_and_non_spendable(pool: 
     .bind("topup-11")
     .bind("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
     .bind(1_700_000_001_i64)
-    .bind("fastpay")
+    .bind("epay")
     .bind("pending")
     .bind("unknown")
     .bind(Json(json!({"status": "pending"})))

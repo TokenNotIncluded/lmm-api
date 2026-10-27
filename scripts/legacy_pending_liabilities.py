@@ -145,6 +145,8 @@ def build(F, *, tables, identities, target_users=None, migration_id, observed_at
         for ordinal, row in enumerate(rows):
             if row.get("status") != "pending":
                 continue
+            if _string_or_empty(row.get("payment_provider")).lower() == "fastpay":
+                continue
             record = _source_row(F, table, ordinal, row, identities, target_users, migration_id)
             F.require(record["source_row_id"] not in seen, "pending_liability_source_id_duplicate")
             seen.add(record["source_row_id"])
