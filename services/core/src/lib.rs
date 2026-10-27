@@ -9,6 +9,7 @@ pub mod assistant_tools_core;
 pub mod billing;
 pub mod bounties;
 pub mod builtins;
+pub mod channel_http;
 #[cfg(unix)]
 pub mod commerce;
 pub mod config;
@@ -35,6 +36,7 @@ pub mod model_http;
 pub mod native_key_read;
 pub mod oauth2_balance;
 pub mod oauth2_http;
+pub mod options_http;
 #[cfg(unix)]
 pub mod payments;
 pub mod pricing_http;

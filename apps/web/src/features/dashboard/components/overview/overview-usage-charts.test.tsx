@@ -30,9 +30,11 @@ const { QueryClient, QueryClientProvider } =
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { useAuthStore } = await import('@/stores/auth-store')
+const { api } = await import('@/lib/api')
 const { OverviewUsageCharts } = await import('./overview-usage-charts')
 const { overviewUsageRange } = await import('./overview-personalization-data')
 const originalUser = useAuthStore.getState().auth.user
+const originalGet = api.get
 const i18n = createInstance()
 await i18n
   .use(initReactI18next)
@@ -42,6 +44,7 @@ let dispose: (() => Promise<void>) | undefined
 afterEach(async () => {
   await dispose?.()
   dispose = undefined
+  api.get = originalGet
   useAuthStore.getState().auth.setUser(originalUser)
   document.body.replaceChildren()
 })
@@ -55,7 +58,7 @@ test('the actual all-image token chart renders unavailable instead of a fabricat
     defaultOptions: { queries: { retry: false } },
   })
   const range = overviewUsageRange(7)
-  client.setQueryData(['overview-recorded-usage', 881, 7], {
+  client.setQueryData(['overview-recorded-usage', 881, false, 7], {
     ...range,
     rows: [
       {
@@ -101,4 +104,82 @@ test('the actual all-image token chart renders unavailable instead of a fabricat
   assert.match(container.textContent ?? '', /Images \(billing quantity\): 2/)
   assert.equal(container.querySelector('.overview-chart-grid'), null)
   assert.equal(container.querySelector('[role="alert"]'), null)
+})
+
+test('administrator usage requests all accounts and leaves uncovered history unavailable', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 882, username: 'administrator', role: 100 })
+  const requests: string[] = []
+  api.get = (async (url: string) => {
+    requests.push(url)
+    return {
+      data: {
+        success: true,
+        availability: 'partial',
+        coverage: {
+          scope: 'administrator_all_accounts',
+          native_requests: true,
+          historical_imports: false,
+          complete: false,
+        },
+        data: [],
+      },
+    }
+  }) as typeof api.get
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  // A personal cache for the same identity must not satisfy an admin query.
+  client.setQueryData(['overview-recorded-usage', 882, false, 7], {
+    ...overviewUsageRange(7),
+    rows: [],
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  dispose = async () => {
+    await act(async () => root.unmount())
+    client.clear()
+  }
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <OverviewUsageCharts />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+  // React Query notifies observers on its next scheduled turn.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0], '/api/data')
+  assert.match(container.textContent ?? '', /All accounts: native Core usage/)
+  assert.match(
+    container.textContent ?? '',
+    /imported historical usage is unavailable/
+  )
+  assert.match(container.textContent ?? '', /Unavailable/)
+  assert.doesNotMatch(
+    container.textContent ?? '',
+    /Your account only|No recorded usage in this period|Your charts will appear/
+  )
+  assert.equal(container.querySelector('.overview-chart-grid'), null)
+  assert.equal(container.querySelector('[role="alert"]'), null)
+
+  await act(async () => {
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 882, username: 'administrator', role: 1 })
+  })
+  assert.match(container.textContent ?? '', /Your account only/)
+  assert.match(container.textContent ?? '', /No recorded usage in this period/)
+  assert.doesNotMatch(
+    container.textContent ?? '',
+    /All accounts: native Core usage/
+  )
 })

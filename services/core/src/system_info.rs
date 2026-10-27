@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs, io,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -204,11 +205,28 @@ fn find_process(name: &str) -> Option<u32> {
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
         .find(|pid| {
-            fs::read_link(format!("/proc/{pid}/exe"))
-                .ok()
-                .and_then(|path| path.file_name().map(|value| value == name))
-                .unwrap_or(false)
+            process_name_matches(name, fs::read_link(format!("/proc/{pid}/exe")), || {
+                fs::read_to_string(format!("/proc/{pid}/comm"))
+            })
         })
+}
+
+// Cross-user /proc/exe reads require ptrace permission; comm and resource counters
+// remain readable. This name match is for aggregate diagnostics, not authorization.
+fn process_name_matches(
+    name: &str,
+    executable: io::Result<PathBuf>,
+    read_comm: impl FnOnce() -> io::Result<String>,
+) -> bool {
+    // @context-fold begin native-process-permission-aware-name-match
+    match executable {
+        Ok(path) => path.file_name().is_some_and(|value| value == name),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            read_comm().is_ok_and(|comm| comm.strip_suffix('\n').unwrap_or(&comm) == name)
+        }
+        Err(_) => false,
+    }
+    // @context-fold end native-process-permission-aware-name-match
 }
 
 fn read_process(pid: u32) -> Option<ProcessSample> {
@@ -287,12 +305,57 @@ fn process_version(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::percent;
+    use super::{EXTENSIONS_PROCESS, percent, process_name_matches};
+    use std::{io, path::PathBuf};
 
     #[test]
     fn percent_is_bounded_and_zero_safe() {
         assert_eq!(percent(0, 0), 0.0);
         assert_eq!(percent(2, 1), 100.0);
         assert_eq!(percent(1, 4), 25.0);
+    }
+
+    #[test]
+    fn cross_user_process_is_found_when_executable_access_is_denied() {
+        assert!(process_name_matches(
+            EXTENSIONS_PROCESS,
+            Err(io::ErrorKind::PermissionDenied.into()),
+            || Ok("lmm-extensions\n".into()),
+        ));
+        for comm in [
+            "other-service\n",
+            "lmm-extensions-worker\n",
+            "lmm-extensions \n",
+        ] {
+            assert!(!process_name_matches(
+                EXTENSIONS_PROCESS,
+                Err(io::ErrorKind::PermissionDenied.into()),
+                || Ok(comm.into()),
+            ));
+        }
+        assert!(!process_name_matches(
+            EXTENSIONS_PROCESS,
+            Err(io::ErrorKind::PermissionDenied.into()),
+            || Err(io::ErrorKind::PermissionDenied.into()),
+        ));
+    }
+
+    #[test]
+    fn comm_does_not_override_executable_identity_or_a_missing_process() {
+        for executable in [
+            Ok(PathBuf::from("/usr/bin/lmm-extensions")),
+            Ok(PathBuf::from("/usr/bin/another-service")),
+            Err(io::ErrorKind::NotFound.into()),
+        ] {
+            let expected = executable
+                .as_ref()
+                .is_ok_and(|path| path.file_name().unwrap() == EXTENSIONS_PROCESS);
+            assert_eq!(
+                process_name_matches(EXTENSIONS_PROCESS, executable, || {
+                    panic!("comm is only read after a permission denial")
+                }),
+                expected
+            );
+        }
     }
 }

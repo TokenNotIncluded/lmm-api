@@ -85,10 +85,24 @@ const text: QuotaDataItem = {
   net_consumption_credits: 7,
 }
 
-async function mount(rows: QuotaDataItem[]) {
+async function mount(rows: QuotaDataItem[], partialAdmin = false) {
   api.defaults.adapter = async (config) => ({
     config,
-    data: { success: true, data: rows },
+    data: {
+      success: true,
+      data: rows,
+      ...(partialAdmin
+        ? {
+            availability: 'partial',
+            coverage: {
+              scope: 'administrator_all_accounts',
+              native_requests: true,
+              historical_imports: false,
+              complete: false,
+            },
+          }
+        : {}),
+    },
     headers: {},
     status: 200,
     statusText: 'OK',
@@ -187,4 +201,37 @@ test('unknown legacy consumption is unavailable without hiding its measured toke
   assert.match(card(container, 'Raw credits').hint, /Unavailable/)
   assert.equal(card(container, 'Total Tokens').value, '12')
   assert.equal(card(container, 'Total Count').value, '1')
+})
+
+test('partial administrator usage labels the native-only totals and retains measured values', async () => {
+  const container = await mount(
+    [{ ...text, usage_scope: 'administrator_all_accounts' }],
+    true
+  )
+  assert.match(container.textContent ?? '', /Partial usage across all accounts/)
+  assert.match(
+    container.textContent ?? '',
+    /imported historical usage is unavailable/
+  )
+  assert.equal(card(container, 'Total Count').value, '2')
+  assert.equal(card(container, 'Raw credits').value, '7 Raw credits')
+})
+
+test('empty partial administrator usage never represents unknown history as zero', async () => {
+  const container = await mount([], true)
+  assert.match(
+    container.textContent ?? '',
+    /imported historical usage is unavailable/
+  )
+  for (const title of [
+    'Total Count',
+    'Raw credits',
+    'Total Tokens',
+    'Average RPM',
+    'Average TPM',
+  ]) {
+    assert.equal(card(container, title).value, '—')
+    assert.match(card(container, title).hint, /Unavailable/)
+  }
+  assert.doesNotMatch(container.textContent ?? '', /0 Raw credits/)
 })

@@ -138,6 +138,68 @@ export function SettingsPageFrame(props: SettingsPageFrameProps) {
   )
 }
 
+/** Show only returned values, without mounting editors or filling missing defaults. */
+function LimitedSettings({
+  options,
+  readOnly,
+  partial,
+}: {
+  options: SystemOption[]
+  readOnly: boolean
+  partial: boolean
+}) {
+  // @context-fold begin limited-settings-view
+  const { t } = useTranslation()
+  return (
+    <div className='space-y-4'>
+      <Alert>
+        <AlertTitle>{readOnly ? t('Read only') : t('Settings')}</AlertTitle>
+        <AlertDescription className='space-y-2'>
+          {partial ? (
+            <p>
+              {t(
+                'Only part of the settings is available. Missing settings are not displayed.'
+              )}
+            </p>
+          ) : null}
+          {readOnly ? (
+            <p>
+              {t(
+                'Settings are read-only. Apply changes through the host configuration upgrade procedure.'
+              )}
+            </p>
+          ) : null}
+        </AlertDescription>
+      </Alert>
+      {options.length > 0 ? (
+        <dl className='divide-y border'>
+          {options.map((option) => (
+            <div
+              key={option.key}
+              className='grid min-w-0 gap-2 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]'
+            >
+              <dt className='text-sm font-medium break-words'>{option.key}</dt>
+              <dd className='min-w-0 font-mono text-sm break-words whitespace-pre-wrap'>
+                {option.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className='text-muted-foreground text-sm'>
+          {t('No data available')}
+        </p>
+      )}
+      <div className='flex justify-end'>
+        <Button type='button' disabled>
+          {t('Save Settings')}
+        </Button>
+      </div>
+    </div>
+  )
+  // @context-fold end limited-settings-view
+}
+
 /**
  * Generic settings page component
  * Handles loading state, data fetching, and section rendering
@@ -163,8 +225,11 @@ export function SettingsPage<
   const params = useParams({ from: routePath as any })
   const activeSection = (params?.section ?? defaultSection) as TSectionId
   const sectionMeta = getSectionMeta(activeSection)
+  const readOnly = data?.capabilities?.read_only === true
+  const partial = data?.capabilities?.partial === true
 
   const settings = useMemo(() => {
+    if (readOnly || partial) return null
     const baseSettings = getOptionValue(
       data?.data,
       defaultSettings
@@ -172,7 +237,7 @@ export function SettingsPage<
     return resolveSettings
       ? resolveSettings(baseSettings, data?.data)
       : baseSettings
-  }, [data?.data, defaultSettings, resolveSettings])
+  }, [data?.data, defaultSettings, resolveSettings, readOnly, partial])
 
   if (isLoading && !data) {
     return (
@@ -199,11 +264,20 @@ export function SettingsPage<
     )
   }
 
-  const sectionContent = getSectionContent(
-    activeSection,
-    settings,
-    ...((extraArgs ?? []) as TExtraArgs)
-  )
+  const sectionContent =
+    settings === null ? (
+      <LimitedSettings
+        options={data?.data ?? []}
+        readOnly={readOnly}
+        partial={partial}
+      />
+    ) : (
+      getSectionContent(
+        activeSection,
+        settings,
+        ...((extraArgs ?? []) as TExtraArgs)
+      )
+    )
 
   return (
     <SettingsPageFrame title={t(sectionMeta.titleKey)}>

@@ -403,10 +403,26 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                     .map(str::to_owned),
                 telegram_bot_name: store.telegram_bot_name().map(str::to_owned),
             };
+            if console_enabled {
+                routes = routes.merge(lmm_core::options_http::router(
+                    lmm_core::options_http::OptionsHttp::new(
+                        pool.clone(),
+                        store.clone(),
+                        lmm_core::options_http::RuntimeOptions {
+                            server_address: config::setting("LMM_CORE_WEB_ORIGIN")?,
+                            registration_enabled: config.registration_enabled,
+                        },
+                    ),
+                ));
+            }
             routes = routes.merge(lmm_core::legacy_auth::router(store, config.auth));
             capabilities.legacy_web_auth = true;
         }
         if let Some(gateway) = &model_gateway {
+            routes = routes.merge(lmm_core::channel_http::router(
+                pool.clone(),
+                gateway.dashboard_routing(),
+            ));
             routes = routes.merge(gateway.router());
             routes = routes.merge(gateway.key_read_router(pool.clone()));
             routes = routes.merge(

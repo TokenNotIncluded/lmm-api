@@ -2,6 +2,11 @@
 import { z } from 'zod'
 
 const counter = z.number().int().nonnegative().safe()
+export const usageScopeSchema = z.enum([
+  'actor_personal_key',
+  'actor_personal_usage',
+  'administrator_all_accounts',
+])
 const bucketShape = {
   id: z.number().optional(),
   user_id: z.number().optional(),
@@ -16,9 +21,7 @@ const bucketShape = {
   quota_money_basis: z.string().optional(),
   output_image_count: counter.nullable().optional(),
   token_count_scope: z.literal('settled_text_requests').optional(),
-  usage_scope: z
-    .enum(['actor_personal_key', 'actor_personal_usage'])
-    .optional(),
+  usage_scope: usageScopeSchema.optional(),
   settlement_scope: z.literal('settled_requests').optional(),
   platform_sponsored: z.boolean().optional(),
   payer_kind: z.string().optional(),
@@ -45,7 +48,7 @@ const nativeBucketSchema = z
     quota_money_basis: z.literal('captured_credits_per_usd'),
     output_image_count: counter,
     token_count_scope: z.literal('settled_text_requests'),
-    usage_scope: z.enum(['actor_personal_key', 'actor_personal_usage']),
+    usage_scope: usageScopeSchema,
     settlement_scope: z.literal('settled_requests'),
     platform_sponsored: z.boolean(),
     payer_kind: z.enum(['personal', 'team']),
