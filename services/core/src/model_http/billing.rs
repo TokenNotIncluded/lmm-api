@@ -530,6 +530,16 @@ impl Billing for Bridge {
                 }
             }
             .await;
+            if let Err(failure) = &result
+                && report.upstream_attempted
+            {
+                eprintln!(
+                    "core_model_finalize_failure code={} upstream_status={} provider_complete={}",
+                    failure.code(),
+                    report.upstream_status.unwrap_or(0),
+                    report.provider_complete,
+                );
+            }
             if result.is_err() && report.upstream_attempted {
                 retry(|| self.charging.mark_unknown(&reservation.id, &worker))
                     .await
