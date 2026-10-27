@@ -83,7 +83,8 @@ func NewRouter(registered []Module, credential []byte) (*Router, error) {
 		}
 		seen[name] = true
 		router.modules[name] = module
-		router.handlers[name] = handler
+		// Keep one admission gate across reloads while older requests finish.
+		router.handlers[name] = bounded(handler)
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -116,7 +117,7 @@ func (r *Router) Reload(enabled []string) error {
 	api := http.NewServeMux()
 	for _, name := range names {
 		prefix := "/extensions/v1/" + name
-		api.Handle(prefix+"/", http.StripPrefix(prefix, bounded(r.handlers[name])))
+		api.Handle(prefix+"/", http.StripPrefix(prefix, r.handlers[name]))
 	}
 	api.HandleFunc("GET /extensions/v1/modules", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, struct {

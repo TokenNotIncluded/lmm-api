@@ -70,7 +70,7 @@ func TestBusyModuleDoesNotBlockHealthOrOtherModules(t *testing.T) {
 	})}
 	fast := &moduleProbe{"fast", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })}
 	token := strings.Repeat("x", 32)
-	host, err := New([]Module{blocked, fast}, []byte(token))
+	host, err := NewRouter([]Module{blocked, fast}, []byte(token))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +88,9 @@ func TestBusyModuleDoesNotBlockHealthOrOtherModules(t *testing.T) {
 	}
 	for range MaxInFlightPerModule {
 		<-entered
+	}
+	if err := host.Reload([]string{"fast", "slow"}); err != nil {
+		t.Fatal(err)
 	}
 	if got := call("/extensions/v1/slow/"); got != 503 {
 		t.Fatalf("overflow=%d", got)
