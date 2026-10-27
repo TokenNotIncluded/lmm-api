@@ -355,6 +355,20 @@ impl ModelGateway {
         }
     }
 
+    /// Keep API-key compatibility reads under the same verified legacy wire
+    /// aliases as model requests. Native keys work when no aliases are loaded.
+    pub fn key_read_router(&self, pool: PgPool) -> Router {
+        let router = crate::native_key_read::router(pool);
+        if self.legacy_keys.is_some() {
+            router.layer(axum::middleware::from_fn_with_state(
+                self.clone(),
+                legacy_keys::normalize,
+            ))
+        } else {
+            router
+        }
+    }
+
     pub async fn drain(&self, grace: Duration) -> relay::DrainReport {
         let (normal, marked, images, systemone) = tokio::join!(
             self.relay.drain(grace),

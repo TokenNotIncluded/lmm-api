@@ -354,7 +354,6 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             capabilities.console = true;
         }
         remote_store = Some(store.clone());
-        routes = routes.merge(lmm_core::native_key_read::router(pool.clone()));
         if let Some(issuer) = config::market_oauth_issuer(pool.clone()).await? {
             routes = routes.merge(lmm_core::market_oauth::http::router(issuer));
         }
@@ -409,6 +408,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         }
         if let Some(gateway) = &model_gateway {
             routes = routes.merge(gateway.router());
+            routes = routes.merge(gateway.key_read_router(pool.clone()));
             routes = routes.merge(
                 lmm_core::pricing_http::PricingHttp::from_gateway(pool.clone(), gateway).router(),
             );
@@ -417,6 +417,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             }
         } else {
             routes = routes
+                .merge(lmm_core::native_key_read::router(pool.clone()))
                 .merge(lmm_core::pricing_http::PricingHttp::unavailable(pool.clone()).router());
         }
         if config::wallet_configured() {
