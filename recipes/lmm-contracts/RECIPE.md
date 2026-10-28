@@ -5,7 +5,7 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-contracts"
-version = "0.1.0"
+version = "0.1.1"
 kind = "software"
 description = "身份、权限、资金、模型接口及扩展 RPC 的共同可观察约束"
 entry = "BUILD_PROMPT.md"

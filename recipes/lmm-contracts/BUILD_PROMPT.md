@@ -20,6 +20,8 @@
 
 Core 提供 /v1/models，POST /v1/chat/completions、/v1/responses、/v1/messages、/v1beta/models/{action}；模型关闭必须拒绝，不能假定所有协议转换、模型能力和供应商已验收。JSON 常规响应与 SSE 完成/错误、流中断及最终 usage 必须明确区分。未知/不支持参数按所选协议清楚拒绝，不悄悄改写资金含义。
 
+流失败码：正常 HTTP EOF 但缺上游协议终态或残留半帧为 `upstream_truncated`；HTTP 传输中断/损坏为 `upstream_connection_error`；非法 UTF-8、JSON 或协议为 `invalid_upstream_response`；客户端主动取消为 `request_cancelled`。前三者在响应尚未开始时为 HTTP 502；已开始 SSE 时使用流内错误表达，不能声称改写已经发送的 HTTP 状态。主动取消保持现有 499 语义，取消后客户端可能已无法接收错误。日志和原操作恢复保留失败类型；这些分类不授权重发已经输出的请求、不把未知用量改成零、不释放未经确认的预留。
+
 原生只读接口 GET /v1/balance、/v1/usage：单一 Bearer opaque Key，验证有效性、允许 IP、scope/同意与读限制；不接受 OAuth token 或别名头冒充该 Key。账号级共享读限制和 /v1/pricing Key 定价读取属于原开发目录的未提交目标，本次不规定其实现已接线。
 
 /core/v1/identity、/core/v1/keys、/core/v1/credentials/{id}、/core/v1/teams 与 invite 操作用于核心身份及团队管理。公开 /core/v1/pricing/public、会话 /core/v1/pricing/session、POST /core/v1/pricing/runtime 按各自身份与授权区分结果，不能把私密价格从公开接口泄露。
