@@ -607,6 +607,18 @@ class IdentityContractTests(unittest.TestCase):
                         with self.assertRaisesRegex(MODULE.MappingError, "^component_rust_source_fingerprint_mismatch$"):
                             MODULE.current_contract()
 
+    def test_reviewed_identity_module_rejects_even_whitespace_byte_drift(self):
+        MODULE.current_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(MODULE.ROOT / "services/core/src", root / "services/core/src")
+            shutil.copytree(MODULE.ROOT / "services/core/schema", root / "services/core/schema")
+            identity = root / "services/core/src/identity/mod.rs"
+            identity.write_bytes(identity.read_bytes() + b"\n")
+            with patch.object(MODULE, "ROOT", root):
+                with self.assertRaisesRegex(MODULE.MappingError, "^component_rust_source_fingerprint_mismatch$"):
+                    MODULE.current_contract()
+
     def test_current_source_raw_bytes_and_rust_version_match_pinned_review(self):
         contract = MODULE.identity_contract()
         self.assertEqual(contract, {"identity_version": 5,

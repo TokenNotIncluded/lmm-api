@@ -10,6 +10,8 @@ on:
       - deployment/docker/**
       - scripts/test-core-*.py
       - scripts/test_core_rpc_fixture.py
+      - scripts/ci-payment-live.py
+      - tests/payments/**
       - scripts/workflow-topology.test.mjs
       - .dockerignore
   push:
@@ -18,6 +20,8 @@ on:
       - .github/workflows/core-protocol.yml
       - .github/workflows/ci.yml
       - .github/workflows/server-release-qualification.yml
+      - scripts/ci-payment-live.py
+      - tests/payments/**
       - scripts/workflow-topology.test.mjs
       - scripts/local-release-tests.py
       - scripts/test-local-release-tests.py
@@ -154,7 +158,10 @@ jobs:
           LMM_PAYMENT_BOOTSTRAP_BIN="$(realpath "$RUNNER_TEMP/lmm-payment-bootstrap")"
           LMM_PAYMENT_BOOTSTRAP_SHA256="$(sha256sum "$LMM_PAYMENT_BOOTSTRAP_BIN" | cut -d ' ' -f1)"
           export LMM_PAYMENT_CORE_BIN LMM_PAYMENT_CORE_SHA256 LMM_PAYMENT_GO_BIN LMM_PAYMENT_GO_SHA256 LMM_PAYMENT_BOOTSTRAP_BIN LMM_PAYMENT_BOOTSTRAP_SHA256
-          cargo test --locked --all-targets --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          cargo test --locked --all-targets --no-fail-fast -- --skip synthetic_live_proof_crosses_core_go_processes_and_posts_once 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+      - name: Synthetic payment live process through owning runner
+        if: ${{ !cancelled() }}
+        run: python3 -B scripts/ci-payment-live.py --output "$(realpath -m "$RUNNER_TEMP/payment-live")" 2>&1 | tee "$RUNNER_TEMP/payment-live-build.log"
       - name: Go contract and race tests
         if: ${{ !cancelled() }}
         working-directory: services/extensions
@@ -229,6 +236,8 @@ jobs:
             ${{ runner.temp }}/core-source-sha.txt
             ${{ runner.temp }}/core-format.log
             ${{ runner.temp }}/core-tests.log
+            ${{ runner.temp }}/payment-live-build.log
+            ${{ runner.temp }}/payment-live/evidence/result.json
             ${{ runner.temp }}/extension-tests.jsonl
             ${{ runner.temp }}/core-rpc-docker.log
             ${{ runner.temp }}/core-rpc-docker-evidence-readable
