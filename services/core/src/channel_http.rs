@@ -223,9 +223,9 @@ fn page(config: &RoutingConfig, params: Params) -> Result<Value, &'static str> {
     }))
 }
 
-async fn admit(state: &ChannelState, headers: &HeaderMap) -> Result<(), Response> {
+async fn admit(state: &ChannelState, headers: &HeaderMap) -> Result<(), HistoryError> {
     if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
-        return Err(auth_error(HistoryError::Unauthorized));
+        return Err(HistoryError::Unauthorized);
     }
     let secret = headers
         .get(header::AUTHORIZATION)
@@ -233,12 +233,11 @@ async fn admit(state: &ChannelState, headers: &HeaderMap) -> Result<(), Response
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, secret)| scheme.eq_ignore_ascii_case("Bearer") && !secret.is_empty())
         .map(|(_, secret)| secret)
-        .ok_or_else(|| auth_error(HistoryError::Unauthorized))?;
+        .ok_or(HistoryError::Unauthorized)?;
     state
         .identity
         .authenticate_category(secret, ReadRoute::Administrator)
         .await
-        .map_err(auth_error)
 }
 
 fn auth_error(error: HistoryError) -> Response {
@@ -275,8 +274,8 @@ async fn list(
     headers: HeaderMap,
     params: Result<Query<Params>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
-    if let Err(response) = admit(&state, &headers).await {
-        return response;
+    if let Err(error) = admit(&state, &headers).await {
+        return auth_error(error);
     }
     let params = match params {
         Ok(Query(params)) => params,
@@ -309,8 +308,8 @@ async fn detail(
     headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Response {
-    if let Err(response) = admit(&state, &headers).await {
-        return response;
+    if let Err(error) = admit(&state, &headers).await {
+        return auth_error(error);
     }
     match state.routing.catalog_document() {
         Ok(document) => match channels(&document.routing)
@@ -333,8 +332,8 @@ async fn detail(
 }
 
 async fn ops(State(state): State<ChannelState>, headers: HeaderMap) -> Response {
-    if let Err(response) = admit(&state, &headers).await {
-        return response;
+    if let Err(error) = admit(&state, &headers).await {
+        return auth_error(error);
     }
     Json(json!({
         "success": true,
@@ -355,8 +354,8 @@ async fn ops(State(state): State<ChannelState>, headers: HeaderMap) -> Response 
 }
 
 async fn unsupported(State(state): State<ChannelState>, headers: HeaderMap) -> Response {
-    if let Err(response) = admit(&state, &headers).await {
-        return response;
+    if let Err(error) = admit(&state, &headers).await {
+        return auth_error(error);
     }
     error_response(
         StatusCode::NOT_IMPLEMENTED,

@@ -486,7 +486,7 @@ fn gateway_with_output_rate(
                 // Exactly one Credit per input token, cached or uncached.
                 rates: TokenRates {
                     input: 2_000_000,
-                    output: output_rate.into(),
+                    output: output_rate,
                     cache_read: 2_000_000,
                     cache_write: 0,
                     request: 0,

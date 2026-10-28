@@ -57,7 +57,7 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
 async fn authorize(
     state: &WalletHistoryReadHttp,
     headers: &HeaderMap,
-) -> Result<Principal, Response> {
+) -> Result<Principal, IdentityError> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let secret = values
         .next()
@@ -65,29 +65,33 @@ async fn authorize(
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()));
     let Some(secret) = secret.filter(|_| values.next().is_none()) else {
-        return Err(error(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED",
-            "A valid session is required.",
-        ));
+        return Err(IdentityError::Unauthorized);
     };
     match state.identity.authorize(secret).await {
         Ok(actor) if actor.credential_kind == CredentialKind::Session => Ok(actor),
-        Ok(_) | Err(IdentityError::Forbidden) => Err(error(
+        Ok(_) | Err(IdentityError::Forbidden) => Err(IdentityError::Forbidden),
+        Err(IdentityError::Storage) => Err(IdentityError::Storage),
+        Err(_) => Err(IdentityError::Unauthorized),
+    }
+}
+
+fn auth_error(failure: IdentityError) -> Response {
+    match failure {
+        IdentityError::Forbidden => error(
             StatusCode::FORBIDDEN,
             "FORBIDDEN",
             "A console session is required.",
-        )),
-        Err(IdentityError::Storage) => Err(error(
+        ),
+        IdentityError::Storage => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "IDENTITY_UNAVAILABLE",
             "Session verification is unavailable.",
-        )),
-        Err(_) => Err(error(
+        ),
+        _ => error(
             StatusCode::UNAUTHORIZED,
             "UNAUTHORIZED",
             "A valid session is required.",
-        )),
+        ),
     }
 }
 // @context-fold end wallet-history-session-read
@@ -99,7 +103,7 @@ async fn topup_self(
 ) -> Response {
     let principal = match authorize(&state, &headers).await {
         Ok(principal) => principal,
-        Err(response) => return response,
+        Err(error) => return auth_error(error),
     };
     let Ok(Query(query)) = query else {
         return error(

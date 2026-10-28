@@ -424,7 +424,6 @@ struct PaymentFixture {
     pub(crate) fixture: PathBuf,
     pub(crate) go_config: PathBuf,
     pub(crate) client: Client,
-    pub(crate) core_endpoint: String,
     pub(crate) go_endpoint: String,
     pub(crate) core: Process,
 }
@@ -608,7 +607,6 @@ async fn prepare_payment_fixture(pool: &PgPool) -> PaymentFixture {
         fixture,
         go_config,
         client,
-        core_endpoint,
         go_endpoint,
         core,
     }

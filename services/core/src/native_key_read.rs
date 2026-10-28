@@ -125,7 +125,7 @@ impl Reads {
         secret: &str,
         peer: SocketAddr,
     ) -> Result<(crate::identity::Principal, bool), Failure> {
-        let actor = crate::identity::authenticate_readonly_in_transaction(&mut **tx, secret)
+        let actor = crate::identity::authenticate_readonly_in_transaction(tx, secret)
             .await
             .map_err(|e| match e {
                 crate::identity::IdentityError::Unauthorized
@@ -192,7 +192,7 @@ impl Reads {
             .await
             .map_err(Failure::for_quota)?;
         let (used, remaining, unlimited) =
-            crate::billing::charging::key_quota_snapshot(&mut *tx, actor.credential_id)
+            crate::billing::charging::key_quota_snapshot(&mut tx, actor.credential_id)
                 .await
                 .map_err(|_| Failure::QuotaUnavailable)?;
         let now: i64 = sqlx::query_scalar("SELECT extract(epoch FROM clock_timestamp())::bigint")
