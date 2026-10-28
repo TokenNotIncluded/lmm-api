@@ -26,6 +26,8 @@
 
 邮箱挑战存储切片已提交：开发自测 9 项通过（其中 8 项使用隔离 PostgreSQL），含并发单次消费、错误码预算、事务回滚和历史邮箱不可直接恢复；工作树组合的 `cargo check --lib` 通过。该切片没有接入正式安装或升级、权限、注册/绑定/重置 HTTP、Web 或 SMTP，不得应用其测试 SQL 到现有站点；当前 issue 先提交，不能在之后另行入队邮件来声称安全，正式启用前须把挑战与加密 outbox 原子提交。独立验收在 PostgreSQL 18.6 完成 16 项真实数据库用例，覆盖未验证历史邮箱拒绝、并发单次消费、次数限制、事务失败与权限边界；完整密码变更、HTTP、Web、SMTP 和正式安装升级仍未验收。证据在 `~/Documents/Codex/2026-10-29-lmm-email-challenge-independent/`。
 
+未提交的加密邮件 outbox 候选在隔离 PostgreSQL 与本地 SMTP sink 的开发自测中通过 18 项；此前 SMTP 收件阶段拒绝时错误断言应收到正文，修正测试后重跑通过，失败记录保留。冻结的 11 个文件与验收记录的 SHA-256 一致；挑战签发、限流预算与加密出箱可由同一事务提交，无需客户端挑战 ID 的验证也在该切片自测。独立复验仍在进行，真实邮件、HTTP 和正式 schema/权限/启动均未接入。账户变更的安全通知尚无法通过现有公开接口原子接线：`EmailMutation::finish` 同时消费挑战并提交，而通知入队需要已消费状态及仍打开的事务；这需要修正并验证失败回滚。证据为 `~/Documents/Codex/2026-10-29-lmm-email-outbox-selftest-attempt-6/freeze-receipt.json`。
+
 新的旧转账映射仅整理和校验离线来源事实，15 项合成测试通过；`can_apply=false`，未实现双库导入与激活。Pi-Core runner 的 Provider 固定提交已对齐当前 gitlink，真实 Provider 源码绑定自测通过；实际 CLI、浏览器和 Core 联合验收尚未运行。
 
 四个 Pro 分别完成数据库升级、财务迁移、邮箱身份和全项目验收方案；财务修订版的参考 PostgreSQL 实验确认须先取得原执行锁再建立新读取快照，并揭示旧备份的历史连续性问题。相关报告和交付在 [交接目录](https://drive.google.com/drive/folders/1QqRY8YHkT7faUq5nlZnkmaCAHIcXyxyq)；这些参考模型不是产品集成或生产验收。
