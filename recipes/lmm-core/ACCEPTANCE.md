@@ -9,5 +9,6 @@
 7. 公开和会话/Key pricing 分权；未知余额单位、数据库不可用、无资金 capability 不伪造 0 或免费调用。
 8. 历史数据仅在只读源副本与新目标验证，冻结 source/mapping/instance/SQL；重复回放和冲突拒绝回读全状态；旧 Key、会话、资金不能随身份默认迁移。
 9. 源码版本、命令、工具、真实进程与库身份、退出码和日志绑定。合成供应商与真实外部供应商分别列明。
+10. 用真实回环 HTTP 分别发送多帧同块、逐帧、逐字节和 CRLF 的 Gemini SSE；客户端收到完整文本、finish 和最后 usage。正常终态、缺终态、半帧、损坏 HTTP、非法 UTF-8、非 SSE 和主动取消有明确不同结果；截断不发成功终止、不再次发送上游请求，公开码与日志分别保持 `upstream_truncated`、`upstream_connection_error`、`invalid_upstream_response` 和 `request_cancelled`。TCP/内存账务观察与真实 PostgreSQL 预留恢复验收分开记录。
 
-本轮上述测试均 NOT RUN。没有资源基线；后续测量慢客户端、并发 SSE、恢复、账本分页及独立 Core 常驻内存。
+上述是重建必须满足的验收条件，不是运行结果。实际源码、命令、通过/失败和未运行范围以主配方项目的 STATUS.md 及关联 PR 为准；单项修复不能代替完整数据库、慢客户端、恢复或独立 Core 资源验收。
