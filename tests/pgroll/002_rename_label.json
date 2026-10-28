@@ -1,6 +1,0 @@
-{
-  "version_schema": "lmm_pgroll_demo_v2",
-  "operations": [
-    {"rename_column": {"table": "items", "from": "label", "to": "display_name"}}
-  ]
-}

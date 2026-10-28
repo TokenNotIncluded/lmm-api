@@ -1,9 +1,0 @@
-name: Microkernel qualification
-on:
-  workflow_dispatch:
-permissions:
-  contents: read
-# This validates the implemented WIP, not production readiness or old data.
-jobs:
-  microkernel:
-    uses: ./.github/workflows/core-protocol.yml

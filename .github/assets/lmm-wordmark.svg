@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 643 100" role="img" aria-labelledby="lmm-title lmm-desc"><title id="lmm-title">LMM API</title><desc id="lmm-desc">Folded ribbon monogram for Language Model Mesh.</desc><style>:root{color:#1b2024} @media(prefers-color-scheme:dark){:root{color:#f5f5f5}}</style>
-<path d="M0 0H18V82H76V100H0Z"/>
-<path d="M90 100V0H110L148 44L186 0H206V100H186V30L148 74L110 30V100Z"/>
-<path d="M224 100V0H244L282 44L320 0H340V100H320V30L282 74L244 30V100Z"/>
-<path d="M390 100L432 0H455L497 100H475L467 80H420L412 100Z M428 61H459L443 22Z"/>
-<path d="M510 100V0H564C590 0 605 13 605 36C605 59 590 72 564 72H530V100Z M530 18V54H562C576 54 585 49 585 36C585 24 576 18 562 18Z"/>
-<path d="M623 0H643V100H623Z"/>
-</svg>

@@ -1,59 +1,47 @@
-[submodule "packages/pi-lmm-provider"]
-	path = packages/pi-lmm-provider
-	url = https://github.com/TokenNotIncluded/pi-lmm-provider.git
-[submodule "packages/dsh-lmm-provider"]
-	path = packages/dsh-lmm-provider
-	url = https://github.com/TokenNotIncluded/dsh-lmm-provider.git
-[submodule "packages/lmm-scripts"]
-	path = packages/lmm-scripts
-	url = https://github.com/TokenNotIncluded/lmm-scripts.git
-[submodule "packages/codewhale-lmm-provider"]
-	path = packages/codewhale-lmm-provider
-	url = https://github.com/TokenNotIncluded/codewhale-lmm-provider.git
-[submodule "packages/opencode-lmm-auth"]
-	path = packages/opencode-lmm-auth
-	url = https://github.com/TokenNotIncluded/opencode-lmm-auth.git
-[submodule "apps/cli"]
-	path = apps/cli
-	url = https://github.com/TokenNotIncluded/lmm.git
-[submodule "packages/zed-lmm-provider"]
-	path = packages/zed-lmm-provider
-	url = https://github.com/TokenNotIncluded/zed-lmm-provider.git
-	branch = main
-[submodule "packages/vscode-lmm-provider"]
-	path = packages/vscode-lmm-provider
-	url = https://github.com/TokenNotIncluded/vscode-lmm-provider.git
-	branch = main
 [submodule ".agents/skills/add-dependency"]
-	path = .agents/skills/add-dependency
-	url = https://github.com/recipkg/add-dependency.git
+path = .agents/skills/add-dependency
+url = https://github.com/recipkg/add-dependency.git
+
 [submodule ".agents/skills/build-software-package"]
-	path = .agents/skills/build-software-package
-	url = https://github.com/recipkg/build-software-package.git
+path = .agents/skills/build-software-package
+url = https://github.com/recipkg/build-software-package.git
+
 [submodule ".agents/skills/discover-dependencies"]
-	path = .agents/skills/discover-dependencies
-	url = https://github.com/recipkg/discover-dependencies.git
+path = .agents/skills/discover-dependencies
+url = https://github.com/recipkg/discover-dependencies.git
+
 [submodule ".agents/skills/manage-git-repository"]
-	path = .agents/skills/manage-git-repository
-	url = https://github.com/recipkg/manage-git-repository.git
+path = .agents/skills/manage-git-repository
+url = https://github.com/recipkg/manage-git-repository.git
+
 [submodule ".agents/skills/migrate-to-recipkg"]
-	path = .agents/skills/migrate-to-recipkg
-	url = https://github.com/recipkg/migrate-to-recipkg.git
+path = .agents/skills/migrate-to-recipkg
+url = https://github.com/recipkg/migrate-to-recipkg.git
+
 [submodule ".agents/skills/prompt-to-software"]
-	path = .agents/skills/prompt-to-software
-	url = https://github.com/recipkg/prompt-to-software.git
+path = .agents/skills/prompt-to-software
+url = https://github.com/recipkg/prompt-to-software.git
+
 [submodule ".agents/skills/rewrite-software"]
-	path = .agents/skills/rewrite-software
-	url = https://github.com/recipkg/rewrite-software.git
+path = .agents/skills/rewrite-software
+url = https://github.com/recipkg/rewrite-software.git
+
 [submodule ".agents/skills/rewrite-to-recipkg"]
-	path = .agents/skills/rewrite-to-recipkg
-	url = https://github.com/recipkg/rewrite-to-recipkg.git
+path = .agents/skills/rewrite-to-recipkg
+url = https://github.com/recipkg/rewrite-to-recipkg.git
+
 [submodule ".agents/skills/software-to-prompt"]
-	path = .agents/skills/software-to-prompt
-	url = https://github.com/recipkg/software-to-prompt.git
+path = .agents/skills/software-to-prompt
+url = https://github.com/recipkg/software-to-prompt.git
+
 [submodule ".agents/skills/test-feedback"]
-	path = .agents/skills/test-feedback
-	url = https://github.com/recipkg/test-feedback.git
+path = .agents/skills/test-feedback
+url = https://github.com/recipkg/test-feedback.git
+
 [submodule ".agents/skills/update-recipkg-in-project"]
-	path = .agents/skills/update-recipkg-in-project
-	url = https://github.com/recipkg/update-recipkg-in-project.git
+path = .agents/skills/update-recipkg-in-project
+url = https://github.com/recipkg/update-recipkg-in-project.git
+
+[submodule "generated/lmm-api-source"]
+path = generated/lmm-api-source
+url = https://github.com/TokenNotIncluded/lmm-api-source.git

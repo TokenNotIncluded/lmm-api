@@ -1,8 +1,0 @@
-[extend]
-useDefault = true
-
-[allowlist]
-description = "Ignore generated Rust build artifacts"
-paths = [
-  '''(^|/)target/''',
-]
