@@ -12,3 +12,7 @@ Use the separately installed Recipkg CLI for recipe checks and prompt generation
 `generated/` is a container for source checkouts. New independently versioned source uses pinned child submodules at `generated/<source-repository-name>/`, with lowercase, hyphenated repository names. Existing local observation material and unfinished source work remain governed by the project's preservation rules.
 
 本项目通过 11 个独立上游仓库的固定提交子模块复用 Recipkg 技能，不逐项目复制或新建技能仓库。先检查本地修改和上游差异，再更新子模块指针；已有项目自定义技能保持原文件。配方仅分发 UTF-8 Markdown，Git 元数据、源代码和用户数据不进入归档。源码独立仓库通过 `generated/` 下的子目录子模块接入；保留现有观察材料和未完成源码工作。结构检查与提示词生成通过不等于软件已经重建或上线。
+
+## Current project ownership
+
+This repository is now the recipe project itself. Recipes live in `recipes/`; the implementation is pinned at `generated/lmm-api-source/` from `TokenNotIncluded/lmm-api-source`. Run implementation commands from that submodule. Legacy custom skill files are preserved here; use their full implementation-owned counterparts under `generated/lmm-api-source/.agents/skills/` so their relative source/document paths resolve correctly.

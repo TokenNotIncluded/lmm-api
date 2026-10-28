@@ -1,3 +1,0 @@
-# Opt-in only: copy to /etc/systemd/system/lmm-extensions.service.d/rpc.conf.
-[Service]
-SupplementaryGroups=lmm-rpc

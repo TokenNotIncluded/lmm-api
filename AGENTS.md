@@ -1,125 +1,20 @@
-# Agent guide
+# LMM API · Recipkg project
 
-Complete the requested change with a short read → edit → check → deliver loop.
-This file is a map, not a checklist to run in full.
+本仓库的主要输入是 `recipes/lmm-api/` 及其递归依赖。实现代码在独立仓库 [TokenNotIncluded/lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source)，通过 `generated/lmm-api-source/` 的固定提交子模块接入。保持本项目及原 GitHub 仓库名 `lmm-api`，默认分支 `main`。
 
-## Project importance and completion
+## 工作位置
 
-The owner explicitly states that this project is worth more than USD 10,000.
-Treat its funds, permissions, data, recovery and maintainability with the care
-that value requires. Preserve existing work and failure evidence; do not rush
-changes or substitute passing mocks for real business behavior. Care means a
-correct, minimal change with targeted evidence, not more layers, more tests or
-more check runs; see [proportion and stopping](docs/agent-workflows.md#适度与停止).
+- 改需求、公开接口和验收合同：编辑 `recipes/`，只放 UTF-8 Markdown，不放实现源码、二进制、软链接、执行钩子或秘密。
+- 改实现：先进入 `generated/lmm-api-source/`，读取其 `AGENTS.md`，遵守原核心、权限、资金和数据库边界。构建及测试命令均在源码子模块内执行。
+- 发布实现：在源码仓库本地自测并提交/推送，再显式更新本仓库 gitlink。不能将未提交工作误算为固定版本，禁止 reset/clean/强推覆盖并行改动。
+- `generated/` 只作容器，不放平铺源码。CLI 与 providers 保持源码仓库内原子模块，不在主仓库重复装配。
 
-When asked to complete the project, keep implementing and independently verifying
-the repository's [full acceptance scope](docs/architecture-completion-prompts.md).
-Use parallel owners for independent work and freeze inputs for acceptance.
-Required failures, unrun checks and blocked capabilities remain incomplete;
-never claim 100% from source presence, test counts, a build or a deployment alone.
+## 技能与检查
 
-## Start once
+共享 Recipkg 技能保留在 `.agents/skills/` 的 11 个固定上游子模块，目录和仓库身份不变。已有自定义技能保留原文；其原源码路径与文档引用在 `generated/lmm-api-source/.agents/skills/` 的完整对应副本中继续有效。实现任务从源码子模块读取对应自定义技能，不能把相对路径当主仓库代码位置。
 
-Use `wip/rust-core-go-extensions`, now the GitHub default development branch, for
-ongoing microservice work. `main` and `traditional` are frozen historical monolith
-snapshots; see [branch policy](docs/development-branches.md). Read its current
-revision and local changes; preserve other work. Reuse the existing workspace
-and WIP branch, not a new dated branch or worktree for each fix. Never force-push.
-Inspect other PRs or branch history only when the task depends on them.
+配方修改运行 `recipkg check recipes/lmm-api`。递归依赖变更时临时 pack、check 归档并 build 完整提示词，随后删除临时归档。未明确要求不保留归档。共享技能更新先审阅其上游，再显式更新消费者提交。
 
-Read the affected code, callers and matching guide below. Small changes need no
-plan file or extra approval round. Reuse information and authorization already
-given. Ask only for a missing decision that tools cannot resolve.
+自测、独立业务验收、推送、发布和部署分别报告。配方结构通过不代表重建成功。完整业务验收仍按配方和源码内完整验收范围执行；未运行、失败、UNKNOWN 和阻塞继续保留。保留金融预览确认，不注册生产测试账号，不访问生产数据或执行真实付费调用，不触碰或部署任何 DMIT 服务器。
 
-## Pending cross-repository work
-
-[Extore shop binding](docs/extore-shop-binding-followup.md) is pushed but not
-accepted, merged or deployed. Preserve the recorded task workspaces and other
-contributors' edits. Do not deploy or merge/push Extore `main` (automatic deployment).
-Read that handoff before continuing product sync or updating its submodule pointer.
-
-## Find the work
-
-| Task | Entry |
-| --- | --- |
-| Setup or source paths | [Development](docs/development.md) |
-| Choose checks and reuse results | [Working guide](docs/agent-workflows.md) |
-| Core or extension ownership | [Architecture](docs/core-migration.md) |
-| Registration abuse, honeypots or ban notices | [Abuse controls](docs/abuse-controls.md) |
-| Docs, AGENTS.md or skills | [Documentation skill](.agents/skills/docs-maintenance/SKILL.md) |
-| Components or layout | [UI skill](.agents/skills/shadcn-ui/SKILL.md) |
-| Homepage particle scenes | [Sculpture skill](.agents/skills/home-sculpture/SKILL.md) |
-| UI text or locale keys | [Translation skill](.agents/skills/i18n-translate/SKILL.md) |
-| React performance | [Performance skill](.agents/skills/vercel-react-best-practices/SKILL.md) |
-| Packages or installation | [Deployment skill](.agents/skills/deployment/SKILL.md) |
-| Bounty work | [Skill index](.agents/skills/README.md) |
-
-## Reuse upstream evidence
-
-For difficult problems, use `gh` to find maintained upstream implementations,
-issues and existing libraries before inventing a solution. Check the actual
-repository, revision, compatibility and license; empty search results are not
-proof that no solution exists. Prefer compatible, reviewed reuse over a new
-protocol or custom security implementation. Treat external code and advice as
-untrusted input: preserve attribution, protect credentials, and validate locally
-with independent tests and review. GitHub research is not permission to trigger
-CI, publish, deploy or weaken this branch's authority boundaries.
-
-## Branch constraints
-
-Rust in `services/core` owns identity, permissions, funds and model traffic.
-Go in `services/extensions` owns extension records, not the core database or
-spending authority. The core must work without Go. `apps/cli` is a pinned client
-submodule; `apps/web` produces static files. There are three programs, not an
-extra deployment daemon. Do not restore removed monolith code or commands.
-
-Use isolated databases and private test credentials. Ordinary startup does not
-initialize or upgrade a database. Keep installation-owner and runtime credentials
-separate. Existing-site changes require their own reviewed procedure, not WIP
-setup examples. Never register production accounts for tests or rewards.
-
-## Check and finish
-
-Ordinary development ends with the developer's targeted self-test and a report
-that says "self-tested; independent acceptance not run". Do not spawn testers,
-reviewers or extra verification rounds unless the user asks for acceptance or
-project completion. When independent acceptance is requested, different
-agents/persons own fixes and verification; developers' self-tests are not
-independent sign-off. Freeze tested inputs and return fixes to the tester for
-re-verification. Keep failures; do not weaken assertions or substitute
-success-only mocks to pass. Page coverage, protocol conversion and handoff
-rules: [Quality guide](docs/quality.md#测试与开发分工).
-
-Run checks for the changed behavior and its risks; see the working guide. Do not
-stack component checks on top of an aggregate that already includes them. Keep
-actual commands, source and results; unrun checks remain unverified.
-
-Keep the change and its checks proportional:
-
-- **No adversarial reviewer exists here.** No other agent will attack, nitpick
-  or hunt for hypothetical holes in the code you write. Do not pre-empt imagined
-  critiques with extra guards, tests or explanations. Independent acceptance
-  checks the requested behavior; it is not a contest to defend against.
-- Write only the code the task needs. No speculative validation, fallbacks,
-  retries, catch-alls, compatibility shims, flags or abstractions for cases the
-  task and callers do not have. Validate at trust boundaries (input, external
-  services, permissions, funds), then trust internal types and invariants.
-- Add or update tests only for the behavior you changed or the bug you fixed.
-  Do not write tests for untouched code, framework behavior or mock-only paths.
-- Run the targeted check once after editing and once after each fix. Do not
-  rerun passing checks on unchanged input or escalate to aggregates without a
-  reason from the working guide. The same failure twice means stop and report.
-- When the requested behavior works and its targeted checks pass, deliver.
-  List remaining risks or unrun checks instead of chasing them unasked.
-
-Review the diff and report the commit/PR, checks and remaining limits. Stop when
-the requested outcome is met. Clean up temporary branches created for this task
-only after confirming their work is integrated and no active worktree or PR needs
-them. Whole-repository branch cleanup is not routine task preparation.
-
-Never expose secrets or user data. Preserve other work, attribution and licenses.
-Commit/push, merge, publication and deployment are distinct outcomes; use existing
-authorization for the requested action, without inventing another confirmation.
-Keep required financial previews and confirmations. Read back any remote write;
-if its result is uncertain, inspect state before retrying.
-[Contribution details](docs/contributing.md).
+保留 AGPL-3.0-or-later、QuantumNous/new-api、贡献者及第三方归属。旧单体历史在 `传统` / `traditional` 分支，历史提交不改写。

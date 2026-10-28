@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://api.lmm.best/sitemap.xml
