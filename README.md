@@ -30,7 +30,7 @@ cd generated/lmm-api-source
 # 按源码仓库的 mise.toml 和 justfile 执行目标构建/测试
 ```
 
-当前固定实现提交：`724e6dee216b208b1ccf18458148cc747d28e58c`。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
+当前固定实现提交：`681e79268bc608ee4c38a2c546ec2207f66bcff8`。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
 
 ## 状态
 
