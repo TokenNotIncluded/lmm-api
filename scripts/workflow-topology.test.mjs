@@ -226,5 +226,24 @@ test('Core CI freezes the process binary and private root before running all Rus
   const execute = block.indexOf('cargo test --locked --all-targets --no-fail-fast');
   assert.ok(compile >= 0 && binary > compile && hash > binary && root > hash
     && exported > root && execute > exported, 'freeze inputs after compiling, before executing');
-  assert.doesNotMatch(block, /--skip|--exclude|--ignored|continue-on-error|\|\|\s*true/);
+  // The separately required owning-runner step covers exactly this one case.
+  const routed = ' -- --skip synthetic_live_proof_crosses_core_go_processes_and_posts_once';
+  assert.equal(block.split(routed).length - 1, 1);
+  assert.doesNotMatch(block.replace(routed, ''), /--skip|--exclude|--ignored|continue-on-error|\|\|\s*true/);
+});
+
+test('externally owned payment live case remains required through its real runner', () => {
+  const source = workflow('core-protocol');
+  assert.match(source, /--no-fail-fast -- --skip synthetic_live_proof_crosses_core_go_processes_and_posts_once/);
+  assert.match(source, /name: Synthetic payment live process through owning runner\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: python3 -B scripts\/ci-payment-live.py/);
+  assert.match(source, /payment-live\/evidence\/result.json/);
+  const script = read('scripts/ci-payment-live.py');
+  assert.ok(script.indexOf('frozen = live.v.sources()') < script.indexOf('build = subprocess.run('));
+  assert.match(script, /"--test", "payments_live_process", "--no-run", "--message-format=json"/);
+  assert.match(script, /len\(matches\) != 1/);
+  assert.match(script, /live.v.sources\(\) != frozen/);
+  assert.match(script, /"--compiled-inputs", str\(inputs\)/);
+  assert.match(script, /live.sha\(binary\)/);
+  assert.match(script, /return subprocess.run\(command, cwd=ROOT, env=env\).returncode/);
+  assert.doesNotMatch(script, /LMM_LIVE_PROCESS_ROOT|owner.json/);
 });

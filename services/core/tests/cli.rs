@@ -623,7 +623,7 @@ async fn assembled_service_exposes_web_auth_and_explicit_capabilities_without_go
     std::fs::write(&database, url.as_bytes()).unwrap();
     std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o600)).unwrap();
     let configuration = directory.join("core.toml");
-    std::fs::write(&configuration, format!("version=1\n[server]\nlisten='{address}'\n[database]\nurl_file='{}'\n[identity]\nregistration_enabled=true\n[identity.web]\norigin='http://api.lmm.local'\nrefresh_key_file='{}'\nlocal_http=true\nuser_agreement_enabled=false\nprivacy_policy_enabled=false\n[console]\nenabled=true\n[rpc]\nsocket='{}'\ntoken_file='{}'\n",database.display(),key.display(),socket_path.display(),token.display())).unwrap();
+    std::fs::write(&configuration, format!("version=1\n[server]\nlisten='{address}'\n[database]\nurl_file='{}'\n[identity]\nregistration_enabled=true\npassword_register_enabled=true\noauth_register_enabled=false\nregistration_disabled_methods=[]\nemail_verification_enabled=false\nemail_domain_restriction_enabled=false\nemail_domain_whitelist=[]\n[identity.web]\norigin='http://api.lmm.local'\nrefresh_key_file='{}'\nlocal_http=true\nuser_agreement_enabled=false\nprivacy_policy_enabled=false\n[console]\nenabled=true\n[rpc]\nsocket='{}'\ntoken_file='{}'\n",database.display(),key.display(),socket_path.display(),token.display())).unwrap();
     let mut service = Service(
         file_core(&["--config", configuration.to_str().unwrap(), "serve"])
             .spawn()
@@ -850,6 +850,7 @@ fn usage_index_stdin_is_bounded_strict_redacted_and_precedes_configuration() {
 #[cfg(unix)]
 #[sqlx::test(migrations = false)]
 async fn usage_index_owner_cli_upgrades_only_fresh_prior_fixture_and_rejects_runtime(pool: PgPool) {
+    use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
     async fn snapshot(pool: &PgPool) -> Vec<String> {
         const CATALOG: &str = r#"
@@ -958,7 +959,8 @@ WITH catalog_path AS MATERIALIZED (
     // Current schema with only the usage index removed. The lib test
     // current_schema_index_predecessor_upgrade_changes_only_verified_index_and_two_receipts
     // prints this catalog SHA256. The previous fourteen-component receipt is retired below.
-    const PRIOR: &str = "d238d1e8e7733ba63d28be1c98ce654087edaa5dc2b2b8c16b2498f939134f74";
+    const RETIRED_PRE_PAYLOAD_POLICY_PRIOR: &str =
+        "d238d1e8e7733ba63d28be1c98ce654087edaa5dc2b2b8c16b2498f939134f74";
     const RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR: &str =
         "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54";
     const RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR: &str =
@@ -976,8 +978,24 @@ WITH catalog_path AS MATERIALIZED (
         "5510e0bee0e5659ff940b798c9d6d3c69aea220734d9f73577c847b6841254b7";
     sqlx::raw_sql("DROP INDEX core_charging.ledger_commands_request_operation; UPDATE core_meta.component_contract SET fingerprint=decode('7f84659ad2bd60268256a9f76959299a33911aaaeaf7194156a6f195ab54a734','hex') WHERE name='charging-ledger'")
         .execute(&pool).await.unwrap();
+    // This is a newly constructed current-schema fixture with only the usage
+    // index removed, not an approved historical upgrade. Independently hash its
+    // catalog observation instead of relabeling it with a retired schema hash.
+    let mut hash = Sha256::new();
+    for row in snapshot(&pool).await {
+        if let Some(definition) = row
+            .strip_prefix("[\"catalog\",")
+            .and_then(|value| value.strip_suffix(']'))
+        {
+            hash.update((definition.len() as u64).to_be_bytes());
+            hash.update(definition.as_bytes());
+        }
+    }
+    let fresh_prior = format!("{:x}", hash.finalize());
+    let fresh_prior = fresh_prior.as_str();
+    assert_ne!(fresh_prior, RETIRED_PRE_PAYLOAD_POLICY_PRIOR);
     sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode($1,'hex')")
-        .bind(PRIOR)
+        .bind(fresh_prior)
         .execute(&pool)
         .await
         .unwrap();
@@ -1037,7 +1055,7 @@ WITH catalog_path AS MATERIALIZED (
     std::fs::write(&database, role.url.as_bytes()).unwrap();
     std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o600)).unwrap();
     let before_runtime = snapshot(&pool).await;
-    let output = invoke(PRIOR.as_bytes());
+    let output = invoke(fresh_prior.as_bytes());
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&output.stderr).contains(&role.url));
@@ -1058,48 +1076,60 @@ WITH catalog_path AS MATERIALIZED (
     // saved=retired/approval=retired, and saved=retired/approval=current.
     // No mismatch may change financial rows, receipts, ACLs or definitions.
     for (saved, approval) in [
-        (PRIOR, RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR),
+        (fresh_prior, RETIRED_PRE_PAYLOAD_POLICY_PRIOR),
+        (
+            RETIRED_PRE_PAYLOAD_POLICY_PRIOR,
+            RETIRED_PRE_PAYLOAD_POLICY_PRIOR,
+        ),
+        (RETIRED_PRE_PAYLOAD_POLICY_PRIOR, fresh_prior),
+        (
+            fresh_prior,
+            RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
+        ),
         (
             RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
             RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
         ),
-        (RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR, PRIOR),
-        (PRIOR, RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR),
+        (
+            RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
+            fresh_prior,
+        ),
+        (fresh_prior, RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR),
         (
             RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR,
             RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR,
         ),
-        (RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR, PRIOR),
-        (PRIOR, RETIRED_PRIOR_660),
+        (RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR, fresh_prior),
+        (fresh_prior, RETIRED_PRIOR_660),
         (RETIRED_PRIOR_660, RETIRED_PRIOR_660),
-        (RETIRED_PRIOR_660, PRIOR),
-        (PRIOR, RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR),
+        (RETIRED_PRIOR_660, fresh_prior),
+        (fresh_prior, RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR),
         (
             RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR,
             RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR,
         ),
-        (RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR, PRIOR),
-        (PRIOR, RETIRED_TWELVE_COMPONENT_PRIOR),
+        (RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR, fresh_prior),
+        (fresh_prior, RETIRED_TWELVE_COMPONENT_PRIOR),
         (
             RETIRED_TWELVE_COMPONENT_PRIOR,
             RETIRED_TWELVE_COMPONENT_PRIOR,
         ),
-        (RETIRED_TWELVE_COMPONENT_PRIOR, PRIOR),
-        (PRIOR, RETIRED_PRIOR),
+        (RETIRED_TWELVE_COMPONENT_PRIOR, fresh_prior),
+        (fresh_prior, RETIRED_PRIOR),
         (RETIRED_PRIOR, RETIRED_PRIOR),
-        (RETIRED_PRIOR, PRIOR),
-        (PRIOR, RETIRED_ELEVEN_COMPONENT_PRIOR),
+        (RETIRED_PRIOR, fresh_prior),
+        (fresh_prior, RETIRED_ELEVEN_COMPONENT_PRIOR),
         (
             RETIRED_ELEVEN_COMPONENT_PRIOR,
             RETIRED_ELEVEN_COMPONENT_PRIOR,
         ),
-        (RETIRED_ELEVEN_COMPONENT_PRIOR, PRIOR),
-        (PRIOR, RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR),
+        (RETIRED_ELEVEN_COMPONENT_PRIOR, fresh_prior),
+        (fresh_prior, RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR),
         (
             RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR,
             RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR,
         ),
-        (RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR, PRIOR),
+        (RETIRED_REVIEWED_FOURTEEN_COMPONENT_PRIOR, fresh_prior),
     ] {
         sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode($1,'hex') WHERE singleton")
             .bind(saved).execute(&pool).await.unwrap();
@@ -1122,9 +1152,9 @@ WITH catalog_path AS MATERIALIZED (
         );
     }
     sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode($1,'hex') WHERE singleton")
-        .bind(PRIOR).execute(&pool).await.unwrap();
+        .bind(fresh_prior).execute(&pool).await.unwrap();
     let before_upgrade = snapshot(&pool).await;
-    let output = invoke(&[PRIOR.as_bytes(), b"\n"].concat());
+    let output = invoke(&[fresh_prior.as_bytes(), b"\n"].concat());
     assert!(
         output.status.success(),
         "{}",
@@ -1146,7 +1176,7 @@ WITH catalog_path AS MATERIALIZED (
         "index upgrade changed identity receipts, financial rows or ACLs"
     );
     let after_upgrade = snapshot(&pool).await;
-    let output = invoke(PRIOR.as_bytes());
+    let output = invoke(fresh_prior.as_bytes());
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(

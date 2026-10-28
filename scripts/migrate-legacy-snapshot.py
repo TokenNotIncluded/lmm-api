@@ -98,7 +98,9 @@ REVIEWED_RUST_FILES = {
     'services/core/src/core_schema.rs': '514686a060b8080f404b330ca59cc6c3a57230e4d61357be0b06aff48a630f1b',
     'services/core/src/identity/schema.rs': '37a1f70d63bba63bea18d18729772e4678499f2874cce74efd510917c3823343',
     'services/core/src/identity/grants.rs': 'f54840add7d997dc90e6a4f6f817f61b1fc1ff0acb6c8f5a29d6ae1f19f8b060',
-    'services/core/src/identity/mod.rs': 'dd25f2848e46fa018e4aa55aa5d80b9fcf4bf766be2773de204f891637b9cefd',
+    # Reviewed 10cb3e87f + 7f83986c9: five registration-policy fields/defaults;
+    # identity DDL and offline mapping/credential whitelist remain unchanged.
+    'services/core/src/identity/mod.rs': 'd3fcbbc9ceed9ee0e98b4037f707a60d6b31fed5414320cc49f54384073aa236',
     'services/core/src/identity/telegram.rs': '2dd9950fa5052230155ebc512dd12038adbeeab90bd7963bb8cbf3ca145bb5eb',
     'services/core/src/billing/trust_pricing.rs': 'c4c5f47d372fde4e5f7afd854a7a4691ef1b31ff74c1695d4242f0ab5133312f',
 }
