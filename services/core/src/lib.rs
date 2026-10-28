@@ -47,11 +47,11 @@ pub mod routing;
 pub mod runtime_database;
 pub mod support_projection;
 pub mod system_info;
-pub mod topup_info_http;
 #[cfg(test)]
 #[path = "../tests/common/runtime.rs"]
 pub(crate) mod test_runtime;
 pub mod tool_market;
+pub mod topup_info_http;
 pub mod upstream_cost;
 pub mod usage;
 pub mod wallet;

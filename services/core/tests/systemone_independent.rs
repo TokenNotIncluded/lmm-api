@@ -648,10 +648,12 @@ async fn systemone_independent_supplier_errors_and_disconnected_caller_never_rep
 async fn systemone_prepared_json_and_zstd_multipart_tcp_capture_once(pool: PgPool) {
     use base64::{Engine, engine::general_purpose::STANDARD};
 
+    type CapturedWire = (String, String, Vec<u8>);
+
     #[derive(Clone)]
     struct WireCapture {
         pool: PgPool,
-        seen: Arc<Mutex<Vec<(String, String, Vec<u8>)>>>,
+        seen: Arc<Mutex<Vec<CapturedWire>>>,
     }
     async fn capture_wire(
         State(state): State<WireCapture>,
