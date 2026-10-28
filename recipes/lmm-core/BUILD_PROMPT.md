@@ -10,6 +10,8 @@
 
 模型：按显式启用的 capabilities 开放 contracts 列出的 OpenAI Chat/Responses、Anthropic Messages、Gemini 模型入口。将模型能力、上游协议/参数、价格版本和可选路由绑定。鉴权、权限、余额/预算与必须依赖不可用时拒绝，模型默认关闭；错误、取消、超时、重试、流终止需要可解释结果和一致账本。不将渠道转换测试推定为真实供应商支持。
 
+流式读取以完整 SSE 事件为单位逐帧解码：一次网络读取可能包含多帧，一帧也可能跨多次读取。保留尾帧 finish/usage，正确处理 CRLF、注释、event 字段和跨块 UTF-8；非 SSE JSON 不按网络 chunk 猜切。HTTP 正常结束但缺协议终态、或留有未闭合 SSE 帧时，返回 `upstream_truncated`；损坏的 HTTP 传输为 `upstream_connection_error`，非法编码/协议为 `invalid_upstream_response`，下游主动取消为 `request_cancelled`。公开响应、流内错误及日志保留同一分类，不合并成普通成功或客户端取消。错误分类不改变原付款方、预留和重放边界；缺终态或可信最终用量仍保持 UNKNOWN，不能仅因看见一次 usage 就结算。
+
 领域：原生 pricing/余额/usage、历史与财务导出、通知与 setup、支付及 commerce 资金权威、工具市场 credit/委托、assistant model、礼品/红包、图片、悬赏、abuse 与信任价格等。先保持领域归属和现有明确接口，再对待完成能力登记阻塞；不能让 Go 接管权限或钱。
 
 ## 安装和运维
