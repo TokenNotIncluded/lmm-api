@@ -10,6 +10,8 @@ LMM API · Language Model Mesh · 连接模型与工具，让智能自由流动�
 | 验收要求 | [recipes/lmm-api/ACCEPTANCE.md](recipes/lmm-api/ACCEPTANCE.md) |
 | 来源与未知项 | [recipes/lmm-api/SOURCE.md](recipes/lmm-api/SOURCE.md) |
 | 实现源码与构建 | [generated/lmm-api-source/README.md](generated/lmm-api-source/README.md) |
+| 生产切换验收合同 | [recipes/lmm-api/PRODUCTION_ACCEPTANCE.md](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) |
+| 当前推进状态 | [STATUS.md](STATUS.md) |
 | 迁移记录 | [MIGRATION.md](MIGRATION.md) |
 
 ## 配方与实现
@@ -26,7 +28,7 @@ cd generated/lmm-api-source
 # 按源码仓库的 mise.toml 和 justfile 执行目标构建/测试
 ```
 
-当前固定实现提交：`06d8b4b7c9630106c6ef47425f9e67d333bd1548`。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
+当前固定实现提交：`095c5f8f0fe5d7a7bf158941b07eb3df75ddee5d`。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
 
 ## 状态
 
