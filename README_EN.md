@@ -1,5 +1,7 @@
 # LMM API
 
+![Software and dependencies become a recipe for rebuilding software](https://raw.githubusercontent.com/recipkg/recipkg/main/assets/recipkg-cover.png)
+
 This repository is now the Recipkg recipe project. [The integrated recipe](recipes/lmm-api/BUILD_PROMPT.md), its recursive component dependencies and [acceptance criteria](recipes/lmm-api/ACCEPTANCE.md) are the primary inputs.
 
 Implementation lives in [TokenNotIncluded/lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source), pinned as the `generated/lmm-api-source/` Git submodule. Run implementation build/test commands from that directory. The CLI and provider submodules remain nested in the implementation repository.

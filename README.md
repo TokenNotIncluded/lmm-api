@@ -1,5 +1,7 @@
 # LMM API
 
+![软件与依赖汇聚为可重建的配方](https://raw.githubusercontent.com/recipkg/recipkg/main/assets/recipkg-cover.png)
+
 LMM API · Language Model Mesh · 连接模型与工具，让智能自由流动。
 
 本仓库已作为 **Recipkg 配方主项目**：需求、行为、接口与验收条件在 `recipes/`；实现代码由独立的 [TokenNotIncluded/lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source) 维护，固定接入 `generated/lmm-api-source/`。
