@@ -5,7 +5,7 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-core"
-version = "0.1.5"
+version = "0.1.6"
 kind = "software"
 description = "Rust 身份权限资金账本与多协议模型网关"
 entry = "BUILD_PROMPT.md"
