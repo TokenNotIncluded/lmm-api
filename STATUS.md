@@ -109,7 +109,7 @@
 - 独立源码审查发现上述通知的测试用 `schema-delta.sql` 对已有通知统一回填 `current`，而旧接口可能向原已验证邮箱发送通知；带数据升级会错误占用槽位。修正候选现在锁内拒绝全部旧安全通知，且只允许 READ COMMITTED；该隔离级别与当前正式升级的 SERIALIZABLE 不兼容，不能直接接入。新候选的 PostgreSQL/Rust 测试尚未运行，原 8/8 不证明新输入通过。该 delta 本来就未授权用于正式库；证据在 `~/.local/state/a02-notice-independent-20261029-icw2i5pq/`。
 - A02 的 identity v6 新装 schema 与运行权限补丁位于源码的 `services/core/staged/email-schema-integration/`，尚未应用。隔离 PostgreSQL 的开发测试覆盖新装与测试用 v5 delta 的结构一致性、历史邮箱不自动变成已验证、失败回滚及受限角色权限。首次权限检查因现有脚本缺少 `core_meta.console_revisions` 的 SELECT 而失败，候选修正后针对该失败的复测通过，原失败保留。实际 Rust 新装测试未启动；正式升级分发、持续停写、旧二进制行为和独立验收仍未证明，测试 delta 不可直接用于存量库。
 - A09/S11 最终源码与制品/进程绑定、授权只读来源与目标、最终写入隔离及 drain、备份实际恢复、1CPU 限额资源验收、生产环境自身条件和切换演练，尚未在本轮证明。
-- 升级控制候选的独立 release 二进制构建失败：冻结源码的 `src/admin.rs:115` 调用 `UpgradeCommand.clone()`，该类型没有实现 `Clone`，因此未生成可验收二进制。此前通过的是库的定向测试，不覆盖实际 CLI 编译；原始日志在源码的 `.local-tests/upgrade-v2-independent-release-20261029T0750/release-build.log`，作者正在修正并准备复测。
+- 升级控制候选的独立 release 二进制构建失败：冻结源码的 `src/admin.rs:115` 调用 `UpgradeCommand.clone()`，该类型没有实现 `Clone`，因此未生成可验收二进制。此前通过的是库的定向测试，不覆盖实际 CLI 编译；原始日志在源码的 `.local-tests/upgrade-v2-independent-release-20261029T0750/release-build.log`。作者已为命令类型补充 `Clone` 并固定修正快照，正式二进制编译复测尚未启动。
 - 预检 READY 仍只是受信任输入断言的一致性，不能把合格形状的 hash 或手填 passed 当生产 go/no-go。
 
 ## 证据与限制
