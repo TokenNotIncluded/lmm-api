@@ -51,7 +51,7 @@
 
 邮箱注册、绑定和密码重置的已提交但未启用业务切片使用服务端选择的有效挑战，不要求客户端提供挑战 ID。隔离 PostgreSQL 开发自测首轮 8 项中 7 项通过；剩余用例因测试用户没有开发者授权而在创建 API Key 时被拒绝，补齐测试前提后该用例单独通过。两次运行的源码快照不同，不是同一最终组合的 8/8 验收；中间一次编译被主动中断且未运行数据库，失败及中断记录保留。随后独立测试固定源码与依赖，在隔离 PostgreSQL 通过 11 项，覆盖真实旧凭据撤销、并发消费、MFA 保留和事务失败回滚。证据为 `~/Documents/Codex/2026-10-29-lmm-email-business-independent-acceptance/acceptance-report.md`；完整 HTTP、真实邮件和安全通知事务仍未接入。
 
-独立 CLI 仓库提交 `4e6e351` 增加 Pi 1.2.0 显式实例配置的只读诊断，报告已知 Provider 引用及全局/项目设置来源，不读取凭据或启动 Pi。固定源码的完整 CLI 开发自测 68 项、clippy、格式及隔离只读命令检查通过；其中新增诊断测试 9 项，初始旧版测试的失败日志保留。没有验证真实已安装 Pi 的完整接入、Windows/macOS 或独立验收，其他未实现的 CLI 能力仍按原合同保留。证据为 `~/Documents/Codex/2026-10-29-lmm-cli-pi-status-41dkue3u/evidence/summary.json`。
+独立 CLI 仓库提交 `4e6e351` 增加 Pi 1.2.0 显式实例配置的只读诊断。固定源码的完整 CLI 开发自测 68 项、clippy、格式及隔离只读命令检查通过；其中新增诊断测试 9 项，初始旧版测试的失败日志保留。**后续独立验收未通过：**并发替换符号链接可使检查后的打开操作读取合成凭据文件；另有 4 种 Pi 原生支持的来源写法未被识别。126 个有效用例中 121 项通过、5 项失败，失败已交回实现者修正，不能将其声称为安全的完整只读诊断；已有测试二进制与源码的独立构建溯源也不足。未验证真实已安装 Pi 的完整接入或 Windows/macOS。开发证据为 `~/Documents/Codex/2026-10-29-lmm-cli-pi-status-41dkue3u/evidence/summary.json`，独立验收报告为 `~/Documents/Codex/2026-10-29-lmm-cli-pi-independent-cqmz5w1d/ACCEPTANCE.md`。
 
 新的旧转账映射仅整理和校验离线来源事实，15 项合成测试通过；`can_apply=false`，未实现双库导入与激活。Pi-Core runner 的 Provider 固定提交已对齐当前 gitlink，真实 Provider 源码绑定自测通过；实际 CLI、浏览器和 Core 联合验收尚未运行。
 
