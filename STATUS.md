@@ -106,6 +106,7 @@
 - Go 宿主的 `assistant.agent_required` 启动校验候选已在工作树编写：显式要求 agent 时应拒绝缺失依赖和仅提供普通文本能力的 Core。测试输入已固定在 `~/Documents/Codex/2026-10-29-assistant-agent-gate-q9dswm_i/`；第一次等待构建锁超时，Go 测试尚未启动，候选未提交、未验收。
 - A02 的密码注册尚不支持邮箱验证码：配置要求邮箱验证或域名白名单时，当前密码注册会被拒绝；公开状态仍报告 `email_verification=false`。旧版的发码、绑定、找回密码、限流及验证码消费行为需要在 Core 实现，并与 Web 调用对接；邮件服务真实配置和投递未验证。
 - A02 安全通知已有待集成补丁：消费验证码、业务修改和加密通知入队在同一事务内完成，绑定时当前与原已验证地址使用不同收件槽。开发者在固定输入的隔离 PostgreSQL 上通过 8 项测试，包括入队失败回滚和两处进程终止；证据在 `~/.local/state/api-lmm-microservices-20261011/coordination/architecture-completion-v1/A02-EMAIL-NOTICE-INTEGRATION-20261029/`。五个目标文件的补丁已应用到本地源码工作树，哈希与测试快照一致；组合接线仍只在隔离测试中，未独立验收，也未接正式 schema、权限、HTTP 或邮件投递。已提交接口中的上述事务缺口依然存在。
+- A02 的 identity v6 新装 schema 与运行权限补丁位于源码的 `services/core/staged/email-schema-integration/`，尚未应用。隔离 PostgreSQL 的开发测试覆盖新装与测试用 v5 delta 的结构一致性、历史邮箱不自动变成已验证、失败回滚及受限角色权限。首次权限检查因现有脚本缺少 `core_meta.console_revisions` 的 SELECT 而失败，候选修正后针对该失败的复测通过，原失败保留。实际 Rust 新装测试未启动；正式升级分发、持续停写、旧二进制行为和独立验收仍未证明，测试 delta 不可直接用于存量库。
 - A09/S11 最终源码与制品/进程绑定、授权只读来源与目标、最终写入隔离及 drain、备份实际恢复、1CPU 限额资源验收、生产环境自身条件和切换演练，尚未在本轮证明。
 - 预检 READY 仍只是受信任输入断言的一致性，不能把合格形状的 hash 或手填 passed 当生产 go/no-go。
 
