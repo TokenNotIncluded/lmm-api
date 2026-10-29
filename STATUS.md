@@ -105,7 +105,7 @@
 - A08 助手 agent 的实际启动链尚缺装配：当前 Core 配置创建个人文本服务及可选的业务事实、确认组件，但没有调用 `AssistantRpc::with_agent`；`assistant_agent.sql` 也只在隔离测试中引入。现有私有 UDS 测试采用手工安装 schema、授予测试角色权限并直接附加 agent，本轮未重跑，不能证明正式安装或启动提供该能力。要完成此项还需受控 schema 安装升级、最小运行权限、经审核的工具注册表和宿主策略、实际进程接线，以及与 Go 扩展的安全委托和资金链路验收。
 - Go 宿主的 `assistant.agent_required` 启动校验候选已在工作树编写：显式要求 agent 时应拒绝缺失依赖和仅提供普通文本能力的 Core。测试输入已固定在 `~/Documents/Codex/2026-10-29-assistant-agent-gate-q9dswm_i/`；第一次等待构建锁超时，Go 测试尚未启动，候选未提交、未验收。
 - A02 的密码注册尚不支持邮箱验证码：配置要求邮箱验证或域名白名单时，当前密码注册会被拒绝；公开状态仍报告 `email_verification=false`。旧版的发码、绑定、找回密码、限流及验证码消费行为需要在 Core 实现，并与 Web 调用对接；邮件服务真实配置和投递未验证。
-- A02 安全通知已有独立的待集成补丁：消费验证码、业务修改和加密通知入队在同一事务内完成，绑定时当前与原已验证地址使用不同收件槽。开发者在固定输入的隔离 PostgreSQL 上通过 8 项测试，包括入队失败回滚和两处进程终止；证据在 `~/.local/state/api-lmm-microservices-20261011/coordination/architecture-completion-v1/A02-EMAIL-NOTICE-INTEGRATION-20261029/`。补丁仍未应用、未独立验收，也未接正式 schema、权限、HTTP 或邮件投递；已提交接口中的上述事务缺口依然存在。
+- A02 安全通知已有待集成补丁：消费验证码、业务修改和加密通知入队在同一事务内完成，绑定时当前与原已验证地址使用不同收件槽。开发者在固定输入的隔离 PostgreSQL 上通过 8 项测试，包括入队失败回滚和两处进程终止；证据在 `~/.local/state/api-lmm-microservices-20261011/coordination/architecture-completion-v1/A02-EMAIL-NOTICE-INTEGRATION-20261029/`。五个目标文件的补丁已应用到本地源码工作树，哈希与测试快照一致；组合接线仍只在隔离测试中，未独立验收，也未接正式 schema、权限、HTTP 或邮件投递。已提交接口中的上述事务缺口依然存在。
 - A09/S11 最终源码与制品/进程绑定、授权只读来源与目标、最终写入隔离及 drain、备份实际恢复、1CPU 限额资源验收、生产环境自身条件和切换演练，尚未在本轮证明。
 - 预检 READY 仍只是受信任输入断言的一致性，不能把合格形状的 hash 或手填 passed 当生产 go/no-go。
 
