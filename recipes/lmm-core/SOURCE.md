@@ -29,3 +29,9 @@
 实现来源为 [lmm-api-source `67dc5ba`](https://github.com/TokenNotIncluded/lmm-api-source/commit/67dc5bac6667ad796bdcc496ec7de9952dbabf07)。同一 Core 的 `upgrade-offline` v3 接通库外历史、外置 HBA、明确部署单元的停机/持久 mask、固定前驱桥接、原子本地回执与恢复观察。v6/27 的实际 CLI 普通提交、目标/历史库真实 COMMIT 回执丢失及目标物理恢复开发测试通过；独立所有者另外验证控制进程在临时允许连接窗口被 SIGKILL 后，真实 PostgreSQL ErrorResponse 仍以 28000/HBA 拒绝 runtime，恢复后禁止重做或开放。独立 SQL oracle 核对 160 张旧表、22 条序列及 2001 条 ACL/owner 记录；runtime_contract 仅按固定目标更新。1308 个编译输入与该提交逐文件一致。
 
 固定 manifest 为 `47ad36927c16ccc4237cf16c9889705ae4d53db184c77aaac4a264c4e5203078`，catalog 为 `557d9775042b94356f752ae4993bc73be645e9956e9fe1110ed5aa1cd531ee2d`。v5 的先前桥接数据保持证据不等于本轮正式 CLI 验收；v5 正式全流程、多主机存储、完整历史资金迁移、最终开放、发布资源/S11 与生产切换仍未验收。浏览器 Notice 的失败处理也在该提交的前序 `90c442d` 修复并完成限定范围复验。实际结果与保留失败见 STATUS.md。
+
+## 0.1.6：2026-10-30 升级后的运行权限与旧身份
+
+实现来源为 [lmm-api-source `fcb29cd`](https://github.com/TokenNotIncluded/lmm-api-source/commit/fcb29cd98950053ab3a76e29548d8752366baa22)。实际升级后的新 Core 曾因错误要求读取 owner-only 升级回执而以 `MissingPrivileges` 退出。现仅对六张公开合同保留明确读取要求，原账本读取及元数据写入/owner 限制保持；两张私有回执的表级或列级读取误授权均拒绝。manifest/catalog 与0.1.5一致，没有给 runtime 增加回执权限。
+
+修复候选 SHA256 `dea60909b00bed72db09772200db99233b9eb68bdb9a62197aa38288786d71aa` 的完整 dev 图库/main 编译、库 Clippy 和实际升级后登录/公开内容读写通过；另一个 owner 独立验证实际 v6 升级后受限进程、SQL 拒绝矩阵及权限缺失/误授反例。两种合成 v5 前驱也独立通过真实 CLI apply/recover、旧行/密码/21条序列保持、旧别名登录与未验证邮箱无重置权；其 `services=[]`，没有运行真实旧 v5 制品。全部是本地 PG18 和明确夹具开放，不是产品 finalization、全站资金、完整浏览器、发布/S11 或生产切换证据。原失败和未运行范围见 STATUS.md；1308项真实编译输入与修复提交逐文件一致，没有独立重编。
