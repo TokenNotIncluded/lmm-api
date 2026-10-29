@@ -8,7 +8,7 @@
 
 新增的隔离合成实验使用 PostgreSQL 18.6 私有 Unix socket：禁止新连接后，分别终止正在写入的事务或保持事务存活，随后立即停库重启；两种情况下禁连状态及原有已提交数据保持，未提交数据回滚。另一合成库停用旧登录并排空会话后，导入账号仍可读取，重启后状态保持；其他登录通过成员关系切换为旧角色后可以实际写入，即使撤销成员关系，已经切换的会话仍能继续写入并提交，新会话则被拒绝。停写必须排空这类会话。实验未覆盖 COMMIT 回执丢失或断电，也不证明站点所有写入者已停写。崩溃及撤销后存活会话场景通过独立复验；停库失败注入由开发者验证。
 
-当前通过 `generated/lmm-api-source/` 固定源码提交 `f993be2c860fded95af706527ff5b8705c52cd1c`：包含开账连接统计快照修复、旧转账离线来源映射、Pi-Core 测试的 Provider pin 修正，缺少财务、旧开账、历史日志、凭据、订阅或路由导入回执时保持 UNKNOWN 的修正，正式新装 identity v6 的邮箱挑战、业务、加密出箱、HTTP/SMTP worker 与 Web 调用接线，迟到退款成功/容量冲突后的原证明自动恢复及新邮箱测试运行权限，Notice/公告的受限运行账户写入、原子审计与 COMMIT_UNKNOWN，修复后的 CLI Pi 配置只读诊断、Go 助手 agent 必选启动校验、显式离线钱包请求键约束升级入口，以及本轮价格排序、流截断诊断和质量计划修复，新增 Core agent 显式配置与新装第 27 个组件、正式 Core 进程启动验证、运维报告对 agent 状态的兼容检查，以及暂存邮件组件的配置站点重置链接。并行工作的未提交候选不包含在此固定提交中，也不当成最终候选。
+当前通过 `generated/lmm-api-source/` 固定源码提交 `7c3ebb86cf406c5f0a268ea2eb90edb985271751`：包含开账连接统计快照修复、旧转账离线来源映射、Pi-Core 测试的 Provider pin 修正，缺少财务、旧开账、历史日志、凭据、订阅或路由导入回执时保持 UNKNOWN 的修正，正式新装 identity v6 的邮箱挑战、业务、加密出箱、HTTP/SMTP worker 与 Web 调用接线，迟到退款成功/容量冲突后的原证明自动恢复及新邮箱测试运行权限，Notice/公告的受限运行账户写入、原子审计与 COMMIT_UNKNOWN，独立升级历史库 CLI/客户端和独立复验，修复后的 CLI Pi 配置只读诊断、Go 助手 agent 必选启动校验、显式离线钱包请求键约束升级入口，以及本轮价格排序、流截断诊断和质量计划修复，新增 Core agent 显式配置与新装第 27 个组件、正式 Core 进程启动验证、运维报告对 agent 状态的兼容检查，以及暂存邮件组件的配置站点重置链接。并行工作的未提交候选不包含在此固定提交中，也不当成最终候选。
 
 本机源码分支已通过普通合并同步远端并推送；七个语言文件的远端价格文案和本地邮箱文案都已按逐键检查保留，CLI 指针已更新。已验收的迟到退款恢复已提交；其他未提交的配置升级、路由预检等候选仍在工作树中；历史邮件 staged 集成材料也保留，不能把这些目录或局部测试自动计入已固定提交的最终组合。
 
@@ -121,6 +121,18 @@ CLI 修复候选 2 在独立命令测试中针对原问题的 17 项及 3 项混
 只覆盖合成开账与原始计数器 profile。二进制 schema-manifest 与当前安装 schema 匹配只证明 schema 身份，不证明完整运行二进制来自当前最终组合源码。外部 psql 回执丢弃不等于数据库网络层断连。真实历史资金、订阅、Key、持续托管权利及其他业务仍须独立组合迁移和对账。
 
 当前工作树（含保留的未提交 Rust 工作）执行了 Rust1.99 cargo check --locked --all-targets，通过，输入文件哈希前后一致；这是编译检查，不是测试、业务通过或已提交候选的构建证明。
+
+## 独立升级历史库 · 2026-10-29
+
+主配方与 Core 配方 0.1.4 递归 check、pack、归档 check 和完整中文 build 通过；65 文件全为 UTF-8 Markdown、无软链接；归档 SHA256 `dac85b0e5ba1575fbde64d7ec4af9a17186e9c8aa63a17a92d8df99b98d78e14`、提示词 `b70846d340bee9a8965132190711d3d1178452b5621e63fe8f10ff5b4f62a7f1`，临时文件已删除。这不证明从配方重建成功。
+
+已提交源码 dddde75 并在 `7c3ebb86cf406c5f0a268ea2eb90edb985271751` 加入独立测试。`lmm-core upgrade-history` 只安装或查询独立 PostgreSQL 18 authority；实际 Rust History API 保存原 binding、CAS 消费及回执观察，不新增产品程序，不在普通启动或目标 init-db 中安装。拒绝错误 authority、目标同一物理集群、owner/超额 writer 权限。历史状态和传入的围栏/回执 hash 不单独授权 DDL、retry 或 site open。无自动过期、接管、清空或新一代升级；完整 finalize 仍未完成。
+
+开发证据 `~/Documents/Codex/2026-10-29-upgrade-history-5h209odr/`：完整既有 Cargo dev 图编译 native 库/实际 main/目标测试，Clippy warnings denied、格式与文档检查通过。实际 Core SHA256 `6eca9a6e8b270bc7368057469dbd8185ad287db74589df3f3a223f610a53ec31`；新装 schema-manifest 仍为 `59bc164463df00df11a253feecbf9e08dd914e6e3cc7fcb3af68d193287eb005`。r1/r2/r3 按测试输入递增，native 产品输入未变、实际库/main复用；新增输入分别是故障代理/测试、历史库进程停启后 CLI 读回、输出路径拒绝。并发仅一次、目标物理恢复、原绑定/角色拒绝通过；代理观察真实 COMMIT 和 ReadyForQuery 后截断，新客户端得到 COMMIT_UNKNOWN，新连接仍读到 Started 且重做拒绝。历史库停启后实际 CLI 读回 Started/Committed，retry/open 均 false。原 Console 代理默认行为自测通过。
+
+独立 owner 在 `~/Documents/Codex/2026-10-29-upgrade-history-independent-side-a/` 使用同一实际库/main、独立 Rust 程序和 SQL oracle，未执行作者业务用例。八组检查 PASS：逐字段原绑定拒绝，错误 authority/同实例拒绝，四消费者仅一个成功，真实 ACK 丢失/死连接与新连接，合成扣账后的物理目标恢复，authority PostgreSQL 实际进程停启，writer 15 项真实 SQL 权限拒绝，真实 CLI 各阶段只读且无 open/retry。不是宿主机 OS reboot；合成扣账和 hash 不是完整资金或围栏证据。成功库、备份副本、exe 和秘密配置已清理，独立源码在 `tests/upgrade_history_independent/`。生产独立存储/凭据未落实或访问；最终 apply、连续部署围栏、恢复控制器、browser、release/S11 和生产切换未验收。
+
+Console bridge r4 独立数据保持也通过，证据 `~/Documents/Codex/2026-10-29-console-bridge-r4-independent-side-a/`：两种前驱旧数据/email/flag/21 序列/ACL 保持，真实密码/alias 与 reset 正反对照通过。首次独立 SQL 序列整行转换 42809 的夹具失败保留，修正为显式序列字段后通过；失败库停止保留，所有运行材料已移出源码目录。它仍是私有 stage 的合成测试，桥接产品/正式 apply 未提交，不能计为升级完整交付。
 
 ## 公开设置内容写入 · 2026-10-29
 
