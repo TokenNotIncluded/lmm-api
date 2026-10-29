@@ -5,7 +5,7 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-api"
-version = "0.1.7"
+version = "0.1.8"
 kind = "software"
 description = "LMM 模型网关、身份资金核心、可插拔业务扩展与客户端的集成配方"
 entry = "BUILD_PROMPT.md"
