@@ -53,6 +53,8 @@
 
 独立 CLI 仓库提交 `4e6e351` 增加 Pi 1.2.0 显式实例配置的只读诊断。固定源码的完整 CLI 开发自测 68 项、clippy、格式及隔离只读命令检查通过；其中新增诊断测试 9 项，初始旧版测试的失败日志保留。**后续独立验收未通过：**并发替换符号链接可使检查后的打开操作读取合成凭据文件；另有 4 种 Pi 原生支持的来源写法未被识别。126 个有效用例中 121 项通过、5 项失败，失败已交回实现者修正，不能将其声称为安全的完整只读诊断；已有测试二进制与源码的独立构建溯源也不足。未验证真实已安装 Pi 的完整接入或 Windows/macOS。开发证据为 `~/Documents/Codex/2026-10-29-lmm-cli-pi-status-41dkue3u/evidence/summary.json`，独立验收报告为 `~/Documents/Codex/2026-10-29-lmm-cli-pi-independent-cqmz5w1d/ACCEPTANCE.md`。
 
+CLI 修复候选 2 在独立命令测试中针对原问题的 17 项及 3 项混合来源用例通过；旧版基础回归 120/121，剩余断言期望本地来源为 `no_known_source`，候选按新文档合同返回更保守的 `unknown`，原失败与单独核对均保留。作者的 Linux 自测 70 项和 clippy 通过，36 项输入哈希与提交前工作树一致；修复已提交并推送至 CLI 仓库 `wip/pi-native-integration` 的 `f86ec5e`。验收者核对了冻结源码、作者构建日志与产物哈希，但没有独立重建证明；平台和真实 Pi 限制仍在。本地源码子模块的 CLI gitlink 尚未提交或推送，主项目固定源码仍指向旧 CLI，不能将修复视为默认版本已更新。证据在 `~/Documents/Codex/2026-10-29-lmm-cli-pi-retest-2w2vgxrd/`。
+
 新的旧转账映射仅整理和校验离线来源事实，15 项合成测试通过；`can_apply=false`，未实现双库导入与激活。Pi-Core runner 的 Provider 固定提交已对齐当前 gitlink，真实 Provider 源码绑定自测通过；实际 CLI、浏览器和 Core 联合验收尚未运行。
 
 四个 Pro 分别完成数据库升级、财务迁移、邮箱身份和全项目验收方案；财务修订版的参考 PostgreSQL 实验确认须先取得原执行锁再建立新读取快照，并揭示旧备份的历史连续性问题。相关报告和交付在 [交接目录](https://drive.google.com/drive/folders/1QqRY8YHkT7faUq5nlZnkmaCAHIcXyxyq)；这些参考模型不是产品集成或生产验收。
