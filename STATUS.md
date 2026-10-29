@@ -130,13 +130,13 @@ CLI 修复候选 2 在独立命令测试中针对原问题的 17 项及 3 项混
 
 正式冻结输入在 `~/Documents/Codex/2026-10-29-console-formal-50jdzil7/`：基源码 a853ea8 加 Console overlay，1293 文件；CoreSchema 只纳入 Console 元数据，未夹带控制 v2 或桥接候选公共入口。完整 Cargo dev-feature 图编译实际非 test main、库和两个测试目标，库 Clippy warnings denied/格式通过；实际 Core SHA256 `8d760cf7012eb4436001469406e4afeb6b6161001a64dd23d67ae824019692b7`。提交后逐个核对全部 1293 文件与 Git 内容一致。隔离 PostgreSQL 18 下七项库测试与一项受限账户 Router TCP 测试通过；这是开发自测，不是 release/S11。
 
-独立实际 main 验收在 `~/Documents/Codex/2026-10-29-console-independent-attempt-05/`：十组全部执行 PASS，使用正式 init-db、create-first-owner、grant，受限运行账户、真实 HTTP 登录/保存/并发/撤销、审计失败回滚与两次 OS main 启动。代理将真实 writer COMMIT 送到 PostgreSQL，观察 CommandComplete(COMMIT) 和 ReadyForQuery(I) 后截断回执；HTTP 返回 COMMIT_UNKNOWN，另一个 SQL 连接证实内容和审计已提交，后续 HTTP 可读取且没有自动重试。测试代码已提交到 `tests/console/independent_process/`。
+独立实际 main 验收在 `~/Documents/Codex/2026-10-29-console-independent-attempt-05/`：十组全部执行 PASS，使用正式 init-db、create-first-owner、grant，受限运行账户、真实 HTTP 登录/保存/并发/撤销、审计失败回滚与两次 OS main 启动。代理将真实 writer COMMIT 送到 PostgreSQL，观察 CommandComplete(COMMIT) 和 ReadyForQuery(I) 后截断回执；HTTP 返回 COMMIT_UNKNOWN，另一个 SQL 连接证实内容和审计已提交，后续 HTTP 可读取且没有自动重试。测试代码已提交到 `tests/console/independent_process/`。 成功测试的两个可执行文件及 Clippy 中间物经桥接开发者确认无依赖后删除，共 288194422 字节；保留实际 Core、待桥接使用的库、冻结源码、完整命令、日志与哈希。
 
 首轮独立记录依次保留用户 bus 环境、共享锁 BLOCKED、TOML 必填字段、显式注册策略和原生注册入口 403 的夹具失败；最终通过使用真实 Web 注册/登录准备普通用户，保留原生注册 403 边界。没有改产品输入或放宽 Console 断言。每次原 runner、日志和诊断均保留。测试进程、秘密配置、临时数据库已清理；十组 PASS 不扩展为浏览器或旧站点验收。
 
 SQL 信任边界：runtime 无 options 直接 DML/DDL 或 owner/元数据权限；允许函数限制键、固定 search_path 并由 owner 持有。实测持 runtime 凭据可直接写允许键，绕过 HTTP 内容、别名和 actor 审计；这是现有受信任 Core SQL 身份的能力，不是数据库强制用户审计。HTTP 事务的审计、权限及内容已验，与直接 SQL 分开记载。配方保留完整 A10 分母。
 
-旧库升级仍未完成。另一个 v2 bridge 在两个明确 v5/26 前驱到 v6/27 目标的隔离 PostgreSQL 上通过预览、结构核对及回滚开发用例；它没有已提交升级、持续围栏或持久恢复，未集成，也未独立复验。其“所有历史邮箱一律拒绝”的前提与保留旧行为目标不符，正在修正为原值/旧密码别名保持、历史邮箱不自动获得 verified/reset 权限；不能把拒绝旧数据当迁移成功。更早的账本/路由历史前驱仍须自己的桥接。
+旧库升级仍未完成。另一个 v2 bridge 在两个明确 v5/26 前驱到 v6/27 目标的隔离 PostgreSQL 上通过预览、结构核对及回滚开发用例；它没有已提交升级、持续围栏或持久恢复，未集成，也未独立复验。r4 已修正“所有历史邮箱一律拒绝”的错误前提：原 email/flag 值与旧密码别名保持，不创建 verified 地址或 reset 权限。真实冻结 Core 库及正式授权后的受限角色在两种前驱上完成别名登录、错误/重复/禁用别名拒绝、旧行/序列/ACL 保持及 reset 正反对照；一项合同测试、两项 PostgreSQL 场景开发测试通过。仅测试内部提交私有 stage，让真实池方法读取，不是产品 apply/围栏/恢复验收。证据在 `~/Documents/Codex/2026-10-29-console-bridge-v2-r4/`，r1–r3 的 212 个证据文件哈希未变；一条编译警告保留，未声称 Clippy、独立验收或 S11 通过。更早的账本/路由历史前驱仍须自己的桥接。
 
 ## 设置升级的历史候选及遗留失败
 
