@@ -45,3 +45,6 @@ url = https://github.com/recipkg/update-recipkg-in-project.git
 [submodule "generated/lmm-api-source"]
 path = generated/lmm-api-source
 url = https://github.com/TokenNotIncluded/lmm-api-source.git
+[submodule "recipkg-skill-maintain-recipkg-standard-library"]
+	path = .agents/skills/maintain-recipkg-standard-library
+	url = https://github.com/recipkg/maintain-recipkg-standard-library.git
