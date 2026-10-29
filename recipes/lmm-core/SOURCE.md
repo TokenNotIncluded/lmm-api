@@ -35,3 +35,7 @@
 实现来源为 [lmm-api-source `fcb29cd`](https://github.com/TokenNotIncluded/lmm-api-source/commit/fcb29cd98950053ab3a76e29548d8752366baa22)。实际升级后的新 Core 曾因错误要求读取 owner-only 升级回执而以 `MissingPrivileges` 退出。现仅对六张公开合同保留明确读取要求，原账本读取及元数据写入/owner 限制保持；两张私有回执的表级或列级读取误授权均拒绝。manifest/catalog 与0.1.5一致，没有给 runtime 增加回执权限。
 
 修复候选 SHA256 `dea60909b00bed72db09772200db99233b9eb68bdb9a62197aa38288786d71aa` 的完整 dev 图库/main 编译、库 Clippy 和实际升级后登录/公开内容读写通过；另一个 owner 独立验证实际 v6 升级后受限进程、SQL 拒绝矩阵及权限缺失/误授反例。两种合成 v5 前驱也独立通过真实 CLI apply/recover、旧行/密码/21条序列保持、旧别名登录与未验证邮箱无重置权；其 `services=[]`，没有运行真实旧 v5 制品。全部是本地 PG18 和明确夹具开放，不是产品 finalization、全站资金、完整浏览器、发布/S11 或生产切换证据。原失败和未运行范围见 STATUS.md；1308项真实编译输入与修复提交逐文件一致，没有独立重编。
+
+## 0.1.7：2026-10-30 原生性能与渠道权限
+
+实现来源 `0b54719` 的真实relay性能采样/个人只读查询和 `e106a74` 的ChannelRead gate；实际R2 Native SHA256 d6d356311de8cf6589c2ec4429603a0d9308ca634b1aed20b78a6c42b7c76c10，dev图编译与库Clippy通过。开发真实Native/PG/TCP供应商通过；独立性能8组、独立渠道7组/45次HTTP通过。采样为SERIALIZABLE最佳努力追加，不成为资金或重派权威；历史/完整入口未覆盖，财务仍503、渠道写/测试/余额仍501。cfg(test)后续改动未编译、三个不同时间桶边界/高负载、完整历史导入和浏览器/整站/生产切换仍待验。完整绑定、保留失败与命令在主仓库STATUS.md及其证据目录。

@@ -23,3 +23,5 @@ Token/按次筛选与侧栏计数共用同一个分类规则：`billing_mode=tie
 保留既有 `price-low` / `price-high` URL 的综合排序行为和标签；新增加的六种显式价格维度有独立 URL 值。排序选择、刷新和历史导航保持一致。七语言文案完整，较长菜单文本应换行且不超出窄屏。
 
 邮箱流程使用 Core 的验证码申请、注册、当前会话绑定及密码重置接口。验证码/重置请求的接纳提示保留“如符合条件”的语义，不承诺 SMTP 或收件箱送达。注册请求保持匿名，不携带当前 bearer，也不自动刷新重放；绑定请求固定发起时的 bearer 与会话，身份变化时拒绝重放。重置页支持配置站点的 `/user/reset#email=...&token=...`，在任何应用脚本或资源初始化前移除地址中的证明，只将原证明用于一次明确的重置提交；不将 reset 成功当作登录或 MFA 完成。真实 DOM/类型检查不替代实际浏览器与 Core、SMTP 的组合验收。
+
+性能页面消费真实原生观测：优先使用服务端 aggregate，分组/趋势按 request_count、success_count、latency_sum_us、ttft_sum_us/ttft_count、output_tokens/throughput_time_us 等实际分子分母合并；不能平均组或模型均值。未知数值保持 null，不以 Number(null)、默认零或绿色成功伪装。availability=partial 时持续展示部分覆盖、采样数和缺样本数，即使列表为空也可见；明确延迟仅为 relay 阶段，吞吐为成功输出除以 relay 总秒，不冒充供应商生成速率。兼容未提供新分母的旧接口，但不能声称旧分支已加权。七语言、模型徽标/详情/比较、仪表盘和状态页对 nullable 值一致。

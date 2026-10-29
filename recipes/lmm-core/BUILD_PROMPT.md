@@ -18,6 +18,14 @@
 
 公开设置：`GET /api/option/` 返回生效配置及明确的 `partial`、`read_only` 和 `writable_keys`；当前内容写入范围为 `Notice`、`Announcements` 与 `console_setting.announcements`，两个公告键保持一致。PUT 接受单个字符串值，bulk 接受字符串映射及可选 `expected_values` 比较后保存，validate 只校验不保存。写入要求当前有效的最高管理员 Session，API Key、普通管理员及已撤销会话拒绝；公告内容格式、别名、版本和绑定 actor 的审计在同一事务处理，审计失败全部回滚，相同内容不增加版本或审计。并发比较冲突只允许一个请求胜出。COMMIT 确认丢失返回 HTTP 503 / `SYSTEM_OPTIONS_COMMIT_UNKNOWN`，不能声称回滚或盲目重试。运行数据库身份是受信任 Core，窄函数不独立替代 HTTP 用户鉴权、内容和审计；不得将这个边界描述成任意直接 SQL 都强制用户审计。主机配置、秘密、资金策略及未开放键不能伪装保存成功；完整系统设置功能仍按总项目 A10 和完整范围继续交付，不能用当前内容白名单缩小完成分母。
 
+渠道读取：列表、搜索、详情和能力描述使用当前个人管理员 Session 及当前完整权限策略，按 ChannelRead 和 Channel 平台资源判定，不能拿 AdminUsersRead 代替。身份、策略及撤销在同一只读快照中核对；导入特权策略缺失/不完整/校验失败保持拒绝，原生管理员遵守现有默认目录规则，普通用户、API Key、团队及失效会话拒绝。此修复不将只读渠道等价为完整控制面，CRUD/测试/余额、动态秘密、持久发布与节点恢复继续按原始范围交付。
+
+## 性能观测
+
+正式模型转发记录基于单调时钟的 relay 耗时，在 execute 结束时记录 UTC 秒，排除后续资金终结时长。流式 TTFT 是第一个非空文本、思考或工具参数 Delta，排除 Start、Usage、心跳和空 Delta；非流式 TTFT 未知。只有供应商完整终态、已确认结算、Completion 无错误的请求计成功；不能只看提前生成的 Report.outcome。TPS 定义为成功样本输出 token 总量除以其 relay 总秒数，不冒充供应商纯生成速率。性能事实与资金、重放和恢复授权分离，保存失败不重新外发或扣费。
+
+在已有 charging usage_events 中以原 request_id 和固定事件种类保存一次，沿用原请求冻结的 canonical model/group，不能使用当前 Key 组重新归属。进程死亡或写入未确认时允许样本缺失，读取明确列出缺样本；历史性能未导入、非共享 relay 入口和未接纳 HTTP 不能假算完整。提供实际 /api/perf-metrics/summary 与 /api/perf-metrics：沿用当前个人 Session gate，在同一只读快照读取当前 enabled 组与模型可见性；匿名、Key、团队会话、撤销会话拒绝，不能泄露无权限模型/分组。hours 默认24、1至720；bucket_seconds 默认3600，仅60/300/3600，按 execute 结束 UTC 的半开窗口归桶。最近三个非空桶与均值使用实际样本和分母，不平均组/模型均值；未知值为 null，Web 不能 Number(null) 后显示成零。完整历史性能与原有全功能范围继续保留，不能把原生观测切片计为全量恢复。
+
 ## 安装和运维
 
 同一程序提供 --help、--version、schema-manifest、init-db、check-db、create-first-owner、upgrade-db；bootstrap-user 仅开发。--help/--version 不要求服务配置；--config 支持显式 TOML。默认 /etc/lmm.conf.d/core.toml，秘密 /etc/lmm.conf.d/secrets/core/，状态 /var/lib/lmm/core/，临时 /run/lmm/core/。不输出秘密。

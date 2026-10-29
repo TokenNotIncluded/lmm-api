@@ -19,3 +19,11 @@
 ## 0.1.3：2026-10-30 Notice 保存失败处理
 
 [lmm-api-source `90c442d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/90c442d8cb6d8811d0cdeaa6e806a324770f67f4) 修复 Notice 表单使用异步 mutation 时未消费拒绝、导致正确错误提示之外仍抛页面异常的问题。实际新 bundle 复验登录、Notice 保存刷新、真实存储失败及 COMMIT UNKNOWN；公告/只读/窄屏/普通用户四组按输入未变边界复用原独立证据，合计限定范围 8 组。新输入 pageerror=0，两故障 3.5 秒均仅一次写；UNKNOWN 随后读回和刷新确认真实提交。固定 Bun1.3.14 执行一次构建、完整类型检查及变更文件 lint/format，通过；复用依赖最初由同锁文件的 canary 安装，未宣称工具链完全相同。其余设置、旧库/新 Core 组合、全站和生产验收不由此通过。
+
+## 0.1.4：2026-10-30 原生性能显示
+
+实现来源 `57c71549a5596eeb5f9c105df73634841f888977`，统计优先aggregate并使用实际分子/分母，未知保持null、部分覆盖及缺样本可见，七语言各新增同4键。主线程固定Bun1.3.14/Node26.10.0、2670项输入逐一匹配提交，34项定向与25项overview、完整类型、变更文件lint、隔离build和初始包预算通过；初始gzip550112/786432 bytes。旧资源夹具缺字段的失败和作者canary/事后补hash记录均保留，不把它们伪称固定工具链证据。新bundle尚未完成真实浏览器验收；完整登录/历史数据、全站和生产切换未由此通过。
+
+独立捕获Native响应→Web复验随后发现，模型页PerformanceOverview空结果提前返回时漏掉部分覆盖提示（wi1030a2：7过/1失败）。`24066ba4c2204a9bf6173c97f4ff2d8196512401` 仅补该分支notice，保留无数据文案；完整类型/组件lint/overview25项已复验，原失败与断言保留。最终构建和独立复验固定输入以STATUS.md为准。
+
+最终 `24066ba4` 的新冻结2670项Web输入逐blob匹配，完整类型/组件lint/overview25、一次新build与包体预算通过（初始gzip550115/786432 bytes，533份输出）。独立wi1030a3保持原断言，8/8组通过；以归档实际Native JSON/SQL校验真实API适配与React DOM，HTTP传输/canvas为替身，未启动新后端，也不是浏览器/登录验收。原wi1030a1夹具错误、wi1030a2产品失败及冻结输入保留，不能只报告最后通过。最终制品SHA清单和清理情况见STATUS.md。

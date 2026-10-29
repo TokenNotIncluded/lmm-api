@@ -11,3 +11,7 @@
 ## 0.1.1：2026-10-29 SSE 错误合同
 
 从当前 Core 的 `RelayError`、流内错误编码和真实回环 HTTP 回归提炼 [#945](https://github.com/TokenNotIncluded/lmm-api/issues/945) 的失败分类。`upstream_truncated` 从过去共用的 `invalid_upstream_response` 中分出，传输错误与主动取消的现有类别保持。该变化是公开错误码的细分，HTTP 已发送状态、资金 UNKNOWN 以及 Protobuf wire 合同不变；消费者按新错误码识别并保留原操作恢复。
+
+## 0.1.2：2026-10-30 性能观测与渠道读取
+
+来源为 lmm-api-source 的 `0b54719`（真实 relay 观测和读取）与 `e106a74`（ChannelRead gate），没有新的配方依赖或产品进程。新增 nullable/加权/覆盖状态及个人 Session 当前可见性合同，保持金融权威不变。原生性能的实际 Core/PG/计数供应商开发与独立8组通过；历史性能、完整渠道控制面和最终整站验收尚未完成。结果以 STATUS.md 固定输入及限制为准。
