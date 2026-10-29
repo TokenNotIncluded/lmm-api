@@ -266,3 +266,11 @@
 | `/internal/wallet/v1/{action}` | `post` | `services/core/src/wallet/http.rs:56` |
 | `/core/v1/wallet/confirm/{kind}/{id}` | `get` | `services/core/src/wallet/http.rs:167` |
 | `/api/user/topup/self` | `get` | `services/core/src/wallet_history_read_http.rs:41` |
+
+## 原生性能观测与渠道读取增量
+
+`GET /api/perf-metrics/summary` 返回 data.models 和 data.aggregate；`GET /api/perf-metrics?model=<canonical>&hours=24&bucket_seconds=3600` 返回 data.groups、各组 series 及 aggregate。个人 Session 在同一只读快照内按当前 enabled 组与模型可见性读取，其他身份和失效会话拒绝。hours 为1至720，桶仅60/300/3600秒；按 execute 结束 UTC 秒进入半开窗口，最近三项为非空桶。
+
+指标可为 null：avg_latency_ms、avg_ttft_ms、success_rate、avg_tps。加权所需 request_count、success_count、ttft_count 和 throughput_count 是计数；latency_sum_us、ttft_sum_us、output_tokens、throughput_time_us 使用十进制字符串。成功要求 provider完整终态、Confirmed 和 Completion无错误；转发耗时不含入口鉴权/后续终结，流式首字只认首个非空内容Delta，吞吐为成功输出token总量除以其relay总秒。coverage列明 sampled_requests、missing_samples、窗口与口径；目前 historical_imports=false、availability=partial。观测不能成为资金、重放或恢复授权。
+
+渠道列表/搜索/详情/能力读取按 ChannelRead 动作与 Channel 平台资源判定，不能借用 AdminUsersRead。当前个人管理员 Session、完整导入策略和显式否决均需有效；此合同不把只读投影等价为渠道CRUD、测试或余额。
