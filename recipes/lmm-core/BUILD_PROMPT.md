@@ -25,3 +25,5 @@
 init-db 仅新空隔离库，owner 单事务安装声明组件。普通 runtime 校验完整 schema/权限后启动，不建表、不创建角色、不授予权限；错误 schema、owner 误用、权限缺失应拒绝。upgrade-db 只接受明确固定前置契约，不能用普通启动或全新安装例子升级已有站点。
 
 Core 可完全无 Go 独立工作；内部 RPC 默认不开放，明确认证并按模块/用户授权。公开 status 准确报告启用能力。按 ACCEPTANCE.md 用真实隔离 PostgreSQL 验证资金和拒绝路径，不以 mock 替代。
+
+升级历史：同一 Core 的 `upgrade-history` 显式安装或查询独立 PostgreSQL 18 历史库，不能在普通启动初始化。独立管理员和存储不能随目标库备份恢复或切换到旧副本；本机两实例不证明生产故障域独立。固定 authority ID、物理实例与无 owner 权限的 maintenance writer，拒绝将目标同一物理集群当独立历史。原站点/操作/请求/候选/目标绑定不可替换，closing→held→started→committed 单向 CAS 消费，不因租约、重连、目标物理恢复或数据库停启清空。COMMIT 回执丢失保持 UNKNOWN，按原操作观察，禁止重做。存储记录由控制器另行验证的围栏与回执，不把任意 hash、历史状态或命令成功当正式升级/开放权限；查询始终无 retry/open 授权。完整 apply、真实部署停写、恢复、finalization 和生产验收仍按总项目范围交付。

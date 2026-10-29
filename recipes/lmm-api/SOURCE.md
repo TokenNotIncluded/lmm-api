@@ -21,3 +21,7 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 ## 0.1.3：2026-10-29 公开设置写入
 
 行为实现来源为 [lmm-api-source `f993be2`](https://github.com/TokenNotIncluded/lmm-api-source/commit/f993be2c860fded95af706527ff5b8705c52cd1c)：Notice/双公告别名、最高管理员 Session、CAS、原子审计与提交结果不确定处理。固定 1293 文件的实际 dev Core 在新装受限 PostgreSQL 上完成七项库测试、一项 Router TCP 开发测试，以及独立实际 main 的十组 HTTP/SQL 验收，含数据库已提交后丢弃回执。受信任 runtime 的直接 SQL 能力与 HTTP 用户审计分别记录；它不是数据库强制所有用户审计。只开放当前三项内容键，不缩小完整系统设置/A10 要求；浏览器、存量升级、release/S11 和生产切换未验收。原始失败、构建来源、哈希及清理由 STATUS.md 保留，不宣称从配方完成重建。
+
+## 0.1.4：2026-10-29 独立升级历史库
+
+实现来源为 [lmm-api-source `7c3ebb8`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7c3ebb86cf406c5f0a268ea2eb90edb985271751)：同一 Core 的独立历史库安装/查询 CLI 和真实 SQLx CAS 客户端。固定开发图编译、Clippy、格式及隔离两实例测试通过；另一个 owner 独立验证实际 CLI/API、四消费者仅一次、物理目标恢复、真实 COMMIT 回执丢失、历史库进程停启和 writer 权限。历史库只保存原操作及观察，未接通完整升级 apply、部署围栏、最终恢复/开放；不据此宣称生产可切。新装组件/manifest 未改变，完整分母及失败继续由 STATUS.md 保留。
