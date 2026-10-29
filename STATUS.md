@@ -128,7 +128,7 @@ CLI 修复候选 2 在独立命令测试中针对原问题的 17 项及 3 项混
 
 已提交源码 dddde75 并在 `7c3ebb86cf406c5f0a268ea2eb90edb985271751` 加入独立测试。`lmm-core upgrade-history` 只安装或查询独立 PostgreSQL 18 authority；实际 Rust History API 保存原 binding、CAS 消费及回执观察，不新增产品程序，不在普通启动或目标 init-db 中安装。拒绝错误 authority、目标同一物理集群、owner/超额 writer 权限。历史状态和传入的围栏/回执 hash 不单独授权 DDL、retry 或 site open。无自动过期、接管、清空或新一代升级；完整 finalize 仍未完成。
 
-开发证据 `~/Documents/Codex/2026-10-29-upgrade-history-5h209odr/`：完整既有 Cargo dev 图编译 native 库/实际 main/目标测试，Clippy warnings denied、格式与文档检查通过。实际 Core SHA256 `6eca9a6e8b270bc7368057469dbd8185ad287db74589df3f3a223f610a53ec31`；新装 schema-manifest 仍为 `59bc164463df00df11a253feecbf9e08dd914e6e3cc7fcb3af68d193287eb005`。r1/r2/r3 按测试输入递增，native 产品输入未变、实际库/main复用；新增输入分别是故障代理/测试、历史库进程停启后 CLI 读回、输出路径拒绝。并发仅一次、目标物理恢复、原绑定/角色拒绝通过；代理观察真实 COMMIT 和 ReadyForQuery 后截断，新客户端得到 COMMIT_UNKNOWN，新连接仍读到 Started 且重做拒绝。历史库停启后实际 CLI 读回 Started/Committed，retry/open 均 false。原 Console 代理默认行为自测通过。
+开发证据 `~/Documents/Codex/2026-10-29-upgrade-history-5h209odr/`：完整既有 Cargo dev 图编译 native 库/实际 main/目标测试，Clippy warnings denied、格式与文档检查通过。实际 Core SHA256 `6eca9a6e8b270bc7368057469dbd8185ad287db74589df3f3a223f610a53ec31`；新装 schema-manifest 仍为 `59bc164463df00df11a253feecbf9e08dd914e6e3cc7fcb3af68d193287eb005`。 提交后 1295 个 native/未变基线文件逐个与编译输入匹配；成功测试 exe、Clippy 中间物、临时 index/pyc 已清理 99758522 字节，实际 Core/库及必要冻结证据保留。r1/r2/r3 按测试输入递增，native 产品输入未变、实际库/main复用；新增输入分别是故障代理/测试、历史库进程停启后 CLI 读回、输出路径拒绝。并发仅一次、目标物理恢复、原绑定/角色拒绝通过；代理观察真实 COMMIT 和 ReadyForQuery 后截断，新客户端得到 COMMIT_UNKNOWN，新连接仍读到 Started 且重做拒绝。历史库停启后实际 CLI 读回 Started/Committed，retry/open 均 false。原 Console 代理默认行为自测通过。
 
 独立 owner 在 `~/Documents/Codex/2026-10-29-upgrade-history-independent-side-a/` 使用同一实际库/main、独立 Rust 程序和 SQL oracle，未执行作者业务用例。八组检查 PASS：逐字段原绑定拒绝，错误 authority/同实例拒绝，四消费者仅一个成功，真实 ACK 丢失/死连接与新连接，合成扣账后的物理目标恢复，authority PostgreSQL 实际进程停启，writer 15 项真实 SQL 权限拒绝，真实 CLI 各阶段只读且无 open/retry。不是宿主机 OS reboot；合成扣账和 hash 不是完整资金或围栏证据。成功库、备份副本、exe 和秘密配置已清理，独立源码在 `tests/upgrade_history_independent/`。生产独立存储/凭据未落实或访问；最终 apply、连续部署围栏、恢复控制器、browser、release/S11 和生产切换未验收。
 
@@ -148,7 +148,7 @@ Console bridge r4 独立数据保持也通过，证据 `~/Documents/Codex/2026-1
 
 SQL 信任边界：runtime 无 options 直接 DML/DDL 或 owner/元数据权限；允许函数限制键、固定 search_path 并由 owner 持有。实测持 runtime 凭据可直接写允许键，绕过 HTTP 内容、别名和 actor 审计；这是现有受信任 Core SQL 身份的能力，不是数据库强制用户审计。HTTP 事务的审计、权限及内容已验，与直接 SQL 分开记载。配方保留完整 A10 分母。
 
-旧库升级仍未完成。另一个 v2 bridge 在两个明确 v5/26 前驱到 v6/27 目标的隔离 PostgreSQL 上通过预览、结构核对及回滚开发用例；它没有已提交升级、持续围栏或持久恢复，未集成，也未独立复验。r4 已修正“所有历史邮箱一律拒绝”的错误前提：原 email/flag 值与旧密码别名保持，不创建 verified 地址或 reset 权限。真实冻结 Core 库及正式授权后的受限角色在两种前驱上完成别名登录、错误/重复/禁用别名拒绝、旧行/序列/ACL 保持及 reset 正反对照；一项合同测试、两项 PostgreSQL 场景开发测试通过。仅测试内部提交私有 stage，让真实池方法读取，不是产品 apply/围栏/恢复验收。证据在 `~/Documents/Codex/2026-10-29-console-bridge-v2-r4/`，r1–r3 的 212 个证据文件哈希未变；一条编译警告保留，未声称 Clippy、独立验收或 S11 通过。更早的账本/路由历史前驱仍须自己的桥接。
+旧库升级仍未完成。另一个 v2 bridge 在两个明确 v5/26 前驱到 v6/27 目标的隔离 PostgreSQL 上通过预览、结构核对及回滚开发用例；它没有已提交升级、持续围栏或持久恢复，产品未集成；r4 数据保持已完成前节所述独立复验。r4 已修正“所有历史邮箱一律拒绝”的错误前提：原 email/flag 值与旧密码别名保持，不创建 verified 地址或 reset 权限。真实冻结 Core 库及正式授权后的受限角色在两种前驱上完成别名登录、错误/重复/禁用别名拒绝、旧行/序列/ACL 保持及 reset 正反对照；一项合同测试、两项 PostgreSQL 场景开发测试通过。仅测试内部提交私有 stage，让真实池方法读取，不是产品 apply/围栏/恢复验收。证据在 `~/Documents/Codex/2026-10-29-console-bridge-v2-r4/`，r1–r3 的 212 个证据文件哈希未变；一条编译警告保留，未声称 Clippy、独立验收或 S11 通过。更早的账本/路由历史前驱仍须自己的桥接。
 
 ## 设置升级的历史候选及遗留失败
 
