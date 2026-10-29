@@ -13,3 +13,7 @@
 本轮从源码 `86e51b0708086fb78605ef9f519275149ac47873` 核对当前问题，补齐定价排序、上游流截断的公开错误分类和完整质量计划的 Mocklab 入口。依据为本项目 [#911](https://github.com/TokenNotIncluded/lmm-api/issues/911)、[#945](https://github.com/TokenNotIncluded/lmm-api/issues/945)、[#786](https://github.com/TokenNotIncluded/lmm-api/issues/786)；已有动态分类和 SSE 分帧分别按 [#961](https://github.com/TokenNotIncluded/lmm-api/issues/961)、[#962](https://github.com/TokenNotIncluded/lmm-api/issues/962) 重新核对。实际自测、原始失败和未运行范围由 STATUS.md 及关联源码 PR 记录。
 
 ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。旧 PR 关闭为迁移取代不代表完整财务导出、支付供应商或 schema 升级完成；原候选与已通过的历史场景均保留。
+
+## 0.1.2：2026-10-29 邮件正式接线
+
+行为实现来源为 [lmm-api-source `5733972`](https://github.com/TokenNotIncluded/lmm-api-source/commit/57339728292d522ca7a4f926f1624301b5cc9350)：正式 identity v6 新装与运行权限、加密出箱、配置及 Core/Web 邮件调用。固定输入的实际非 test Core、本地受限 PostgreSQL 和真实 SMTP 传输已完成独立注册/重置/撤销/重放/启动拒绝/退出等待验收；Web 定向测试与类型检查分别记录。它不证明真实浏览器、外部邮箱、存量升级、完整资源门槛或生产切换。完整范围、原始失败与未运行检查继续由主项目 STATUS.md 保留，不能将邮件切片推定为整站完成。
