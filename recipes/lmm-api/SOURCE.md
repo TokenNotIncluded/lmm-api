@@ -25,3 +25,9 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 ## 0.1.4：2026-10-29 独立升级历史库
 
 实现来源为 [lmm-api-source `7c3ebb8`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7c3ebb86cf406c5f0a268ea2eb90edb985271751)：同一 Core 的独立历史库安装/查询 CLI 和真实 SQLx CAS 客户端。固定开发图编译、Clippy、格式及隔离两实例测试通过；另一个 owner 独立验证实际 CLI/API、四消费者仅一次、物理目标恢复、真实 COMMIT 回执丢失、历史库进程停启和 writer 权限。历史库只保存原操作及观察，未接通完整升级 apply、部署围栏、最终恢复/开放；不据此宣称生产可切。新装组件/manifest 未改变，完整分母及失败继续由 STATUS.md 保留。
+
+## 0.1.5：2026-10-30 正式离线升级与恢复
+
+实现来源为 [lmm-api-source `67dc5ba`](https://github.com/TokenNotIncluded/lmm-api-source/commit/67dc5bac6667ad796bdcc496ec7de9952dbabf07)。同一 Core 的 `upgrade-offline` v3 接通库外历史、外置 HBA、明确部署单元的停机/持久 mask、固定前驱桥接、原子本地回执与恢复观察。v6/27 的实际 CLI 普通提交、目标/历史库真实 COMMIT 回执丢失及目标物理恢复开发测试通过；独立所有者另外验证控制进程在临时允许连接窗口被 SIGKILL 后，真实 PostgreSQL ErrorResponse 仍以 28000/HBA 拒绝 runtime，恢复后禁止重做或开放。独立 SQL oracle 核对 160 张旧表、22 条序列及 2001 条 ACL/owner 记录；runtime_contract 仅按固定目标更新。1308 个编译输入与该提交逐文件一致。
+
+固定 manifest 为 `47ad36927c16ccc4237cf16c9889705ae4d53db184c77aaac4a264c4e5203078`，catalog 为 `557d9775042b94356f752ae4993bc73be645e9956e9fe1110ed5aa1cd531ee2d`。v5 的先前桥接数据保持证据不等于本轮正式 CLI 验收；v5 正式全流程、多主机存储、完整历史资金迁移、最终开放、发布资源/S11 与生产切换仍未验收。浏览器 Notice 的失败处理也在该提交的前序 `90c442d` 修复并完成限定范围复验。实际结果与保留失败见 STATUS.md。

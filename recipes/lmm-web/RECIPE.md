@@ -5,7 +5,7 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-web"
-version = "0.1.2"
+version = "0.1.3"
 kind = "software"
 description = "保留多语言与功能可用性边界的静态 Web 控制台"
 entry = "BUILD_PROMPT.md"
