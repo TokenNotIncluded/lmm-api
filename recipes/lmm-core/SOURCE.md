@@ -15,3 +15,7 @@
 ## 0.1.2：2026-10-29 邮件正式接线
 
 行为实现来源为 [lmm-api-source `5733972`](https://github.com/TokenNotIncluded/lmm-api-source/commit/57339728292d522ca7a4f926f1624301b5cc9350)：正式 identity v6 新装与运行权限、加密出箱、配置及 Core/Web 邮件调用。固定输入的实际非 test Core、本地受限 PostgreSQL 和真实 SMTP 传输已完成独立注册/重置/撤销/重放/启动拒绝/退出等待验收；Web 定向测试与类型检查分别记录。它不证明真实浏览器、外部邮箱、存量升级、完整资源门槛或生产切换。完整范围、原始失败与未运行检查继续由主项目 STATUS.md 保留，不能将邮件切片推定为整站完成。
+
+## 0.1.3：2026-10-29 公开设置写入
+
+行为实现来源为 [lmm-api-source `f993be2`](https://github.com/TokenNotIncluded/lmm-api-source/commit/f993be2c860fded95af706527ff5b8705c52cd1c)：Notice/双公告别名、最高管理员 Session、CAS、原子审计与提交结果不确定处理。固定 1293 文件的实际 dev Core 在新装受限 PostgreSQL 上完成七项库测试、一项 Router TCP 开发测试，以及独立实际 main 的十组 HTTP/SQL 验收，含数据库已提交后丢弃回执。受信任 runtime 的直接 SQL 能力与 HTTP 用户审计分别记录；它不是数据库强制所有用户审计。只开放当前三项内容键，不缩小完整系统设置/A10 要求；浏览器、存量升级、release/S11 和生产切换未验收。原始失败、构建来源、哈希及清理由 STATUS.md 保留，不宣称从配方完成重建。

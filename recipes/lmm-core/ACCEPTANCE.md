@@ -11,4 +11,6 @@
 9. 源码版本、命令、工具、真实进程与库身份、退出码和日志绑定。合成供应商与真实外部供应商分别列明。
 10. 用真实回环 HTTP 分别发送多帧同块、逐帧、逐字节和 CRLF 的 Gemini SSE；客户端收到完整文本、finish 和最后 usage。正常终态、缺终态、半帧、损坏 HTTP、非法 UTF-8、非 SSE 和主动取消有明确不同结果；截断不发成功终止、不再次发送上游请求，公开码与日志分别保持 `upstream_truncated`、`upstream_connection_error`、`invalid_upstream_response` 和 `request_cancelled`。TCP/内存账务观察与真实 PostgreSQL 预留恢复验收分开记录。
 
+11. 用正式新装 CLI、正式授权脚本、受限运行账户及实际 Core HTTP 进程验证公开设置：真实 Session 登录、身份拒绝矩阵、双公告别名、no-op、validate 不保存、错误批次原子拒绝、并发 CAS、审计失败回滚和重启持久性。代理必须观察数据库真实 COMMIT 成功后截断回执，HTTP 返回 `SYSTEM_OPTIONS_COMMIT_UNKNOWN`，另一个连接证明内容与审计已提交，不自动重放。直接 SQL 的受信任 Core 能力与 HTTP actor 审计分别记录；新装、浏览器、已有站点升级及最终组合各有独立结果，不互相抵扣。
+
 上述是重建必须满足的验收条件，不是运行结果。实际源码、命令、通过/失败和未运行范围以主配方项目的 STATUS.md 及关联 PR 为准；单项修复不能代替完整数据库、慢客户端、恢复或独立 Core 资源验收。

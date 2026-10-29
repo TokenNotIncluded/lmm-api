@@ -16,6 +16,8 @@
 
 领域：原生 pricing/余额/usage、历史与财务导出、通知与 setup、支付及 commerce 资金权威、工具市场 credit/委托、assistant model、礼品/红包、图片、悬赏、abuse 与信任价格等。先保持领域归属和现有明确接口，再对待完成能力登记阻塞；不能让 Go 接管权限或钱。
 
+公开设置：`GET /api/option/` 返回生效配置及明确的 `partial`、`read_only` 和 `writable_keys`；当前内容写入范围为 `Notice`、`Announcements` 与 `console_setting.announcements`，两个公告键保持一致。PUT 接受单个字符串值，bulk 接受字符串映射及可选 `expected_values` 比较后保存，validate 只校验不保存。写入要求当前有效的最高管理员 Session，API Key、普通管理员及已撤销会话拒绝；公告内容格式、别名、版本和绑定 actor 的审计在同一事务处理，审计失败全部回滚，相同内容不增加版本或审计。并发比较冲突只允许一个请求胜出。COMMIT 确认丢失返回 HTTP 503 / `SYSTEM_OPTIONS_COMMIT_UNKNOWN`，不能声称回滚或盲目重试。运行数据库身份是受信任 Core，窄函数不独立替代 HTTP 用户鉴权、内容和审计；不得将这个边界描述成任意直接 SQL 都强制用户审计。主机配置、秘密、资金策略及未开放键不能伪装保存成功；完整系统设置功能仍按总项目 A10 和完整范围继续交付，不能用当前内容白名单缩小完成分母。
+
 ## 安装和运维
 
 同一程序提供 --help、--version、schema-manifest、init-db、check-db、create-first-owner、upgrade-db；bootstrap-user 仅开发。--help/--version 不要求服务配置；--config 支持显式 TOML。默认 /etc/lmm.conf.d/core.toml，秘密 /etc/lmm.conf.d/secrets/core/，状态 /var/lib/lmm/core/，临时 /run/lmm/core/。不输出秘密。
