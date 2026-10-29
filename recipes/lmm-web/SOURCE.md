@@ -11,3 +11,7 @@
 ## 0.1.1：2026-10-29 定价问题回写
 
 依据本项目 [#911](https://github.com/TokenNotIncluded/lmm-api/issues/911) 的价格排序需求、[#961](https://github.com/TokenNotIncluded/lmm-api/issues/961) 的动态计费分类要求与 [#920 最新定位](https://github.com/TokenNotIncluded/lmm-api/issues/920#issuecomment-6456789544) 更新行为及验收。本轮在当前源码上增加六种价格排序和对应回归；分类规则已存在，不重复实现。保留未知动态价格、真实浏览器与旧单体生产目录的验收边界，具体执行结果见主仓库 STATUS.md。
+
+## 0.1.2：2026-10-29 邮件正式接线
+
+行为实现来源为 [lmm-api-source `5733972`](https://github.com/TokenNotIncluded/lmm-api-source/commit/57339728292d522ca7a4f926f1624301b5cc9350)：正式 identity v6 新装与运行权限、加密出箱、配置及 Core/Web 邮件调用。固定输入的实际非 test Core、本地受限 PostgreSQL 和真实 SMTP 传输已完成独立注册/重置/撤销/重放/启动拒绝/退出等待验收；Web 定向测试与类型检查分别记录。它不证明真实浏览器、外部邮箱、存量升级、完整资源门槛或生产切换。完整范围、原始失败与未运行检查继续由主项目 STATUS.md 保留，不能将邮件切片推定为整站完成。
