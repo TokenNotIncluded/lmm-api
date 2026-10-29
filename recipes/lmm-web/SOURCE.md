@@ -15,3 +15,7 @@
 ## 0.1.2：2026-10-29 邮件正式接线
 
 行为实现来源为 [lmm-api-source `5733972`](https://github.com/TokenNotIncluded/lmm-api-source/commit/57339728292d522ca7a4f926f1624301b5cc9350)：正式 identity v6 新装与运行权限、加密出箱、配置及 Core/Web 邮件调用。固定输入的实际非 test Core、本地受限 PostgreSQL 和真实 SMTP 传输已完成独立注册/重置/撤销/重放/启动拒绝/退出等待验收；Web 定向测试与类型检查分别记录。它不证明真实浏览器、外部邮箱、存量升级、完整资源门槛或生产切换。完整范围、原始失败与未运行检查继续由主项目 STATUS.md 保留，不能将邮件切片推定为整站完成。
+
+## 0.1.3：2026-10-30 Notice 保存失败处理
+
+[lmm-api-source `90c442d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/90c442d8cb6d8811d0cdeaa6e806a324770f67f4) 修复 Notice 表单使用异步 mutation 时未消费拒绝、导致正确错误提示之外仍抛页面异常的问题。实际新 bundle 复验登录、Notice 保存刷新、真实存储失败及 COMMIT UNKNOWN；公告/只读/窄屏/普通用户四组按输入未变边界复用原独立证据，合计限定范围 8 组。新输入 pageerror=0，两故障 3.5 秒均仅一次写；UNKNOWN 随后读回和刷新确认真实提交。固定 Bun1.3.14 执行一次构建、完整类型检查及变更文件 lint/format，通过；复用依赖最初由同锁文件的 canary 安装，未宣称工具链完全相同。其余设置、旧库/新 Core 组合、全站和生产验收不由此通过。
