@@ -30,7 +30,7 @@ cd generated/lmm-api-source
 # 按源码仓库的 mise.toml 和 justfile 执行目标构建/测试
 ```
 
-当前固定实现提交：[6523c4b4b831643d69de3874c2e35933c91bfc2b](https://github.com/TokenNotIncluded/lmm-api-source/commit/6523c4b4b831643d69de3874c2e35933c91bfc2b)。各组件独立版本见各自 `RECIPE.md`，集成入口为 [lmm-api 配方](recipes/lmm-api/RECIPE.md)，实际验证与剩余工作见 [STATUS.md](STATUS.md)；issue 修复与旧 PR 的剩余合同见 [维护与迁移合同](recipes/lmm-api/ISSUE_MAINTENANCE.md)。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
+当前固定实现提交：[7abe06d5d369b2ccefe4364099450bfae4534953](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)。各组件独立版本见各自 `RECIPE.md`，集成入口为 [lmm-api 配方](recipes/lmm-api/RECIPE.md)，实际验证与剩余工作见 [STATUS.md](STATUS.md)；issue 修复与旧 PR 的剩余合同见 [维护与迁移合同](recipes/lmm-api/ISSUE_MAINTENANCE.md)。原实现迁出基准为 `ff01f8456b978089bce08175cbd357c3d22c3983`，原历史仍在本仓库。旧单体保留在 `传统` 与 `traditional` 分支；新开发主分支为 `main`。
 
 ## 状态
 

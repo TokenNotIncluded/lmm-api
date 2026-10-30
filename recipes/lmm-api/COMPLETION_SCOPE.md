@@ -198,6 +198,8 @@
 
 ## A05：支付宿主、供应商适配与退款恢复
 
+当前支付对齐补充见 [PAYMENT_PARITY.md](PAYMENT_PARITY.md)：以旧单体固定提交 `3948a0a1ee1cefdd016a7aa45a11851545bb4b85` 的五类 provider、七个钱包预设入口、Linux DO LDC、订阅与商店独立矩阵为依据。FastPay 按用户要求淘汰，历史记录与未知 provider 的拒绝 fixtures 保留。下面原始 A05 的完整故障恢复、退款来源和真实联调要求继续有效；本轮钱包充值候选不缩减这些验收目标。
+
 ```text
 你是 A05，负责「支付宿主、供应商适配与退款恢复」。
 

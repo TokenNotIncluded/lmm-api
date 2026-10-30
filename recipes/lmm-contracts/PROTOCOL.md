@@ -1,6 +1,8 @@
 # 固定 Protobuf 公共合同
 
-来源：LMM API 固定提交 d468affecfd76a5123358732fb9a4e0cc1f63566，AGPL-3.0-or-later。以下为声明式服务/消息接口，不包含实现或执行钩子。保留原字段号与注释；声明存在不代表对应 RPC 已启用。
+历史声明基线：LMM API 固定提交 d468affecfd76a5123358732fb9a4e0cc1f63566，AGPL-3.0-or-later。以下为声明式服务/消息接口，不包含实现或执行钩子。保留原字段号与注释；声明存在不代表对应 RPC 已启用。
+
+`payments.proto` 节同步本轮支付候选的完整声明，包含 `PreparePersonalTopup`、`GetEPayCheckout` 和显式提交方式；新增内容不重编号既有字段。最终固定源码及执行状态由 SOURCE.md 和主项目 STATUS.md 记录，不把候选声明归为旧提交的既有能力。
 
 ## lmm/core/v1/assistant.proto
 
@@ -690,6 +692,11 @@ service CorePayments {
   rpc AcceptProviderProof(AcceptProviderProofRequest) returns (ProviderProofReceipt);
   rpc GetProviderProof(GetProviderProofRequest) returns (ProviderProofReceipt);
   rpc PrepareTopup(PrepareTopupRequest) returns (PaymentIntent);
+  // Resolve the personal payer from the current Core session, never a web ID.
+  rpc PreparePersonalTopup(PreparePersonalTopupRequest) returns (PaymentIntent);
+  // EPay shares one MD5 key between checkout and callback verification. Keep
+  // that key in Core; only sign the fixed fields of an existing Core intent.
+  rpc GetEPayCheckout(GetEPayCheckoutRequest) returns (EPayCheckout);
   rpc CreditTopup(CreditTopupRequest) returns (PaymentReceipt);
   rpc HoldRefund(HoldRefundRequest) returns (PaymentReceipt);
   rpc BeginRefundDispatch(ResolveRefundRequest) returns (PaymentReceipt);
@@ -742,6 +749,12 @@ message PrepareTopupRequest {
   string currency = 4; // ISO code, e.g. USD. Core validates channel and currency.
   int64 amount_minor = 5; // Requested positive external smallest units, not credit.
 }
+message PreparePersonalTopupRequest {
+  MutationContext mutation = 1;
+  int64 payment_channel_id = 2;
+  string currency = 3;
+  int64 amount_minor = 4;
+}
 message PaymentIntent {
   int64 intent_id = 1;
   int64 account_id = 2;
@@ -756,6 +769,16 @@ message PaymentIntent {
   string idempotency_key = 11;
   bytes request_sha256 = 12;
   string receipt_id = 13;
+}
+message GetEPayCheckoutRequest {
+  int64 intent_id = 1;
+}
+message EPayCheckout {
+  int64 intent_id = 1;
+  string order_id = 2;
+  string checkout_url = 3;
+  // GET opens checkout_url; POST submits its query fields to its queryless URL.
+  string method = 4;
 }
 message CreditTopupRequest {
   MutationContext mutation = 1;

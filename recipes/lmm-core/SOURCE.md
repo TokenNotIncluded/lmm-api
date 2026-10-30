@@ -39,3 +39,9 @@
 ## 0.1.7：2026-10-30 原生性能与渠道权限
 
 实现来源 `0b54719` 的真实relay性能采样/个人只读查询和 `e106a74` 的ChannelRead gate；实际R2 Native SHA256 d6d356311de8cf6589c2ec4429603a0d9308ca634b1aed20b78a6c42b7c76c10，dev图编译与库Clippy通过。开发真实Native/PG/TCP供应商通过；独立性能8组、独立渠道7组/45次HTTP通过。采样为SERIALIZABLE最佳努力追加，不成为资金或重派权威；历史/完整入口未覆盖，财务仍503、渠道写/测试/余额仍501。cfg(test)后续改动未编译、三个不同时间桶边界/高负载、完整历史导入和浏览器/整站/生产切换仍待验。完整绑定、保留失败与命令在主仓库STATUS.md及其证据目录。
+
+## 0.1.10：2026-10-30 支付独立验签、个人意图与固定升级
+
+新增 `PreparePersonalTopup` 与仅针对不可变意图的 `GetEPayCheckout`；Core 支持 Stripe、EPay、Creem、Waffo Global、Waffo Pancake 的证据校验。EPay MD5 商户密钥仅由 Core 持有；Global 在验签外还由 Core 用私有配置查询固定官方端点。金额和渠道兑换政策固定到意图，成功入账后的 LDC 在财务投影中单列为虚拟单位。新增第29组件与 `core-payment-gateways-v1` 固定28→29升级，不改变旧 `payments.sql` 指纹；原历史升级合同继续保留。
+
+实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。
