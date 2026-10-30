@@ -2,6 +2,18 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：Coinbase Business 钱包支付 · 2026-10-30
+
+源码已提交并推送至 [lmm-api-source `7520d0b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)，远端 main 已读回确认。源码树 `1b4f4bef2222f29118034743550a4a6f22b989be` 与本地自测输入一致；主项目同步配方与源码 gitlink，保留当前 main 的既有工作。
+
+新增 Coinbase Business Checkouts 钱包充值。Go 用请求绑定的 ES256 JWT 创建同额 USDC checkout，外发前持久保存 UUIDv4 请求键；超时结果未知时保留原单。Core 独立验证原始 v0 HMAC、时间窗、intent、商户、test/live 环境、金额和币种，仅 success + COMPLETED 可进入既有证明与入账流程。钱包提供 Coinbase 选项、实际 USDC 金额和明确的 1:1 USD 计价说明，七语言文案齐全。配置默认关闭，自动退款与订阅未接入。
+
+自测通过：Go payment 与 RPC bridge 的竞态测试、composition/app/webcompat 受影响检查和 vet；Web 9 项定向测试、完整类型检查、改动文件 lint/format；真实隔离 PostgreSQL 18.6 的 12 个并发重复创建与重连，均保留唯一原始 UUIDv4。新增第 32 个 schema 组件，31→32 SQL 升级后的 catalog 与新装目标逐条相同，历史组件字节保持。显式离线升级入口及指南已加入源码。
+
+完整 Rust 编译和测试因缺少固定 oxide-auth Git 依赖、当前执行环境无法联网获取而受阻；Rust 格式检查通过。Rust 离线升级命令、完整资金链路、真实 Coinbase sandbox/商户付款、浏览器视觉和独立验收未执行。第一次 Go 自测被沙箱本地监听限制阻止，允许本地监听后同一测试通过；独立 pgtest 模块缺失的两项既有 Waffo 依赖校验记录已从离线缓存同步后通过。详细证据见 [本轮验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54/services/extensions/internal/modules/payments/VERIFICATION.md) 和 [升级指南](https://github.com/TokenNotIncluded/lmm-api-source/blob/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54/docs/schema-coinbase-payments-upgrade.md)。
+
+配方更新为 lmm-api 0.1.12、core 0.1.11、extensions 0.1.2、web 0.1.8。递归 check、临时 pack、归档 check 和完整提示词 build 通过。未访问生产数据或真实支付账户，未执行生产升级或部署。
+
 ## 本轮：原生钱包支付网关 · 2026-10-30
 
 源码已提交至 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，对应源码树 `08645feddffdb9cf6e0217c47808ed27719fa94d` 与本地已自测内容完全一致。命令行 Git 未配置推送凭据，故使用已连接 GitHub 的 Git 数据接口发布，并逐个核对大文件 blob 与整棵源码树；没有覆盖远端并行提交。主项目固定该源码版本，同时保留原 `6523c4b` 前端视觉更新。

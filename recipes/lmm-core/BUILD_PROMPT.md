@@ -32,6 +32,14 @@ Waffo Global 的验签公钥不能单独证明某个商户已收款。Core 还�
 
 支付结构通过正式 `payment-gateways` 组件加入，提供固定 **28 → 29 组件** 的 `core-payment-gateways-v1` 升级：核对确切前驱 manifest/catalog、物理数据库与角色、目标固定结构和原操作，拒绝未知前驱和既有重复 provider 交易。升级保持旧表数据、序列、权限与既有资金不变，不导入或伪造付款证据；新结构、运行合同及 owner-only 升级回执同事务提交。提交回执丢失只能以原请求观察已提交结果，不能换 ID 重做；新装与旧站升级各自验收，普通启动不执行 DDL。
 
+### Coinbase Business Checkout
+
+新增 `coinbase` 个人钱包充值，默认关闭，管理员配置完整后显式启用。Core 保留 USD 报价和账本金额，外部支付固定为同数额 USDC，两位小数按整数精确转换；这是产品的 1:1 计价规则。原金额、Core intent、商户、渠道和 test/live 环境在创建时固定，实际 USDC 支付单位随原证明保留。
+
+Core 独立持有各环境的 webhook secret，对原始 body 与 `X-Webhook-Signature`（兼容同值旧头 `X-Hook0-Signature`）中的 v0 执行 HMAC-SHA256 验证，签名输入为时间戳、句点和原始 body；限定签名时间窗并拒绝未来超窗、歧义字段及错误秘密。只有 `checkout.payment.success` 与 `COMPLETED` 同时成立，且 checkout ID、metadata、金额、USDC 币种和原 intent 归属全部匹配，才能持久接纳证明。证明唯一消费，原订单重复回调和重启恢复只对应一次账本入账；网页回跳与 Go 状态不授予入账权。
+
+Coinbase schema 作为独立第 32 组件追加，提供固定 31 → 32 组件离线升级，核对确切前驱、目标 manifest/catalog、角色和原操作回执；旧组件内容及其历史指纹保持。新装、既有库升级与提交不明恢复分别验收，普通启动不执行 DDL。自动退款保持关闭；已付款后的退款事件不能走充值入账路径。
+
 ## 性能观测
 
 正式模型转发记录基于单调时钟的 relay 耗时，在 execute 结束时记录 UTC 秒，排除后续资金终结时长。流式 TTFT 是第一个非空文本、思考或工具参数 Delta，排除 Start、Usage、心跳和空 Delta；非流式 TTFT 未知。只有供应商完整终态、已确认结算、Completion 无错误的请求计成功；不能只看提前生成的 Report.outcome。TPS 定义为成功样本输出 token 总量除以其 relay 总秒数，不冒充供应商纯生成速率。性能事实与资金、重放和恢复授权分离，保存失败不重新外发或扣费。

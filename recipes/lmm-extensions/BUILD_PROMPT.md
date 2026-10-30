@@ -20,6 +20,16 @@ Web 用户入口先取得服务端渠道和精确报价，明确确认后才创�
 
 完整产品矩阵与固定源码证据由集成配方 `lmm-api/PAYMENT_PARITY.md` 维护；本包自身保留上述全部目标，不以该集成文档作为隐藏依赖。当前多 provider 钱包充值候选不代表订阅、商店外部付款、退款闭环或真实支付商验收已完成。
 
+## Coinbase Business Checkout
+
+新增 `coinbase` 作为个人钱包充值方式，默认关闭，启用前配置 Coinbase Business 的 CDP API key、P-256 PEM 私钥和独立 test/live 渠道。以 ES256 JWT 调用固定官方 `business.coinbase.com/api/v1/checkouts`，sandbox 使用 `/sandbox/api/v1/checkouts`；JWT 绑定请求 method、host、path，短期有效并使用随机 nonce。按 Core 固定 USD 报价创建同数额 USDC checkout，十进制字符串最多两位小数，实际付款页使用 USDC。自动退款关闭。
+
+外部创建前持久保存 UUIDv4 `X-Idempotency-Key`、原请求内容和原订单；保存返回的 checkout ID、合法 HTTPS 付款 URL 及状态。未知创建结果保持原单，已知 checkout 通过同环境 GET 查询；缺少可证明的幂等保留期时不自动重发不明 POST，也不换键生成第二单。合法新订单和既有订单恢复分别处理，禁用新下单仍保留原单查询和回调能力。
+
+保留原始回调 body 和签名头交给 Core 独立验证，当前头为 `X-Webhook-Signature`，旧 `X-Hook0-Signature` 只作兼容。sandbox 与正式订阅、secret、渠道和订单环境分别绑定；sandbox 订阅带 `labels.sandbox="true"`，不能假定业务 body 含 sandbox 字段。body 的 `id` 是 checkout ID，处理不同事件时保留事件类型；仅成功付款可请求消费原 accepted proof，付款页回跳继续等待 Core 入账。
+
+协议依据：[创建 Checkout](https://docs.cdp.coinbase.com/api-reference/business-api/rest-api/checkouts/create-checkout)、[JWT 认证](https://docs.cdp.coinbase.com/coinbase-business/authentication-authorization/api-key-authentication)、[签名验证](https://docs.cdp.coinbase.com/webhooks/verify-signatures)、[Checkout 事件](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/webhooks)与 [Sandbox](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/sandbox)。
+
 ## 宿主与运行边界
 
 Core 事件经持久投递，consumer 按事件 ID 去重；重启或 Go 停机后恢复，不阻塞 Core 的模型链路。支持明确准入/排空与停止，已接纳记录保持可恢复；不声称模块内内存限制具有进程隔离能力。
