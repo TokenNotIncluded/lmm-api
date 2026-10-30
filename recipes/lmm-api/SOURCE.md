@@ -41,3 +41,7 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 ## 0.1.7：2026-10-30 原生性能与渠道权限
 
 实现来源 `0b54719` 的真实relay性能采样/个人只读查询和 `e106a74` 的ChannelRead gate；实际R2 Native SHA256 d6d356311de8cf6589c2ec4429603a0d9308ca634b1aed20b78a6c42b7c76c10，dev图编译与库Clippy通过。开发真实Native/PG/TCP供应商通过；独立性能8组、独立渠道7组/45次HTTP通过。采样为SERIALIZABLE最佳努力追加，不成为资金或重派权威；历史/完整入口未覆盖，财务仍503、渠道写/测试/余额仍501。cfg(test)后续改动未编译、三个不同时间桶边界/高负载、完整历史导入和浏览器/整站/生产切换仍待验。完整绑定、保留失败与命令在主仓库STATUS.md及其证据目录。
+
+## 0.1.10：2026-10-30 前端视觉与 HTML-in-Canvas
+
+集成 Web 配方 `0.1.6`，实现固定为 [lmm-api-source `6523c4b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/6523c4b4b831643d69de3874c2e35933c91bfc2b)，测试源码树为 `f55d28d7e32314d427aa682c5fcbb722246e26a1`。首页连接场景、普通 DOM 回退及全站共享视觉层已更新；70 个不同定向用例、完整类型、最终构建和包体预算通过，云端 Chrome 的限定公开页面和窄屏检查完成。实际连接场景使用 DOM 回退，原生 Canvas、登录后的控制台及数据和独立业务验收未执行。具体范围、首次裁切修复和 lint 排除项见 [Web 来源](../lmm-web/SOURCE.md) 与 [STATUS.md](../../STATUS.md)。根配方检查与完整提示词构建的实际结果见 STATUS.md；原有业务缺项和生产切换结论保持。
