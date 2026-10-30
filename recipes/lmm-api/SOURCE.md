@@ -45,3 +45,9 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 ## 0.1.10：2026-10-30 前端视觉与 HTML-in-Canvas
 
 集成 Web 配方 `0.1.6`，实现固定为 [lmm-api-source `6523c4b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/6523c4b4b831643d69de3874c2e35933c91bfc2b)，测试源码树为 `f55d28d7e32314d427aa682c5fcbb722246e26a1`。首页连接场景、普通 DOM 回退及全站共享视觉层已更新；70 个不同定向用例、完整类型、最终构建和包体预算通过，云端 Chrome 的限定公开页面和窄屏检查完成。实际连接场景使用 DOM 回退，原生 Canvas、登录后的控制台及数据和独立业务验收未执行。具体范围、首次裁切修复和 lint 排除项见 [Web 来源](../lmm-web/SOURCE.md) 与 [STATUS.md](../../STATUS.md)。根配方检查与完整提示词构建的实际结果见 STATUS.md；原有业务缺项和生产切换结论保持。
+
+## 0.1.11：2026-10-30 原生钱包五类支付网关
+
+以旧单体 `3948a0a1ee1cefdd016a7aa45a11851545bb4b85` 的五 provider／七钱包模板为对照，集成 Core 独立验签与入账、Go 多渠道适配、Web 报价确认和既有原生库的固定 28→29 升级。FastPay 明确退役，不加入实现或可选配置。[支付对照矩阵](PAYMENT_PARITY.md) 分别保留订阅、店铺、Pancake 管理和退款缺项；本轮不能据此声称整个新架构已完成。
+
+实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。

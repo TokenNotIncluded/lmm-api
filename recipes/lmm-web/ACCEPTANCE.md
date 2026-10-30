@@ -21,4 +21,10 @@
 
 14. 在桌面、390px 和 320px 视口检查首页、认证、价格、指南及代表性控制台：无横向溢出，移动导航/表单/对话可达，金额单位和错误状态保持；减少动态效果、离屏与隐藏时没有持续装饰绘制。共享组件视觉改善不等于逐页面业务验收。
 
+15. 原生钱包与真实 Core/Go 联合核对五 provider 的渠道、Core 报价、用户确认及原订单读取；缺少原生财务 projection 不借用 legacy 换算开放。超 JavaScript 安全整数金额、两位小数、USD/CNY/EUR/LDC、Core credits、测试环境和 Creem 固定商品均准确，FastPay 无可用入口。支付商已收款但 Core 未确认时仍等待，只有账本确认到账才成功。
+
+16. 同一 HTTPS checkout URL 根据显式 GET/POST 合同展示对应链接或表单；POST action 不含原 query，全部 query 字段按原值提交，包括重复字段、空值、中文、URL 参数与签名字符。用户点击前不得打开或提交，非法协议/带凭据地址拒绝，目标与 opener/referrer 隔离有效。真实边缘路径验证支付 Bearer 和 JSON body 保持、GET/POST 回调 query/body 保持且移除认证头；代理 fixture 与真实系统结果分列。
+
+17. 在报价响应丢失、下单响应丢失、重复点击、401、刷新、进程/页面重启、logout/换账号与存储失败时验证原 key/quote/order 不变、财务 POST 不自动重放、有限 GET 轮询可停止。UNKNOWN/review 不新建请求；provider paid 与 Core credited 分开，已 credited/refunded 后只能明确开始下一单。七语言、键盘、窄屏、恢复提示及真实浏览器行为分别记录，组件测试和构建不抵扣最终业务验收。
+
 以上是持续验收合同；本轮实际检查绑定源码与命令记录在主仓库 STATUS.md。组件自测不能代替浏览器、可访问性、截图或 Web 构建；未执行项目继续 NOT RUN。

@@ -22,6 +22,16 @@
 
 渠道控制面须保留传统站点的选择行为：原有符号优先级数值越大越优先，重试依次考虑更低的可用优先级；首选渠道必须属于本次选定的优先级和可用集合。同级在可用性过滤后按权重选择，权重全为零时均匀选择，否则零权重渠道不因平滑处理获得正权重。显式保留原请求的重试、首选和排除语义；对尚不支持的字段或供应商明确拒绝，不能静默丢弃或声称兼容。控制面写入、路由发布、授权快照与操作回执须有一致的事务和恢复语义；历史数据库升级须有明确的前驱、目标、围栏与原请求恢复，不以新安装成功代替升级验收。
 
+## 支付网关与原生充值
+
+Core 为 EPay、Stripe、Creem、Waffo Global、Waffo Pancake 分别实现独立供应商验签和付款归属验证；FastPay 明确排除。原始字节、签名、provider/商户/环境、Core intent、订单/交易、金额/币种和适用的商品/时间窗必须相符。按 provider namespace 对交易去重，可信 ingress proof 先持久化，后续入账只消费原证明一次；Go 的验证结果、网页回跳和支付商已收款状态都不能替代 Core 账本回执。保留旧单的原配置与证明恢复，订阅、商店和退款继续分别完成原完整验收。
+
+消费 contracts 的 `PreparePersonalTopup` 与 `GetEPayCheckout`：个人账户由当前 Core 会话决定，原报价的金额、credits、环境与 key 固定；报价不发外部订单。EPay 的共享 MD5 密钥仅保留于 Core，Go 只获取已存在 intent 的签名 checkout 结果，不获得任意代签能力。显式返回 GET/POST 提交方式；Linux DO 保留 LDC、`type=epay` 和 POST `/epay/pay/submit.php`，不按 CNY 或旧钱包兑换示例计算。
+
+Waffo Global 的验签公钥不能单独证明某个商户已收款。Core 还须使用自己持有的账户 API key 和私钥，向当前环境的固定官方 HTTPS inquiry 端点独立查询；调用方不能指定端点、查询体或查询结果。核对商户、原订单/请求编号、acquiring 交易号、成功状态、币种和精确金额后才接受 proof；失败、超时、状态未知和任何不匹配均不授予入账。正式与测试配置分别绑定，凭据不离开 Core；Pancake 使用自己的协议与配置，不能复用 Global 的信任判据。
+
+支付结构通过正式 `payment-gateways` 组件加入，提供固定 **28 → 29 组件** 的 `core-payment-gateways-v1` 升级：核对确切前驱 manifest/catalog、物理数据库与角色、目标固定结构和原操作，拒绝未知前驱和既有重复 provider 交易。升级保持旧表数据、序列、权限与既有资金不变，不导入或伪造付款证据；新结构、运行合同及 owner-only 升级回执同事务提交。提交回执丢失只能以原请求观察已提交结果，不能换 ID 重做；新装与旧站升级各自验收，普通启动不执行 DDL。
+
 ## 性能观测
 
 正式模型转发记录基于单调时钟的 relay 耗时，在 execute 结束时记录 UTC 秒，排除后续资金终结时长。流式 TTFT 是第一个非空文本、思考或工具参数 Delta，排除 Start、Usage、心跳和空 Delta；非流式 TTFT 未知。只有供应商完整终态、已确认结算、Completion 无错误的请求计成功；不能只看提前生成的 Report.outcome。TPS 定义为成功样本输出 token 总量除以其 relay 总秒数，不冒充供应商纯生成速率。性能事实与资金、重放和恢复授权分离，保存失败不重新外发或扣费。
@@ -52,4 +62,6 @@ Native 请求编号是字符串，不能假定递增。来源导入还必须由�
 
 原生创建来源须覆盖正式安装 CLI 创建首个管理员的独立路径，不能仅识别普通注册和开发 bootstrap。正式首管的真实创建审计必须与该用户匹配；新装无历史账务时应能读取准确零统计。历史导入标记及完整来源校验继续生效，不能因首管身份而忽略缺失的历史。
 
-Native现金只使用真正已确认的原Stripe订单与已核验退款，同币种累计，退款重放/阻塞/延迟/未决成本均不得重复或隐去；纯grant/钱包转账/商店款不算充值。原管理权限、无权限拒绝、无额外个人信息、总数越JS/SQL bigint仍精确。来源缺失、相冲突或不完整时保持明确503/UNKNOWN，不能用仅Native的partial响应代替全站统计。
+历史口径见[上一版构建合同](https://github.com/TokenNotIncluded/lmm-api/blob/928a3ec03ede08f40467535bc74437f99c523d27/recipes/lmm-core/BUILD_PROMPT.md)：当时 Native 现金限定为已确认 Stripe 订单与其已核验退款，该来源保留为旧范围记录。
+
+当前 Native 收款只统计已成功 Core 入账的 EPay、Stripe、Creem、Waffo Global、Waffo Pancake 原生充值，按原金额单位分类：USD、CNY、EUR 现金各自分列；LDC 进入虚拟单位列表，不能混同 USD、当作现金或用 credits 推算收入。退款仅使用各自已有合同下已核验并已在 Core 回冲的记录，同币种累计；新增充值网关不意味着其退款能力已经完成。退款重放、阻塞、延迟和未决结果均不得重复或隐去；纯 grant、钱包转账和商店款不算充值。原管理权限、无权限拒绝、无额外个人信息、总数越 JS/SQL bigint 仍精确。来源缺失、相冲突或不完整时保持明确 503/UNKNOWN，不能用仅 Native 的 partial 响应代替全站统计。

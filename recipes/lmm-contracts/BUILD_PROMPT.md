@@ -31,3 +31,11 @@ Core 提供 /v1/models，POST /v1/chat/completions、/v1/responses、/v1/message
 内部领域包含 control/commands、ledger、payments、commerce、events 和 assistant；RPC 应分别表达 operation/event/idempotency、actor/payer/scope、金额单位、版本、成功/拒绝/未知结果。固定源码的 contracts/proto/lmm/core/v1/*.proto 只是观察来源；本包 PROTOCOL.md 内含完整固定接口声明，保留服务名、方法、消息字段号、enum 值、metadata 身份边界和错误语义，不要自由改动既有 wire 合同。用黄金字节向量与固定旧 provider/consumer 验证直接互通；本次仅保全声明，没有执行二进制互通验收。
 
 TOML 配置显式引用绝对秘密文件路径，不展开环境变量或 shell；runtime 不能用 owner 权限。安装、启动、升级、迁移分开。跨进程请求不得持有整个上游流期间的数据库长事务。
+
+## 原生钱包支付合同
+
+`CorePayments.PreparePersonalTopup` 根据当前 Core 用户会话解析个人付款账户，同时校验宿主的 prepare 权限；请求只提供原幂等上下文、渠道、币种及最小单位整数金额，不接受 Web 用户 ID 或 Go 指定的付款方作为权威。返回的 `PaymentIntent` 固定账户、provider、商户、环境、原金额、credits 和请求摘要。prepare 仅保存报价意图，不向支付商下单、不入账；明确确认后才能进入 checkout。
+
+`CorePayments.GetEPayCheckout` 只对既有 Core intent 的固定字段签名，调用受宿主 prepare 权限约束，不能提供任意 URL、金额、订单或参数让 Core 代签。EPay 的下单和回调共用密钥只保留在 Core，RPC 输出 `EPayCheckout` 的 intent、订单、HTTPS `checkout_url` 及明确 `method`。`method` 的合同值为 `GET` 或 `POST`：GET 打开完整 URL，POST 将原 URL query 的所有字段作为表单体提交到去掉 query 的端点，不能按域名猜方法。Linux DO LDC 使用 POST `https://credit.linux.do/epay/pay/submit.php`。完整消息声明以 [PROTOCOL.md](PROTOCOL.md#lmmcorev1paymentsproto) 为准，既有字段号、服务名和 enum 数值保持；新增 `method` 使用字段号 4。
+
+Web/Go 的 `/api/user/payments/` 渠道、quote、checkout 及订单读取固定同一原请求，JSON 金额和 credit units 使用十进制整数字符串，分别保留 USD/CNY/EUR/LDC 和 `credit_500k_usd`。checkout 状态显式返回 `checkout_method`，支付商收款 `provider_paid` 与 Core 入账 `core_credit_confirmed` 分开。Core 接受可信证明、账本入账和退款各有独立持久回执；UNKNOWN 不换 key，回调不能凭 Go 的 verified 标记获得资金权威。FastPay 不进入 provider 注册或可启用合同，历史标记及拒绝 fixtures 保留。

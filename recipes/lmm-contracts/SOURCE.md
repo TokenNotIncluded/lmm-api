@@ -15,3 +15,9 @@
 ## 0.1.2：2026-10-30 性能观测与渠道读取
 
 来源为 lmm-api-source 的 `0b54719`（真实 relay 观测和读取）与 `e106a74`（ChannelRead gate），没有新的配方依赖或产品进程。新增 nullable/加权/覆盖状态及个人 Session 当前可见性合同，保持金融权威不变。原生性能的实际 Core/PG/计数供应商开发与独立8组通过；历史性能、完整渠道控制面和最终整站验收尚未完成。结果以 STATUS.md 固定输入及限制为准。
+
+## 0.1.3：2026-10-30 原生钱包个人意图、签名与支付方法
+
+完整同步源码 `payments.proto`，新增 `PreparePersonalTopup`、`GetEPayCheckout` 与 `EPayCheckout.method = 4`，保持原字段和 wire 编号。共同合同增加五 provider、七模板、Core 资金与证据权威、Global 独立 inquiry、LinuxDO POST、精确金额和原请求恢复；明确排除 FastPay。公开 API、配方全文和生成 Go RPC 的一致性由本轮定向检查记录，既有订阅／店铺／退款等完整验收范围不缩小。
+
+实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。

@@ -2,13 +2,31 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：原生钱包支付网关 · 2026-10-30
+
+源码已提交至 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，对应源码树 `08645feddffdb9cf6e0217c47808ed27719fa94d` 与本地已自测内容完全一致。命令行 Git 未配置推送凭据，故使用已连接 GitHub 的 Git 数据接口发布，并逐个核对大文件 blob 与整棵源码树；没有覆盖远端并行提交。主项目固定该源码版本，同时保留原 `6523c4b` 前端视觉更新。
+
+对照旧单体 `3948a0a1ee1cefdd016a7aa45a11851545bb4b85`，本轮实现 Stripe、EPay、Creem、Waffo Global、Waffo Pancake 五类钱包充值协议和七个配置模板：EPay 支付宝／微信／LinuxDO、Stripe、Creem、Global、Pancake。**FastPay 明确退役，provider 与 EPay 方法配置均拒绝。** Core 负责个人付款账户、不可变报价、独立证明与幂等入账；Go 负责支付商 I/O 与持久任务；Web 提供真实渠道、精确金额、报价确认、原请求恢复和明确 GET／POST handoff。EPay 密钥仅在 Core；LinuxDO 使用 POST 并保留 LDC，站点财务将它单列为虚拟单位；Global 在验签外还由 Core 使用私有凭据独立 inquiry。
+
+开发者自测：最终 Rust 支付单元35项、配置3项、固定升级单元5项通过；另一次真实 Core/PostgreSQL 用例实际完成 CNY、LDC、Creem、Global、Pancake 五个 profile 的 prepare→proof→credit，验证重复／跨 intent 拒绝、Global 查询归属、已存 proof 恢复和 LDC 分类，最终五笔账与2,500,000 credits 精确相符。Go 适配、宿主、HTTP、配置、UDS 桥接和 deadline 的受影响检查通过；最终 RPC 生成一致性通过。Web 最终7项定向测试、lint/format、完整类型检查通过；Web build 在最终 POST 表单改动前通过，之后未重跑 bundler。实际本地 nginx fixture 的17项路由检查通过，不冒充真实 Core/Go/浏览器联合验收。
+
+最终非 test dev Core SHA256 `c9773845270626fc8bd6b3c5ca483ece6dccbd6d54b3fbc5597684637412c0ad` 在 PostgreSQL18.6 UTF-8 专属夹具通过固定28→29升级：175→176表、22序列及旧行/权限保持，7,068条后继catalog逐项一致；原请求重放成功，换ID、改请求、前驱漂移、异常默认ACL和跨渠道复用交易拒绝，私有回执的表/列SELECT误授被实际 `check-db` 拒绝。前置库从固定Git SQL重建，未执行旧Native初始化，也未注入COMMIT回执丢失。新普通启动不执行DDL，旧站须用明确的 `core-payment-gateways-v1` 程序。
+
+原始失败保留：初始 Rust 构建和 Web 类型检查因内存限制退出，限资源重跑通过；Go 夹具的税类别／Core所属endpoint期望和旧GET拒绝断言已修正；第一版 schema generator 漏算既有 trust-pricing 拼接SQL，被实际Native manifest gate 在建库前拒绝，重新观测并逐字节绑定后修正；第二版升级夹具的ACL SQL引号错误修正后，同一最终Native在r3完整通过。详细命令与范围见源码 [支付验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/7abe06d5d369b2ccefe4364099450bfae4534953/services/extensions/internal/modules/payments/VERIFICATION.md)。
+
+配方版本更新为 lmm-api 0.1.11、core 0.1.10、extensions 0.1.1、web 0.1.7、contracts 0.1.3；完整 payments.proto、两项新RPC、显式 method=4 和28→29合同同步。订阅生命周期、商店外部收款、新增四协议退款、Pancake管理和真实商户／浏览器／进程恢复联合验收仍按 [支付对照矩阵](recipes/lmm-api/PAYMENT_PARITY.md) 保留；**开发者自测通过，独立验收未运行，整体仍未完成。** 本轮没有触碰生产数据、注册生产账号、执行真实付费调用或部署任何服务器。
+
+最终递归 `recipkg check`、临时 pack、归档 check 与完整中文提示词 build 均通过；归档含66份UTF-8 Markdown，无二进制或软链接，提示词724,625 bytes。归档 SHA256 `4895c36f455342f3bba9dd652c26bcc8b61b14b2c1905e0d61ded37e9ee9b064`，提示词 SHA256 `b904915cbe44f462dcaf6b245e203a96fb14a928409d50f9ed80c4805740a48d`；临时归档和提示词已删除。这是配方结构与渲染验证，不代表从配方重建业务成功。
+
+## 既有推进记录
+
 用户已清理本机此前保存隔离实验的 `~/.local/state/lmm-options-completion-20261028/` 目录。下文保留已观察到的结果，但该目录中的原始日志、测试数据库和构建产物目前无法重新核对。
 
 持久围栏的合成实验未完成：第二组在 PostgreSQL 崩溃重启时超过 15 秒等待限制并退出，后续提交确认中断场景未运行；这不能证明围栏可用于生产。
 
 新增的隔离合成实验使用 PostgreSQL 18.6 私有 Unix socket：禁止新连接后，分别终止正在写入的事务或保持事务存活，随后立即停库重启；两种情况下禁连状态及原有已提交数据保持，未提交数据回滚。另一合成库停用旧登录并排空会话后，导入账号仍可读取，重启后状态保持；其他登录通过成员关系切换为旧角色后可以实际写入，即使撤销成员关系，已经切换的会话仍能继续写入并提交，新会话则被拒绝。停写必须排空这类会话。实验未覆盖 COMMIT 回执丢失或断电，也不证明站点所有写入者已停写。崩溃及撤销后存活会话场景通过独立复验；停库失败注入由开发者验证。
 
-当前通过 `generated/lmm-api-source/` 固定源码提交 `6523c4b4b831643d69de3874c2e35933c91bfc2b`：包含开账连接统计快照修复、旧转账离线来源映射、Pi-Core 测试的 Provider pin 修正，缺少财务、旧开账、历史日志、凭据、订阅或路由导入回执时保持 UNKNOWN 的修正，正式新装 identity v6 的邮箱挑战、业务、加密出箱、HTTP/SMTP worker 与 Web 调用接线，迟到退款成功/容量冲突后的原证明自动恢复及新邮箱测试运行权限，Notice/公告的受限运行账户写入、原子审计与 COMMIT_UNKNOWN，独立升级历史库 CLI/客户端和独立复验，修复后的 CLI Pi 配置只读诊断、Go 助手 agent 必选启动校验、显式离线钱包请求键约束升级入口，以及本轮价格排序、流截断诊断和质量计划修复，新增 Core agent 显式配置与新装第 27 个组件、正式 Core 进程启动验证、运维报告对 agent 状态的兼容检查，以及暂存邮件组件的配置站点重置链接。新增真实 relay 性能观测/查询、Web 分母加权/null/部分覆盖显示，以及 ChannelRead 动作判定修复。并行工作的未提交候选不包含在此固定提交中，也不当成最终候选。
+此前通过 `generated/lmm-api-source/` 固定源码提交 `6523c4b4b831643d69de3874c2e35933c91bfc2b`：包含开账连接统计快照修复、旧转账离线来源映射、Pi-Core 测试的 Provider pin 修正，缺少财务、旧开账、历史日志、凭据、订阅或路由导入回执时保持 UNKNOWN 的修正，正式新装 identity v6 的邮箱挑战、业务、加密出箱、HTTP/SMTP worker 与 Web 调用接线，迟到退款成功/容量冲突后的原证明自动恢复及新邮箱测试运行权限，Notice/公告的受限运行账户写入、原子审计与 COMMIT_UNKNOWN，独立升级历史库 CLI/客户端和独立复验，修复后的 CLI Pi 配置只读诊断、Go 助手 agent 必选启动校验、显式离线钱包请求键约束升级入口，以及本轮价格排序、流截断诊断和质量计划修复，新增 Core agent 显式配置与新装第 27 个组件、正式 Core 进程启动验证、运维报告对 agent 状态的兼容检查，以及暂存邮件组件的配置站点重置链接。新增真实 relay 性能观测/查询、Web 分母加权/null/部分覆盖显示，以及 ChannelRead 动作判定修复。并行工作的未提交候选不包含在此固定提交中，也不当成最终候选。
 
 本机源码分支已通过普通合并同步远端并推送；七个语言文件的远端价格文案和本地邮箱文案都已按逐键检查保留，CLI 指针已更新。已验收的迟到退款恢复已提交；其他未提交的配置升级、路由预检等候选仍在工作树中；历史邮件 staged 集成材料也保留，不能把这些目录或局部测试自动计入已固定提交的最终组合。
 
