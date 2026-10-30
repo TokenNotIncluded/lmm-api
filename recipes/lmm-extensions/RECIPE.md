@@ -5,7 +5,7 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-extensions"
-version = "0.1.1"
+version = "0.1.2"
 kind = "software"
 description = "Go 业务扩展宿主与独立持久记录"
 entry = "BUILD_PROMPT.md"

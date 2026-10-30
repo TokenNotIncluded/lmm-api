@@ -18,6 +18,8 @@
 
 在服务端已确认原生财务 projection 可用的账户中接入 `/api/user/payments/channels`、`quote`、`checkout` 和 `checkout/{order_id}`，不把旧钱包换算结果当成原生报价。渠道来自服务端明确配置，保留 EPay/Stripe/Creem/Waffo Global/Waffo Pancake 的 provider、环境、币种及固定商品金额；FastPay 不提供入口。先展示 Core 返回的准确付款金额、单位和 wallet credits，再由用户明确确认下单；测试环境持续标识，Creem 固定商品不能改价。
 
+Coinbase 使用服务端启用的 `coinbase` 渠道；在渠道选择、付款预览与 checkout 状态中明确显示实际支付币种 USDC，同时保留 Core 的 USD 报价和钱包 credits，说明两者按本功能的 1:1 规则计价。测试渠道持续标识，缺配置或关闭时不开放下单。复用明确确认、原订单恢复和等待 Core 入账流程，自动退款入口保持不可用；七语言文案表达相同的金额与状态。
+
 金额按整数十进制字符串及两位小数精确转换，禁止以 JavaScript Number 承载大整数；USD/CNY/EUR/LDC 分别显示，Core `credit_500k_usd` 不与支付币种混淆。支付地址只能使用服务端返回的合法 HTTPS URL，且按照明确 `checkout_method` 处理：GET 用用户点击的链接，POST 用原生 `method=post` 表单，将完整 query 的每个字段转为 hidden input，向去掉 query 的 HTTPS 端点提交。重复字段、空值、Unicode、URL 内嵌参数和签名值保持；使用 `_blank` 与 `noopener noreferrer`，不自动打开、不按 URL 猜方法。Linux DO 的 LDC 支付须使用明确 POST 合同。
 
 第一次 quote POST 前，按当前用户与会话 ownerKey 保存原 request key、渠道和金额，后续保存 quote、order 与已提交状态；不保存 token，换人或重新登录不复用他人请求。quote/checkout 失败、响应丢失、401、UNKNOWN 或 review 保留原身份，财务 POST 不因认证恢复自动重放。用户可显式重取原报价或重试原单，状态仅通过有限 GET 轮询和手动刷新恢复。provider paid 只表示支付商收款，只有 `core_credit_confirmed` 且已 credited 才显示到账；未确认状态不能开启新付款，credited 或 refunded 后由用户显式开始下一单。存储失败应阻止另开请求并提示保留原页面。

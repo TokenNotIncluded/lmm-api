@@ -1,11 +1,11 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/TokenNotIncluded/lmm-api-source/7abe06d5d369b2ccefe4364099450bfae4534953/.github/assets/lmm-logo.svg" width="520" alt="LMM API · Language Model Mesh">
+  <img src="https://raw.githubusercontent.com/TokenNotIncluded/lmm-api-source/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54/.github/assets/lmm-logo.svg" width="520" alt="LMM API · Language Model Mesh">
   <h1>LMM API</h1>
   <p><strong>连接模型与工具，让智能自由流动。</strong></p>
   <p>Rust Core · Go Extensions · React Web · Rust CLI · Recipkg reconstruction contracts</p>
 
   [![Recipe](https://img.shields.io/badge/recipe-0.1.11-111111?style=flat-square)](recipes/lmm-api/RECIPE.md)
-  [![Source](https://img.shields.io/badge/source-7abe06d5-111111?style=flat-square)](https://github.com/TokenNotIncluded/lmm-api-source/tree/7abe06d5d369b2ccefe4364099450bfae4534953)
+  [![Source](https://img.shields.io/badge/source-7520d0bc-111111?style=flat-square)](https://github.com/TokenNotIncluded/lmm-api-source/tree/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)
   [![Status](https://img.shields.io/badge/production%20switch-not%20proven-111111?style=flat-square)](STATUS.md)
   [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-111111?style=flat-square)](LICENSE)
 
@@ -98,7 +98,7 @@ recipkg check "$out/lmm-api.recipe.tar.gz"
 
 ```text
 TokenNotIncluded/lmm-api-source
-7abe06d5d369b2ccefe4364099450bfae4534953
+7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54
 ```
 
 获取完整源码及嵌套子模块：
@@ -152,13 +152,13 @@ client ── HTTP/OpenAI API ──► lmm-core ◄── provider APIs
 - Web 只能通过公开/授权接口工作，不能直接接触数据库。
 - 健康接口有响应不代表模型供应商、账本、支付或浏览器业务已可用。
 
-实现细节从 [固定源码 README](https://github.com/TokenNotIncluded/lmm-api-source/blob/7abe06d5d369b2ccefe4364099450bfae4534953/README.md) 开始。
+实现细节从 [固定源码 README](https://github.com/TokenNotIncluded/lmm-api-source/blob/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54/README.md) 开始。
 
 ## 当前已验证到哪里
 
 截至 `2026-10-30` 的固定状态包括：
 
-- 主配方 `0.1.11` 与固定源码 `7abe06d5…`；
+- 主配方 `0.1.12` 与固定源码 `7520d0bc…`；
 - Rust Core、Go Extensions、React Web 和 RPC 合同的多组定向测试；
 - 隔离 PostgreSQL 升级、账本/支付幂等、部分浏览器财务页面和 nginx 路由夹具；
 - Stripe、EPay、Creem、Waffo Global 和 Waffo Pancake 钱包充值协议的开发者实现与局部验证；

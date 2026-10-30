@@ -21,6 +21,7 @@
 | Creem | 服务端固定商品及金额、钱包 checkout、订阅远端商品/周期核对、首次购买/续费/状态事件；退款缺口持续保留 |
 | Waffo Global | 独立配置、测试/正式环境、服务端子方式、钱包下单/支付/退款回调与企业账单资料；不将其与 Pancake 混为一个 adapter |
 | Waffo Pancake | 钱包、套餐 one-time/recurring 映射、首次购买/周期收款、退款、地区/语言/币种、目录与商品绑定、客户 portal、过期订单上游查询 |
+| Coinbase Business | USD 报价与同额 USDC 支付、ES256 JWT、创建/查询/回调、持久 UUIDv4 key、test/live 隔离、Core 独立 v0 验签与一次入账；默认关闭、未知 POST 保留原单、自动退款关闭 |
 | 商店 | 平台余额、商户 EPay、商户 Pancake、平台 Pancake、平台 Linux DO 分别完成购买/交付/退款；支付权、商品库存和 Core 账本一致 |
 | FastPay 淘汰 | 运行配置/渠道注册/公开渠道目录/报价/checkout 均不能启用；历史记录只读可识别，未知 provider 拒绝测试保留 |
 
@@ -30,5 +31,7 @@
 4. 退款绑定新支付的 Core intent/accepted proof，或历史导入的不可变来源；防止跨来源重复消费。Pancake 的 ticket/通知必须与原 payment 和实际退款执行核对；Linux DO 全额退款不被扩展为任意 EPay 的部分退款。支持范围之外的请求有明确结果，不伪造成功。
 5. Web 与真实后台联合验证报价、明确确认、test 标记、固定 Creem 金额、大整数、原请求持久化、401 后显式恢复、账号切换、有限只读轮询。支付商成功但 Core 未入账保持等待；未知/review 保留原单，不悄悄生成第二次付款。
 6. 订阅周期、状态和退款逐 provider 验证；旧版没有的 Waffo Global 订阅、Creem 自动退款、Stripe 订阅退款不能从钱包能力推断为完成。已有 A05/A06 目标继续追踪，不能通过标注旧版缺口从完整产品范围删除。
+
+7. Coinbase 用真实回环 HTTP 检查 JWT method/host/path、过期、nonce、金额原字节、UUIDv4 key 和固定官方端点；错币种、缺配置、错误返回主机及不匹配 checkout 拒绝。真实独立数据库验证创建前持久记录、并发点击、外部创建成功但响应丢失、进程重启及用户重复确认均不产生第二单；已知 checkout 的 GET 与原始回调可恢复。新旧签名头一致性、sandbox/live secret 混用及 success/failed/expired/refund 事件分别验收；自动退款入口拒绝。
 
 以上是持续验收要求。实际完成、失败、阻塞和未运行项由主项目 STATUS.md 及对应固定源码回执记录；本轮钱包充值实现不抵扣订阅、商店、真实支付商和 Extore 联合验收。吞吐、内存和延迟预算需另行测量。

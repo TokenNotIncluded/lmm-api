@@ -51,3 +51,9 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 以旧单体 `3948a0a1ee1cefdd016a7aa45a11851545bb4b85` 的五 provider／七钱包模板为对照，集成 Core 独立验签与入账、Go 多渠道适配、Web 报价确认和既有原生库的固定 28→29 升级。FastPay 明确退役，不加入实现或可选配置。[支付对照矩阵](PAYMENT_PARITY.md) 分别保留订阅、店铺、Pancake 管理和退款缺项；本轮不能据此声称整个新架构已完成。
 
 实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。
+
+## 0.1.12：2026-10-30 Coinbase Business 钱包支付
+
+实现来源为 [lmm-api-source `7520d0b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)。新增 USDC checkout 与同额 USD 钱包报价、请求绑定的 JWT、持久 UUIDv4、Core 独立 v0 验签、七语言入口及第 32 组件的显式 31→32 升级。渠道默认关闭，自动退款与订阅不包含在本轮适配中。
+
+Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请求键持久化及 schema SQL 等价检查通过。完整 Rust 编译/测试受固定依赖不可用阻塞，真实支付商与独立验收未运行；实际范围和原始失败见 [STATUS.md](../../STATUS.md) 与该源码的支付验证记录。提交和配方验证没有执行生产升级或部署。
