@@ -73,3 +73,9 @@ Native 请求编号是字符串，不能假定递增。来源导入还必须由�
 历史口径见[上一版构建合同](https://github.com/TokenNotIncluded/lmm-api/blob/928a3ec03ede08f40467535bc74437f99c523d27/recipes/lmm-core/BUILD_PROMPT.md)：当时 Native 现金限定为已确认 Stripe 订单与其已核验退款，该来源保留为旧范围记录。
 
 当前 Native 收款只统计已成功 Core 入账的 EPay、Stripe、Creem、Waffo Global、Waffo Pancake 原生充值，按原金额单位分类：USD、CNY、EUR 现金各自分列；LDC 进入虚拟单位列表，不能混同 USD、当作现金或用 credits 推算收入。退款仅使用各自已有合同下已核验并已在 Core 回冲的记录，同币种累计；新增充值网关不意味着其退款能力已经完成。退款重放、阻塞、延迟和未决结果均不得重复或隐去；纯 grant、钱包转账和商店款不算充值。原管理权限、无权限拒绝、无额外个人信息、总数越 JS/SQL bigint 仍精确。来源缺失、相冲突或不完整时保持明确 503/UNKNOWN，不能用仅 Native 的 partial 响应代替全站统计。
+
+## 账号申诉（#971）
+
+被停用的普通用户验证原密码、已绑定 OAuth、Telegram 或通行密钥后，只得到十分钟 HttpOnly、限定路径的申诉证明，不得到普通凭据。公开 GET/POST `/api/user/account-action-requests/appeal`，兼容密码提交和已验证 Cookie 提交；写入要求可信 Origin/JSON，用户名或普通 Bearer 不代替证明。只公开当前封禁明确发布的说明，内部原因、审核备注和秘密保持私有；撤销凭据不丢失同次封禁说明，新一轮封禁不复用旧说明。
+
+每用户停用版本仅一条待审，原证据不被重复或并发提交覆盖。管理员列表按状态分页，approve/reject 同时核对请求 revision 和 auth_version；审批、旧凭据撤销及审计原子提交，通过后重新登录并遵守 MFA，不激活旧凭据，不改账本或恢复闭户及特权账号。正式42组件新建安装、明确41→42离线升级及固定32前驱升级须验证，禁止启动时 DDL 或扩大旧权限。
