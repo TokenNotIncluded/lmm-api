@@ -1,8 +1,23 @@
-# 当前推进状态 · 2026-10-30
+# 当前推进状态 · 2026-11-01
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：Coinbase Business 钱包支付 · 2026-10-30
+## 本轮：渠道消费、余额与复制快照 · 2026-11-01
+
+源码已本地验证并推送 [lmm-api-source `bab2d27`](https://github.com/TokenNotIncluded/lmm-api-source/commit/bab2d27d5eee8ec54d5025e297b14448785a3d90)，GitHub main 已读回确认。测试输入的4608个源码条目与提交树 `4cba98602318bd5334ad8c6c8652f2f6c41024c2` 一致；主配方0.1.15、Core0.1.13、Web0.1.10显式固定本提交。两仓库本轮已先拉取远端main；原始工作区HEAD与未提交文件保留，开发在可复用的独立缓存检出中完成。未调用Pro、Google Drive或生产服务器。
+
+- 渠道用过的编号永久保留；真实Native预留在原资金事务内登记主路、fallback和图片编号，退休只阻止新预留，不阻止原请求结算/退款。新建表单使用只读最大编号提示，删除后不再默认复用旧ID。
+- 复制支持默认清零与保留源余额/已确认消费快照。保留原余额观测时间和未知历史状态，秘密独立加密，后续退款不改继承快照，不生成账本或重复计入全局统计。Native窗口与继承基线分开，精确credits和计数返回字符串。
+- 管理员可明确配置同源GET路径、JSON pointer及单位查询上游余额。网络等待不占数据库事务；回写重验权限和配置/密钥，跨进程发布锁阻止过期覆盖。原42项DDL保持逐项一致，43组件仅显式初始化/离线升级安装。
+- Web提供用量、余额配置/观测与复制选项；缺失不显示为0，真实0保留。七语言齐全；新功能按新鲜能力开放，旧managed Core仍按原请求体默认复制。测试修复保留原断言和异常，不过滤全局未处理错误。
+
+**实际通过：**控制面14、独立复制7、渠道用量9、channel过滤单元14（含真实图片预留/退休后结算退款及余额观测）、计费72、Native模型2、运行权限12、schema/权限1、余额发布锁1；固定32/41/42→43隔离PostgreSQL18升级/数据与权限保留/精确重放共4项。Web在Bun1.3.14下116项通过，完整typecheck、build、23文件范围lint/format及39个Rust文件格式检查通过。最终首页gzip558047bytes，低于786432限制。全目标Clippy退出0，仍有原13条lib＋5条其他警告；没有新增警告。
+
+**仍未完成：**升级纯单元30通过、5项既有失败保留（additive2、ledger1、Coinbase1、legacy字节比较1），不能声称全库测试绿。历史渠道开账/旧quota单位映射、完整旧提供商余额适配及传统统计/排序仍需交付；当前Native扫描有请求/回执上限，超过时明确失败。余额网络用本地合成HTTP及仅测试编译的映射验证，完整供应商TLS验收未跑。真实浏览器视觉/联通、全部原始功能分母、release/S11与生产切换未验收。没有注册生产账号、访问生产数据或执行真实付费调用；不得据此部署DMIT。
+
+证据位于本机 `~/.cache/lmm-api-validation/channel-accounting-evidence/`：candidate-inputs、artifacts、各测试/原始失败日志及schema-handoff。Native二进制SHA256 `23bacfccf8f53cf1eda466f4dded624ba531f6a590aa5e8cedaec8fd3c347093`；43 manifest `f12d5e81ca219acdc59ac07be931d52e46f0b64974f1e2b3154ad102b5cc0c1c`；PG18 catalog `1f9ef4951b101320e4016f2e8347985c7a321b4c3405fe756864abba1bf7c680`。Web535个产物逐文件绑定，版本 `local-channel43-388d8cd854b1`。证据不进入纯Markdown配方归档，也不构成已部署版本。 本轮临时PostgreSQL及私有凭据、配方归档和渲染提示词已清理，保留可复用源码/编译缓存、匹配42测试安装器与小型证据；/tmp/lmm-*为空。
+
+## 历史记录：Coinbase Business 钱包支付 · 2026-10-30
 
 源码已提交并推送至 [lmm-api-source `7520d0b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)，远端 main 已读回确认。源码树 `1b4f4bef2222f29118034743550a4a6f22b989be` 与本地自测输入一致；主项目同步配方与源码 gitlink，保留当前 main 的既有工作。
 

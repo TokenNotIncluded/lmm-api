@@ -57,3 +57,8 @@ ISSUE_MAINTENANCE.md 完整承接旧 #879/#875/#942 的剩余需求和验收。�
 实现来源为 [lmm-api-source `7520d0b`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)。新增 USDC checkout 与同额 USD 钱包报价、请求绑定的 JWT、持久 UUIDv4、Core 独立 v0 验签、七语言入口及第 32 组件的显式 31→32 升级。渠道默认关闭，自动退款与订阅不包含在本轮适配中。
 
 Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请求键持久化及 schema SQL 等价检查通过。完整 Rust 编译/测试受固定依赖不可用阻塞，真实支付商与独立验收未运行；实际范围和原始失败见 [STATUS.md](../../STATUS.md) 与该源码的支付验证记录。提交和配方验证没有执行生产升级或部署。
+
+
+## 0.1.15：2026-11-01 渠道快照与正式43组件
+
+实现来源为 [lmm-api-source `bab2d27`](https://github.com/TokenNotIncluded/lmm-api-source/commit/bab2d27d5eee8ec54d5025e297b14448785a3d90)。Core补永久编号、原预留事务登记、按冻结派发归属的Native用量、复制继承展示基线、显式余额观测及跨进程发布锁；Web补精确未知/零值、服务端时间、余额/用量入口、保留复制、新鲜能力与旧Core兼容、新建编号提示。正式43组件验证固定32/41/42前驱离线升级，原42项DDL不改；不缩减COMPLETION_SCOPE.md与完整历史渠道/提供商/财务验收。局部自测、独立合成业务检查、推送、构建与生产部署分别记录于STATUS.md；既有5项升级单元失败、历史开账及真实浏览器/供应商TLS/生产切换继续保留。
