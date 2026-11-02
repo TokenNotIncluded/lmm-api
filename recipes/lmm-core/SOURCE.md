@@ -50,3 +50,8 @@
 ## 0.1.14：2026-11-02 渠道投影与独立审批
 
 实现来源为 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0)。新增44、45组件及固定前驱离线升级；独立owner审批凭据、最小运行权限、四类音频用量和旧provider余额映射保持既有资金与权限边界。本批本地检查和保留失败见 [STATUS.md](../../STATUS.md) 与源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0/docs/integration-verification.md)。完整音频范围、历史排序、最终导入合同、真实浏览器与独立业务验收仍待完成；本批未部署，不代表全部功能可用。
+
+
+## 0.1.15：2026-11-02 目录观测与 Chat 音频流
+
+实现来源为 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44)。第46组件及固定45→46升级独立于资金和路由发布；精确排序、单位和分页摘要合同见 CHANNEL_ACCOUNTING.md。Chat显式V2及流式终值保存保持原报价和不完整usage的hold。23项相关Core、六项旧升级的分次后续检查、27项音频及73项计费回归通过；独立实库安装/角色脚本58条命令符合预期。原升级失败UNKNOWN、不同二进制批次及未验收范围见 [STATUS.md](../../STATUS.md) 与源码验证记录。未完成其他音频入口、最终导入、资源与生产验收。

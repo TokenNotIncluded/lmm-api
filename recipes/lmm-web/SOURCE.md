@@ -51,3 +51,8 @@
 ## 0.1.12：2026-11-02 离线策略编辑凭据登记
 
 实现来源为 [lmm-api-source 81d2c65](https://github.com/TokenNotIncluded/lmm-api-source/commit/81d2c65f86dc9637b5fb4d011f655196dc8e8be2)。浏览器接收公开登记材料、创建通行密钥并导出公开响应，所有者离线审阅和批准；不提供在线 owner 权限。最新真实 Core 首任所有者、密钥配置和隔离浏览器/CLI 九项流程通过，无 bootstrap 绕行。集成界面28项测试、类型检查、构建与包体预算通过；全应用真实Core/Go浏览器验收及整体发布仍未完成，详见 [STATUS.md](../../STATUS.md)。
+
+
+## 0.1.13：2026-11-02 渠道排序与分页核对
+
+实现来源为 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44)。目录探测耗时与时间明确限定范围；余额须选明确单位，未知值置后，分页变化拒绝旧摘要，A→B→A及缓存后续页重新验证。七语言同步六个文案。30项统计/缓存/原管理回归、类型、实际构建与558663字节初始gzip预算通过；这些是本地自测，真实渠道浏览器业务验收未完成。原信任策略27项独立检查另补15项MFA/TTL/提交不明恢复，仍不扩算整站或Go业务。详见 [STATUS.md](../../STATUS.md)。

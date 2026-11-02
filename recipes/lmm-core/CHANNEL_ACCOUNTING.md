@@ -138,13 +138,24 @@ must not trigger an automatic second copy.
 
 ## Installation and evidence
 
-The current 44-component manifest is installed only by explicit fresh
-initialization or the exact offline upgrade from frozen PostgreSQL 18
-predecessors 43, 42, 41 or 32. Component 43 and its frozen 42→43 contract remain
-unchanged predecessor facts; component 44 adds the channel projection and
-reviewed opening facts without replacing prior DDL. Runtime startup performs no
-DDL and cannot rewrite inherited baselines, delete identities or access
-owner-only upgrade receipts.
+Fresh initialization installs the current 46-component manifest. The exact
+offline upgrades from frozen PostgreSQL 18 predecessors 43, 42, 41 or 32 still
+end at their separately frozen 44-component target. Component 43 and its frozen
+42→43 contract remain unchanged predecessor facts. Component 44 adds projection
+and reviewed opening facts; the separate trust-policy procedure advances 44→45,
+and core-channel-observations-v1 advances the exact 45 predecessor to 46.
+Earlier steps must not silently adopt the current target. Existing-site
+activation requires completing the applicable reviewed chain.
+
+Component 46 adds only display observations and a private immutable upgrade
+receipt, without replacing prior DDL or inventing historical measurements.
+The restricted installation owner remains separate from runtime. Runtime has
+only the reviewed observation-column SELECT/INSERT and non-identity UPDATE
+permissions, without deletion, truncation, grant options or receipt access.
+Runtime startup performs no DDL and cannot rewrite inherited baselines or
+delete identities. Capture, independent catalog review and a pinned binary's
+successful complete initialization on a new empty database are separate steps;
+committed construction followed by a failed check is not successful installation.
 
 The change retains the full completion contract. Local synthetic database/API
 checks, Web tests/build, independent acceptance, browser rendering, historical
@@ -168,3 +179,5 @@ cutover have passed.
 当前安全渠道测试只是模型目录探测，响应时间和测试时间必须明确标注这一范围，不宣称已完成模型推理。通过独立 channel-observations 组件保存目录探测结果、时间、耗时与原凭据版本，和资金账本、路由发布分离。失败或未知结果不得造出成功耗时；换密钥后的旧结果不得冒充当前密钥有效性，复制不制造新探测记录。
 
 过滤、统计读取、排序与分页在同一一致数据库快照下完成，批量读取，不逐渠道扫描请求历史。Native 列表返回绑定排序/过滤和观测数据的快照摘要；后续页携带原摘要，数据变化时明确拒绝旧快照并刷新分页，不静默重排。未携带摘要的旧客户端只保证单请求内一致，不能宣称跨页稳定。验收覆盖同值、未知、多单位、过时及复制观测、并发变化、分页边界和权限拒绝。
+
+前端访问每一页都重新核对摘要，包括十秒缓存仍有效时的返回访问。切换 A→B→A 后先重新取得 A 的首页基准；缓存的后续页在核对中及 409 后均不得显示旧行，用户可明确回到第一页重取。全局查询缓存策略保持独立，不能靠关闭其他功能的缓存规避本列表的一致性要求。

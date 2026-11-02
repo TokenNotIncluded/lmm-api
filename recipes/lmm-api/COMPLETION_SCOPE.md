@@ -306,6 +306,17 @@
 1. 逐固定main列供应商×入口×格式矩阵，覆盖Chat、Responses、模型列表、Embeddings、音频、图像、多模态、Realtime、WebSocket、异步任务/批处理及主线已有的渠道与模型管理。明确每项implemented/tested/missing，不能用OpenAI聊天一个用例抵扣所有格式；管理接口同时消费A01权限，异步结果与资金状态必须持久关联。
 2. 冻结服务端路由/报价合同：渠道与endpoint白名单、密钥文件、model别名、组与优先级、健康重试、不同attempt计费归属、受信代理IP、Key/IP/alias restrictions；客户端不能指定任意上游、报价、付款方或绕过渠道限制。拒绝SSRF/redirect/DNS重绑定/私网跳转与secret泄露。
 3. 支持main实际计价维度：输入/输出、缓存读取/写入、按请求及其他确认维度，精确整数/decimal换算与最大上限；报价版本和汇率基准捕获一次。音频要覆盖真实用量中的文本输入、文本输出、音频输入、音频输出及对应倍率：旧main的倍率计价为 `(文本输入 + 文本输出×补全倍率 + 音频输入×音频倍率 + 音频输出×音频倍率×音频补全倍率)×模型倍率×分组倍率`，另有固定价格和阶梯计价分支；不可将音频 token 静默按文本计价。完整验收需绑定报价与上游原始usage，验证四类用量、倍率/固定/阶梯分支、舍入与上限、预留和结算、重试及重启；未知或不完整最终usage继续保留hold，不沿用旧代码的零用量释放。外部模型的上下文限制与请求预留上界必须有经验证的模型合同，覆盖消息、工具定义及其他输入；当前合成上游的UTF-8字节上界不能直接作为外部模型计量保证。向A03提交最小结算/预算需求，不用float或在重试时重新定价。
+
+   Chat 音频用量版本合同：已发布 OpenAiChatV1 保持要求显式 text/audio，既有合法收据按原冻结版本恢复，不自动升级。新增显式配置 OpenAiChatV2；其冻结的请求投影必须只允许已审阅的 text/input_audio 输入、text/audio 输出，排除 image、工具与其他模态。格式和 provider_contract_revision 属于冻结 AudioRule；配置断言不等于真实供应商验收，也不替代原有请求上界合同。
+
+   V2 要求原始 prompt/completion/total 和两侧显式 audio_tokens；在上述请求与供应商用量合同下，缺失 text_tokens 才以对应总量减显式 audio 推导。显式 text 必须与差值一致。缺失 image 维度只在该冻结边界下解释为不适用，不是通用缺失即零；非零 image、未知用量维度、负数、浮点、null、重复权威键、不一致总数及溢出都不能结算。cache_read/cache_write、reasoning、prediction 等已识别子集计数不从四类计数重复扣除；此适配器不新增缓存差价或改变既有精确倍率、固定/阶梯与舍入合同。
+
+   合法 service_tier、默认 obfuscation 等 envelope 元数据在内存验证后丢弃，不能通过关闭默认 obfuscation 回避兼容。新的不可变财务证据只保留计数型原始 usage 对象、实际帧 SHA/序号、必要语义与哈希链、响应 SHA；不能落盘 envelope、文本/音频 delta 或其他正文。证据来源关联由可信 worker 在处理实际帧时建立，不声称从散列逆向证明字节。旧 v3 envelope journal 仅兼容读取，不重写历史记录。
+
+   终值仍需有界读到 HTTP body EOF；usage/DONE 后的任何尾部字节、重复终值、截断、超时或 transport 错误保持 hold。DONE/EOF 证据与 receipt/规范化 usage 必须同一数据库事务持久化；恢复使用原冻结格式、价格和 dispatch，不使用当前配置。验收需分别覆盖非流式与流式正常默认官方字段形状、跨 chunk 等价、反例、事务故障与原价恢复。合成上游测试不能登记为真实 provider 认证；transcriptions/speech/translations/realtime 等入口仍单列覆盖状态。
+
+   上述V2切片不缩减本项完整provider×入口×格式、工具调用及其他模态的验收范围；尚未支持的组合继续保留为未完成。
+
 4. 流式先持久化输出checkpoint再发数据；保留背压、取消、慢客户端、tool call、usage尾帧、半截UTF8/JSON、压缩/超大帧等协议；无最终用量与不确定COMMIT时保留hold。只有查证原操作才能完成，不靠零用量释放。
 5. 给A08 typed delegation：原session主体、conversation/owner、可信付款/赞助政策、允许模型/工具/预算/expiry/幂等key、用途与权限均服务端绑定；必须可撤销、限额、隔离团队。session委托不是API Key绕行，不允许Go自选平台付款。
 6. 真Core OS进程故障runner覆盖dispatch前后、partial输出、terminal持久后finalize前、COMMIT ACK丢失；独立PG+计数TCP provider。记录每attempt外发次数，证明不确定状态不会自动再次调用、结算不会重复、已提交checkpoint不会丢失。

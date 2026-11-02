@@ -76,3 +76,8 @@ Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请�
 ### 0.1.17 验证补充：2026-11-02
 
 当前固定源码更新为 [lmm-api-source 2842ce1](https://github.com/TokenNotIncluded/lmm-api-source/commit/2842ce19de058338f5b87628001753dd2c65cdb1)。生产逻辑不变，付款测试五个汇总断言补计既有Coinbase配置后通过；当前完整Core测试程序另通过17项原先忽略的邮件隔离PG/SMTP测试。冻结81d2c65的实际Core和完整Web信任策略流程获得27项独立通过，Go仅验真实空模块host健康，不代表扩展业务或RPC通过。MFA、实际TTL和提交不明恢复、全站验收及生产切换仍未完成；完整范围和原始失败保留在 [STATUS.md](../../STATUS.md) 与源码验证记录中。
+
+
+## 0.1.18：2026-11-02 渠道观测与 Chat 音频
+
+实现来源为 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44)，同步Core0.1.15和Web0.1.13。新增行为、分范围本地与独立验收、原失败UNKNOWN和不同冻结产物均见 [STATUS.md](../../STATUS.md)。本次源码同步不等于全部功能完成或生产切换；完整provider矩阵、其他音频入口、历史导入、资金、资源及回滚验收范围不缩减。
