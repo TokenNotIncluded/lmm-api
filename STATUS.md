@@ -2,7 +2,15 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：修复首管理员原生钱包识别 · 2026-11-02
+## 本轮：修复订阅与活动管理弹窗 · 2026-11-02
+
+源码 [lmm-api-source d39f417](https://github.com/TokenNotIncluded/lmm-api-source/commit/d39f41734d7337ba709126864cb82456ceb8523b) 已推送并核对，主仓库同步gitlink。独立补验确认首管理员初始化、登录/重登、原生零余额和普通用户管理接口拒绝通过；随后定位两个管理弹窗作为布局直接子级被忽略，真实页面点击无法创建。
+
+本次将两个Dialog放进既有Content槽，不改通用布局、资金确认或Core接口。两项使用真实布局/弹窗的打开与取消回归通过，完整类型检查、限定lint/格式及Web构建通过；初始gzip558684/786432 bytes。新Web冻结2749项输入和545个产物，继续使用已验Core6c5b0961及46组件。原验收者将补验真正页面创建与回读；当前不以这两项合成接口测试代替业务验收。
+
+身份/钱包导入候选的真实CLI作者自测有进展，但尚未包含在该源码提交；新版钱包收据与信任导入的组合缺口仍在处理。音频进程测试首次编译失败与后续修复保留，尚未签收；完整provider、推广、资源、恢复、Core/Go业务和生产验收范围不变。未变更线上服务。详情见 [源码验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/d39f41734d7337ba709126864cb82456ceb8523b/docs/integration-verification.md)。
+
+## 前批：修复首管理员原生钱包识别 · 2026-11-02
 
 源码 [lmm-api-source 2e29e82](https://github.com/TokenNotIncluded/lmm-api-source/commit/2e29e8231ea0e23f5ac0f9a315aedc882b4770fb) 已推送并核对，主仓库同步gitlink。独立钱包浏览器验收发现：真实CLI新建首管理员后，财务读取未识别installation.first-owner审计，订阅管理页误用旧接口503。本次两处读取增加该确切原生来源，保留actor/target匹配；没有来源依据的历史账户仍未知，不新增资金或自动建立账本。
 
