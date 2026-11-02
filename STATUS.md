@@ -2,7 +2,17 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：离线策略编辑凭据登记 · 2026-11-02
+## 本轮：信任策略独立验收与隔离库补测 · 2026-11-02
+
+源码 [lmm-api-source 2842ce1](https://github.com/TokenNotIncluded/lmm-api-source/commit/2842ce19de058338f5b87628001753dd2c65cdb1) 已推送并核对远端，主仓库同步gitlink。本批只修正付款测试中漏算既有Coinbase配置的五个汇总断言，并更新验证记录，没有修改生产逻辑或配方能力版本。
+
+另一执行者对冻结的81d2c65源码、真实Core、全新45组件隔离库和实际完整Web应用完成27项信任策略验收：登录、离线登记/审批、安全密钥确认、持久审计、重载、Core重启读回和撤销均通过；普通管理员、API key、伪造root会话配未批准密钥、错误签名origin及过期版本等负例通过。Go实际构建并检查健康接口，配置为空模块host；这不是Go扩展业务、Core-Go RPC或整站主题验收。物理密钥、MFA账户、实际TTL过期和提交结果不明恢复仍待补验。
+
+付款真实隔离PostgreSQL用例复测通过，包含六种网关配置与平衡账本；保留修正前的汇总断言失败。当前完整Core测试可执行文件另通过全部17项原先忽略的邮件测试，覆盖私有PG及合成SMTP；临时库已停止并删除。原完整Core集合的1274通过、3失败、19忽略仍是历史结果，未改写成全库全绿。详见源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/2842ce19de058338f5b87628001753dd2c65cdb1/docs/integration-verification.md)。
+
+流式及其他音频入口、历史排序、最终导入、完整资金能力、最终百万级资源/恢复及全站独立验收继续推进；本轮没有服务器或生产用户变更。
+
+## 历史记录：离线策略编辑凭据登记 · 2026-11-02
 
 源码 [lmm-api-source 81d2c65](https://github.com/TokenNotIncluded/lmm-api-source/commit/81d2c65f86dc9637b5fb4d011f655196dc8e8be2) 已推送并核对远端；主配方0.1.17、Web0.1.12及gitlink同步。浏览器仅导入公开 begin 材料、创建通行密钥并导出公开响应，所有者数据库与密钥始终留在离线命令侧，创建不等于批准。七语言新增17个对应文案，旧翻译保持。
 

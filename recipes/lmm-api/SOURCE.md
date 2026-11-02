@@ -72,3 +72,7 @@ Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请�
 ## 0.1.17：2026-11-02 离线策略编辑凭据登记
 
 实现来源为 [lmm-api-source 81d2c65](https://github.com/TokenNotIncluded/lmm-api-source/commit/81d2c65f86dc9637b5fb4d011f655196dc8e8be2)。浏览器接收公开登记材料、创建通行密钥并导出公开响应，所有者离线审阅和批准；不提供在线 owner 权限。最新真实 Core 首任所有者、密钥配置和隔离浏览器/CLI 九项流程通过，无 bootstrap 绕行。集成界面28项测试、类型检查、构建与包体预算通过；全应用真实Core/Go浏览器验收及整体发布仍未完成，详见 [STATUS.md](../../STATUS.md)。
+
+### 0.1.17 验证补充：2026-11-02
+
+当前固定源码更新为 [lmm-api-source 2842ce1](https://github.com/TokenNotIncluded/lmm-api-source/commit/2842ce19de058338f5b87628001753dd2c65cdb1)。生产逻辑不变，付款测试五个汇总断言补计既有Coinbase配置后通过；当前完整Core测试程序另通过17项原先忽略的邮件隔离PG/SMTP测试。冻结81d2c65的实际Core和完整Web信任策略流程获得27项独立通过，Go仅验真实空模块host健康，不代表扩展业务或RPC通过。MFA、实际TTL和提交不明恢复、全站验收及生产切换仍未完成；完整范围和原始失败保留在 [STATUS.md](../../STATUS.md) 与源码验证记录中。
