@@ -2,7 +2,13 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：未知法币估值下的积分钱包 · 2026-11-02
+## 本轮：旧音频日志恢复回归 · 2026-11-02
+
+源码 [lmm-api-source 7e2e860](https://github.com/TokenNotIncluded/lmm-api-source/commit/7e2e86035cec11058c26b0f61324845551916e1c) 已推送并核对，主仓库同步gitlink。两项真实隔离PostgreSQL测试通过：固定合成v3日志在Gateway重建、当前报价变化后仍按原62 credits结算且不重发、不重写旧日志；usage与原帧摘要不符时继续保留预留款，不产生终值收据。
+
+首次测试在夹具造数阶段缺少SERIALIZABLE而失败，修正夹具后两项通过；原失败保留，没有放宽生产检查。实际测试程序SHA为5d98977ae36a16a7c8433e10051202a1808923208b931afc573ed5a4b1d5af86，567项编译源输入已与此提交逐一核对。此批只有测试和证据文档，生产代码、数据库、Web及配方能力版本不变；不代表操作系统级重启、真实供应商或部署验收。钱包独立浏览器验收及导入实库链继续进行。完整记录见源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/7e2e86035cec11058c26b0f61324845551916e1c/docs/integration-verification.md)。
+
+## 前批：未知法币估值下的积分钱包 · 2026-11-02
 
 源码 [lmm-api-source 2d0b074](https://github.com/TokenNotIncluded/lmm-api-source/commit/2d0b0748f0609f177f7fc26cdc754aed9352438d) 已推送并核对远端，主仓库同步gitlink；主配方0.1.19、Web0.1.14。余额单位和投影明确可用时，未知历史法币估值不再关闭积分订阅、兑换、签到及红包；价格、回执与原生累计用量保持credits。Core仍负责全部当前会话、账户、余额、计划/活动和预算授权；外部充值保留明确报价确认，返佣能力不由此开放。Core生产逻辑、接口和46组件结构不变。
 
