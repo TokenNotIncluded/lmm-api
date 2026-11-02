@@ -2,7 +2,13 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：Rust 模块入口迁移 · 2026-11-02
+## 本轮：未知历史金额下的钱包操作 · 2026-11-02
+
+源码 [lmm-api-source `6ae84b4`](https://github.com/TokenNotIncluded/lmm-api-source/commit/6ae84b4e5ab65120c5542ae9d2ed2921a9ba2da8) 已推送并读回远端。余额投影可读但历史金额基准未知时，保留明确报价并显式确认的新充值；订阅、推广等其他金额操作继续按服务器能力关闭。不会把未知历史汇率当成已知，也不会因关闭其他操作而禁止有完整报价的新充值。
+
+仅包含本次三个钱包文件的干净副本通过70项钱包页、5项充值测试，完整Web类型检查及范围lint/format。测试使用本地合成接口，未完成真实Core/Go驱动的浏览器验收；不能据此认定支付、订阅或推广全功能通过。其余本地功能候选、独立业务验收与生产部署仍未完成。本次只推送源码并更新gitlink，没有线上变更。
+
+## 历史记录：Rust 模块入口迁移 · 2026-11-02
 
 源码独立提交 [lmm-api-source `8d25d83`](https://github.com/TokenNotIncluded/lmm-api-source/commit/8d25d83742dcf60c0e7f757b2ea8a05c654ae4f9) 基于远端 `68081cf`，迁移全部26个 `mod.rs` 入口，包含后来新增的 `promotions` 与 `subscriptions`；同步活跃脚本、验证输入绑定及文档路径。业务逻辑、schema SQL、安全指纹与120个 Cargo 构建目标保持不变。原有工作区的未提交功能改动未纳入本提交。
 
