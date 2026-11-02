@@ -2,7 +2,13 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：渠道观测、排序与 Chat 音频 · 2026-11-02
+## 本轮：未知法币估值下的积分钱包 · 2026-11-02
+
+源码 [lmm-api-source 2d0b074](https://github.com/TokenNotIncluded/lmm-api-source/commit/2d0b0748f0609f177f7fc26cdc754aed9352438d) 已推送并核对远端，主仓库同步gitlink；主配方0.1.19、Web0.1.14。余额单位和投影明确可用时，未知历史法币估值不再关闭积分订阅、兑换、签到及红包；价格、回执与原生累计用量保持credits。Core仍负责全部当前会话、账户、余额、计划/活动和预算授权；外部充值保留明确报价确认，返佣能力不由此开放。Core生产逻辑、接口和46组件结构不变。
+
+72项钱包组件测试、六项真实隔离PostgreSQL订阅/活动测试、完整Web类型、限定格式/lint及生产构建通过，初始gzip558677/786432 bytes。2748个Web输入、545个产物及实际Core测试程序已冻结。组件接口为合成合同；真实Core/浏览器购买、续期、退款、奖励和重启恢复正在由另一执行者验收，不把自测或Go健康替代它。其余完整支付、返佣、供应商、导入、资源和生产验收继续保留。本轮未改线上服务，详见源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/2d0b0748f0609f177f7fc26cdc754aed9352438d/docs/integration-verification.md)。
+
+## 前批：渠道观测、排序与 Chat 音频 · 2026-11-02
 
 源码 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44) 已推送并核对远端，主仓库同步该gitlink；配方为主包0.1.18、Core0.1.15、Web0.1.13。第46组件新增目录探测观测与私有升级记录，保留固定45→46过程和旧44/45升级目标。渠道列表按精确值和明确单位整体排序，未知值置后，分页摘要变化时拒绝旧页，缓存返回也重新核对。
 

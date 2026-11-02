@@ -56,3 +56,8 @@
 ## 0.1.13：2026-11-02 渠道排序与分页核对
 
 实现来源为 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44)。目录探测耗时与时间明确限定范围；余额须选明确单位，未知值置后，分页变化拒绝旧摘要，A→B→A及缓存后续页重新验证。七语言同步六个文案。30项统计/缓存/原管理回归、类型、实际构建与558663字节初始gzip预算通过；这些是本地自测，真实渠道浏览器业务验收未完成。原信任策略27项独立检查另补15项MFA/TTL/提交不明恢复，仍不扩算整站或Go业务。详见 [STATUS.md](../../STATUS.md)。
+
+
+## 0.1.14：2026-11-02 未知历史估值下的积分入口
+
+实现来源为 [lmm-api-source 2d0b074](https://github.com/TokenNotIncluded/lmm-api-source/commit/2d0b0748f0609f177f7fc26cdc754aed9352438d)。恢复有效原生credits余额下的订阅和奖励工作区，保留未知法币值、Core授权、报价确认和旧服务分支；原生累计用量不随USD/CNY偏好换算。72项组件、六项真实PG订阅/活动检查及Web类型/构建通过；独立真实浏览器资金与重启验收仍在进行，不能据此认定完整支付或部署完成。完整范围见 [STATUS.md](../../STATUS.md)。

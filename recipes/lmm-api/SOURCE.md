@@ -81,3 +81,8 @@ Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请�
 ## 0.1.18：2026-11-02 渠道观测与 Chat 音频
 
 实现来源为 [lmm-api-source 9d77640](https://github.com/TokenNotIncluded/lmm-api-source/commit/9d776409331130b263ebda6a42431ef578e52d44)，同步Core0.1.15和Web0.1.13。新增行为、分范围本地与独立验收、原失败UNKNOWN和不同冻结产物均见 [STATUS.md](../../STATUS.md)。本次源码同步不等于全部功能完成或生产切换；完整provider矩阵、其他音频入口、历史导入、资金、资源及回滚验收范围不缩减。
+
+
+## 0.1.19：2026-11-02 未知历史估值下的积分入口
+
+实现来源为 [lmm-api-source 2d0b074](https://github.com/TokenNotIncluded/lmm-api-source/commit/2d0b0748f0609f177f7fc26cdc754aed9352438d)。恢复有效原生credits余额下的订阅和奖励工作区，保留未知法币值、Core授权、报价确认和旧服务分支；原生累计用量不随USD/CNY偏好换算。72项组件、六项真实PG订阅/活动检查及Web类型/构建通过；独立真实浏览器资金与重启验收仍在进行，不能据此认定完整支付或部署完成。完整范围见 [STATUS.md](../../STATUS.md)。
