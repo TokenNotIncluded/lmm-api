@@ -45,3 +45,8 @@
 新增 `PreparePersonalTopup` 与仅针对不可变意图的 `GetEPayCheckout`；Core 支持 Stripe、EPay、Creem、Waffo Global、Waffo Pancake 的证据校验。EPay MD5 商户密钥仅由 Core 持有；Global 在验签外还由 Core 用私有配置查询固定官方端点。金额和渠道兑换政策固定到意图，成功入账后的 LDC 在财务投影中单列为虚拟单位。新增第29组件与 `core-payment-gateways-v1` 固定28→29升级，不改变旧 `payments.sql` 指纹；原历史升级合同继续保留。
 
 实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。
+
+
+## 0.1.14：2026-11-02 渠道投影与独立审批
+
+实现来源为 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0)。新增44、45组件及固定前驱离线升级；独立owner审批凭据、最小运行权限、四类音频用量和旧provider余额映射保持既有资金与权限边界。本批本地检查和保留失败见 [STATUS.md](../../STATUS.md) 与源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0/docs/integration-verification.md)。完整音频范围、历史排序、最终导入合同、真实浏览器与独立业务验收仍待完成；本批未部署，不代表全部功能可用。

@@ -41,3 +41,8 @@
 原生财务投影可用时显示实际启用渠道，使用十进制字符串和整数金额，先报价再明确确认；固定 Creem 产品金额只读，LDC／法币和测试／正式环境明确区分。保存原请求键以恢复未知结果，写入不自动重放，状态查询有界。`checkout_method` 明确控制用户点击后的 GET 链接或 POST 表单；LinuxDO 表单保留原字段与签名，不由 URL 推测方法。七语言文案已同步。七项定向 Web 测试、相关 lint 与完整类型检查通过；支付 POST 补丁前的 Web build 已通过，补丁后未重跑 bundler。未进行真实商户或浏览器支付验收。
 
 实现来源为 [lmm-api-source `7abe06d`](https://github.com/TokenNotIncluded/lmm-api-source/commit/7abe06d5d369b2ccefe4364099450bfae4534953)，详见 [STATUS.md](../../STATUS.md)；对应源码的 `docs/payment-gateways.md` 与支付模块 `VERIFICATION.md` 记录实际检查、保留失败和未运行范围。开发自测不等于独立验收或生产切换；本轮未部署、未访问真实支付账户或产生真实费用。
+
+
+## 0.1.11：2026-11-02 渠道用量与信任策略编辑
+
+实现来源为 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0)。接入真实能力控制的信任策略预览/确认/审计，以及渠道历史开账和用量显示；七语言同步，未知金额边界继续保留。本批本地检查和保留失败见 [STATUS.md](../../STATUS.md) 与源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0/docs/integration-verification.md)。完整音频范围、历史排序、最终导入合同、真实浏览器与独立业务验收仍待完成；本批未部署，不代表全部功能可用。

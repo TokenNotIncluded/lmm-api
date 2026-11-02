@@ -62,3 +62,8 @@ Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请�
 ## 0.1.15：2026-11-01 渠道快照与正式43组件
 
 实现来源为 [lmm-api-source `bab2d27`](https://github.com/TokenNotIncluded/lmm-api-source/commit/bab2d27d5eee8ec54d5025e297b14448785a3d90)。Core补永久编号、原预留事务登记、按冻结派发归属的Native用量、复制继承展示基线、显式余额观测及跨进程发布锁；Web补精确未知/零值、服务端时间、余额/用量入口、保留复制、新鲜能力与旧Core兼容、新建编号提示。正式43组件验证固定32/41/42前驱离线升级，原42项DDL不改；不缩减COMPLETION_SCOPE.md与完整历史渠道/提供商/财务验收。局部自测、独立合成业务检查、推送、构建与生产部署分别记录于STATUS.md；既有5项升级单元失败、历史开账及真实浏览器/供应商TLS/生产切换继续保留。
+
+
+## 0.1.16：2026-11-02 渠道投影与独立审批组合
+
+实现来源为 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0)。集成渠道历史开账/投影、共享用量流式读取、独立信任策略审批、旧provider余额映射和首个非流式Chat音频计费切片。本批本地检查和保留失败见 [STATUS.md](../../STATUS.md) 与源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0/docs/integration-verification.md)。完整音频范围、历史排序、最终导入合同、真实浏览器与独立业务验收仍待完成；本批未部署，不代表全部功能可用。
