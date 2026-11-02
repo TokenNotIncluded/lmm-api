@@ -152,11 +152,11 @@ client ── HTTP/OpenAI API ──► lmm-core ◄── provider APIs
 - Web 只能通过公开/授权接口工作，不能直接接触数据库。
 - 健康接口有响应不代表模型供应商、账本、支付或浏览器业务已可用。
 
-实现细节从 [固定源码 README](https://github.com/TokenNotIncluded/lmm-api-source/blob/7e2e86035cec11058c26b0f61324845551916e1c/README.md) 开始。
+实现细节从 [固定源码 README](https://github.com/TokenNotIncluded/lmm-api-source/blob/2e29e8231ea0e23f5ac0f9a315aedc882b4770fb/README.md) 开始。
 
 ## 当前已验证到哪里
 
-当前主配方为 `0.1.19`，固定源码为 `7e2e860`；最新分范围结果与未完成项见 [STATUS.md](STATUS.md)。源码同步不等于已经部署或完成全部业务验收。
+当前主配方为 `0.1.19`，固定源码为 `2e29e82`；最新分范围结果与未完成项见 [STATUS.md](STATUS.md)。源码同步不等于已经部署或完成全部业务验收。
 
 截至 `2026-10-30` 的历史验证范围包括：
 

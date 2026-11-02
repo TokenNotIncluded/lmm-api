@@ -2,7 +2,15 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：旧音频日志恢复回归 · 2026-11-02
+## 本轮：修复首管理员原生钱包识别 · 2026-11-02
+
+源码 [lmm-api-source 2e29e82](https://github.com/TokenNotIncluded/lmm-api-source/commit/2e29e8231ea0e23f5ac0f9a315aedc882b4770fb) 已推送并核对，主仓库同步gitlink。独立钱包浏览器验收发现：真实CLI新建首管理员后，财务读取未识别installation.first-owner审计，订阅管理页误用旧接口503。本次两处读取增加该确切原生来源，保留actor/target匹配；没有来源依据的历史账户仍未知，不新增资金或自动建立账本。
+
+真实first-owner用例及六项财务投影PG回归通过，限定格式、文档和Core构建通过；新Core SHA为6c5b096105ad71ce8c9aba505a05e4a693a89300f5cd432b1ffc5f2b54cdc0ba，446编译源输入已与提交核对，46组件和现有Web产物不变。原验收者正在用此Core补验订阅/活动管理页面，尚未签收该页面。
+
+先前冻结2d0b074/54973的普通用户实际领取、购买、续期、未用退款、丢响应原请求恢复、账号隔离和Core重启读回通过；最终900606 credits、六笔平衡journal。该结果不能替代管理员页面或Go付款。保留原503与一次预览刷新/auth不确定失败，其根因未确定，正常负载后续同quote刷新通过。历史导入八项订阅消费者回归仍被同一序列定义校验拦住，正在定位；未修改生产服务。详情见 [源码验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/2e29e8231ea0e23f5ac0f9a315aedc882b4770fb/docs/integration-verification.md)。
+
+## 前批：旧音频日志恢复回归 · 2026-11-02
 
 源码 [lmm-api-source 7e2e860](https://github.com/TokenNotIncluded/lmm-api-source/commit/7e2e86035cec11058c26b0f61324845551916e1c) 已推送并核对，主仓库同步gitlink。两项真实隔离PostgreSQL测试通过：固定合成v3日志在Gateway重建、当前报价变化后仍按原62 credits结算且不重发、不重写旧日志；usage与原帧摘要不符时继续保留预留款，不产生终值收据。
 
