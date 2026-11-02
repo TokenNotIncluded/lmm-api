@@ -67,3 +67,8 @@ Go 竞态与接线、Web 9 项定向/完整类型检查、真实 PostgreSQL 请�
 ## 0.1.16：2026-11-02 渠道投影与独立审批组合
 
 实现来源为 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0)。集成渠道历史开账/投影、共享用量流式读取、独立信任策略审批、旧provider余额映射和首个非流式Chat音频计费切片。本批本地检查和保留失败见 [STATUS.md](../../STATUS.md) 与源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0/docs/integration-verification.md)。完整音频范围、历史排序、最终导入合同、真实浏览器与独立业务验收仍待完成；本批未部署，不代表全部功能可用。
+
+
+## 0.1.17：2026-11-02 离线策略编辑凭据登记
+
+实现来源为 [lmm-api-source 81d2c65](https://github.com/TokenNotIncluded/lmm-api-source/commit/81d2c65f86dc9637b5fb4d011f655196dc8e8be2)。浏览器接收公开登记材料、创建通行密钥并导出公开响应，所有者离线审阅和批准；不提供在线 owner 权限。最新真实 Core 首任所有者、密钥配置和隔离浏览器/CLI 九项流程通过，无 bootstrap 绕行。集成界面28项测试、类型检查、构建与包体预算通过；全应用真实Core/Go浏览器验收及整体发布仍未完成，详见 [STATUS.md](../../STATUS.md)。

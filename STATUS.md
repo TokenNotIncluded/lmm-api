@@ -2,7 +2,15 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
-## 本轮：渠道投影与独立审批接线 · 2026-11-02
+## 本轮：离线策略编辑凭据登记 · 2026-11-02
+
+源码 [lmm-api-source 81d2c65](https://github.com/TokenNotIncluded/lmm-api-source/commit/81d2c65f86dc9637b5fb4d011f655196dc8e8be2) 已推送并核对远端；主配方0.1.17、Web0.1.12及gitlink同步。浏览器仅导入公开 begin 材料、创建通行密钥并导出公开响应，所有者数据库与密钥始终留在离线命令侧，创建不等于批准。七语言新增17个对应文案，旧翻译保持。
+
+最新Core二进制91b6f28e在全新45组件隔离库通过真正的首任所有者创建、初始签名密钥配置、登记开始、浏览器创建、离线审阅和精确指纹批准，无bootstrap或fallback。九项CLI/Chromium检查通过，保留旧二进制和早期选择器失败。集成Web的28项定向测试、lint/format、类型检查与生产构建通过，初始gzip558670/786432 bytes，2742个Web输入在验证中未变。详细范围见源码 [验证记录](https://github.com/TokenNotIncluded/lmm-api-source/blob/81d2c65f86dc9637b5fb4d011f655196dc8e8be2/docs/integration-verification.md)。
+
+上述浏览器是实际组件及真实CLI，仍非全应用Core/Go流程、全主题或整站独立验收。流式音频候选的终值绑定和崩溃恢复缺口正在修复，未随本提交发布；排序46组件、最终导入及原有完整验收范围继续保留。本轮没有生产变更。
+
+## 历史记录：渠道投影与独立审批接线 · 2026-11-02
 
 源码 [lmm-api-source 3f0e50c](https://github.com/TokenNotIncluded/lmm-api-source/commit/3f0e50c9a66f2fdf69d091c1bfb754bc12636ae0) 已推送并读回远端。主配方0.1.16、Core0.1.14、Web0.1.11同步需求，gitlink固定这一源码提交。原始工作区及未完成的导入器候选继续保留。
 
