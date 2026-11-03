@@ -2,6 +2,14 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：首页粒子美化与 DmitUbuntu 隔离预发 · 2026-11-03
+
+源码 [lmm-api-source 44386c5](https://github.com/TokenNotIncluded/lmm-api-source/commit/44386c5f9b03403ec0ea8a04d71eeff88cb4f24b) 已推送，主仓库同步gitlink。首页粒子改为无栅格点彩、深度分层与近点高光，背景加柔和光晕和淡点阵，边缘回到原底色；首屏按钮、章节切换和AI网址导航入口改为圆角样式。home/forge 156项测试、Web类型检查、改动文件lint/format和生产构建通过，初始gzip559363/786432 bytes；浏览器检查了明暗主题、桌面/手机和形变过渡。
+
+按用户选择，在 DmitUbuntu 部署**仅回环可达**的新架构预发，不切换流量、不连旧库：本机 PostgreSQL 18（127.0.0.1:5433，新建空库 `lmm_staging_core`）、`lmm-staging-core`（127.0.0.1:18080，Core baee2c89…）、`lmm-staging-extensions`（127.0.0.1:18081，Go de6d6499…，仅 identity 模块）及 Nginx 127.0.0.1:18090 静态 Web。init-db 一次、create-first-owner 建 `staging-owner`、按 console/web_identity/events 授权，check-db validated；浏览器登录和控制台读取通过。访问：`ssh -L 18090:127.0.0.1:18090 DmitUbuntu`，管理员凭据在本机 `~/.local/state/lmm-staging/first-owner.json`。
+
+未启用：模型网关、历史/用量、支付、商店、客服、助手、工具市场、插件与运营模块，相应页面返回503/404；旧数据导入未执行（导入器仍未完成）。这不是生产切换或业务验收。移除方法：停用两个 `lmm-staging-*` 服务，删除 `/etc/nginx/conf.d/lmm-staging.conf` 后 reload，删除 `/etc/lmm-staging`、`/usr/local/lib/lmm-staging`、`/srv/lmm-staging-web`、`/root/lmm-staging-install`、相应用户组，并 `apt purge postgresql-18`。
+
 ## 本轮：修复订阅与活动管理弹窗 · 2026-11-02
 
 源码 [lmm-api-source d39f417](https://github.com/TokenNotIncluded/lmm-api-source/commit/d39f41734d7337ba709126864cb82456ceb8523b) 已推送并核对，主仓库同步gitlink。独立补验确认首管理员初始化、登录/重登、原生零余额和普通用户管理接口拒绝通过；随后定位两个管理弹窗作为布局直接子级被忽略，真实页面点击无法创建。
