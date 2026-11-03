@@ -8,7 +8,11 @@
 
 按用户选择，在 DmitUbuntu 部署**仅回环可达**的新架构预发，不切换流量、不连旧库：本机 PostgreSQL 18（127.0.0.1:5433，新建空库 `lmm_staging_core`）、`lmm-staging-core`（127.0.0.1:18080，Core baee2c89…）、`lmm-staging-extensions`（127.0.0.1:18081，Go de6d6499…，仅 identity 模块）及 Nginx 127.0.0.1:18090 静态 Web。init-db 一次、create-first-owner 建 `staging-owner`、按 console/web_identity/events 授权，check-db validated；浏览器登录和控制台读取通过。访问：`ssh -L 18090:127.0.0.1:18090 DmitUbuntu`，管理员凭据在本机 `~/.local/state/lmm-staging/first-owner.json`。
 
-未启用：模型网关、历史/用量、支付、商店、客服、助手、工具市场、插件与运营模块，相应页面返回503/404；旧数据导入未执行（导入器仍未完成）。这不是生产切换或业务验收。移除方法：停用两个 `lmm-staging-*` 服务，删除 `/etc/nginx/conf.d/lmm-staging.conf` 后 reload，删除 `/etc/lmm-staging`、`/usr/local/lib/lmm-staging`、`/srv/lmm-staging-web`、`/root/lmm-staging-install`、相应用户组，并 `apt purge postgresql-18`。
+同日追加（用户授权读取生产渠道配置）：从旧库只读导出23个启用渠道与价格倍率，生成预发模型网关配置：23个上游、626个模型合同、542条分组路由，跳过122个非聊天及148个旧站未定价模型。渠道密钥只写入预发私有文件，本机副本已粉碎。新Core纯token价要求无缓存写价且整数credit，故427条为普通价格、115条（主要Claude缓存写价）为tiered_decimal，价格页显示“按量计费”。供应商token上界统一按128k/32k并标记`staging-legacy-*-unverified`，缺失缓存计数按0与旧站一致；模型就绪200，价格页487模型。为预览给 staging-owner 直接写入13个分组授权（新版无HTTP分组授权入口，正式需走导入）。**未发起任何真实模型调用**。
+
+支付未启用：旧站为 linux.do EPay 和 Waffo Pancake；预发仅回环，供应商回调无法到达，且使用真实商户凭据下单会产生无法入账的真实付款，故需公开预发域名及测试商户后再接入。
+
+仍未启用：历史/用量导入、支付、商店、客服、助手、工具市场、插件与运营模块，相应页面返回503/404；旧数据导入未执行（导入器仍未完成）。这不是生产切换或业务验收。移除方法：停用两个 `lmm-staging-*` 服务，删除 `/etc/nginx/conf.d/lmm-staging.conf` 后 reload，删除 `/etc/lmm-staging`（含模型配置与渠道密钥）、`/usr/local/lib/lmm-staging`、`/srv/lmm-staging-web`、`/root/lmm-staging-install`、相应用户组，并 `apt purge postgresql-18`。
 
 ## 本轮：修复订阅与活动管理弹窗 · 2026-11-02
 
