@@ -1,6 +1,6 @@
 # 下一位 agent 接手说明
 
-用户已要求 STOP；总目标已暂停，所有三位子 agent 已确认停止，自有编译、测试、验收服务及 PostgreSQL 均已停止。不要自动恢复任务。用户明确要求继续后再推进。当前仅按用户要求提交推送交接检查点。
+用户于 2026-11-04 明确要求组织子 agent 接手并继续完成任务，原 STOP 已解除。当前正进行本机 Core55/OAuth 修复及独立验收；仍不访问 DMIT、生产数据或真实付费服务。下方旧检查点和失败证据保留，不能把开发者自测视为独立验收。
 
 ## 入口与边界
 
@@ -10,7 +10,16 @@
 - 遵守用户排除私人归档目录及其引用的要求。仅使用当前仓库和下列新建 `.local/state/lmm-api/` 证据，不搜索其他归档或从旧缓存恢复输入路径。
 - 父仓库 `recipes/lmm-api/COMPLETION_SCOPE.md` 的既有两行修改，以及 `.pi/`、原交接文件和 `INTEGRATION-2026-11-03.md`，本轮未纳入提交；不要误删或覆盖。
 
-## 提交状态
+## 2026-11-04 接手进展
+
+- 源码 `7d1b0ba` 已提交并推送：consent CSP 仅增加当前已验证的精确 loopback 回调；Core55 正式 7 列授权、撤权与启动 guard 同步；导入器新增独立、严格的 fresh55 profile，不重标旧 receipt。
+- 开发者自测：OAuth 3 项通过；importer 124 项通过、1 项跳过；真实合成 PG 上逐列撤权拒绝、正式 revoke/regrant 和 Core→Go 四类历史漏斗通过。首轮遗漏 Go DB 环境变量导致的失败日志保留，不能写为首次全绿。
+- Go acquisition/community 包测试、Go 构建、Web 构建及 bundle 检查通过。完整 Core debug 候选正在构建；不是 release 或部署产物。
+- 独立验收尚未运行。新夹具必须实际收到浏览器 allow/deny 回调，禁止从 Location 头回退取 code 后冒充浏览器成功。历史异常时间混合有效事件的漏报疑点待实际验证。
+- 新证据入口：`/home/lightjunction/.local/state/lmm-api/core55-acceptance-20261104/`、`connection-acceptance/run-02-prep/`、`connection-filter/core55/permissions-20261104-complete/`。冻结候选生成后以其清单为准，不能使用可变 target 替代。
+- 广告付费仍未实现：当前新广告返回 503，隐藏退款为 pending_core。Core 现有 Commerce 仅表达商店订单，广告合同草案在本机 `ad-payments-20261104/CONTRACT.md`，不是已实现功能。
+
+## 提交状态（原暂停检查点）
 
 - 源码 `5194aca` 已推送：明确的 Core54 fresh import 合同。`4c7f337` 已推送：Core54 实际 CLI manifest 测试修正。
 - 源码 `a49db97` 为 STOP 时的 **WIP 检查点**：20 个 Core55 历史连接导出、导入、查询及漏斗文件。保存现场不等于联测通过；不可部署。
