@@ -2,6 +2,12 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：获客现金投影最小授权修复 · 2026-11-04
+
+正式 `enable_community` 授权补齐支付证明只读权限及 `core_migration.import_runs` 的来源哈希、manifest 两列读取；未启用 payments，没有新增支付写权或导入记录全表读取权。独立人员在冻结 Core52、Go 与 Web 上执行正式授权脚本后，成本、报表和无筛选漏斗实际返回 200，核对持久化成本及合成用户 cohort，获客/资金数据前后相同。新启动检查的逐表、逐列撤权回归在隔离 PostgreSQL 上通过。
+
+四种 `connection_method` 合法筛选仍被源码显式拒绝为 503，继续记为未完成；这次零付款 cohort 的通过不证明正向现金转化统计或全站业务已验收。返佣资金代码仍在独立实现与验证，未计入本次授权修复。没有 DMIT、生产、真实付费调用或部署操作。
+
 ## 本轮：获客宿主身份与只读连接修复 · 2026-11-04
 
 源码 [lmm-api-source 4826e23](https://github.com/TokenNotIncluded/lmm-api-source/commit/4826e234660e76adc28399c26afad633a0e84aac) 将 Go 的 Core gRPC 身份连接与 HTTP community 只读连接分开；配置 `core.socket` 对应身份 RPC，`core.user_read_socket` 与 `core.user_read_token_file` 成对指定只读服务。旧配置复用单个 socket，导致真实 Session 在 Core 身份接口成功、Go 获客接口统一 503；错误配置和浏览器失败证据保留。
