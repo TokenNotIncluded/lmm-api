@@ -2,6 +2,12 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：待首充返佣契约与受控资金链路 · 2026-11-04
+
+源码 [lmm-api-source 83ba5ab](https://github.com/TokenNotIncluded/lmm-api-source/commit/83ba5ab610a35e097ce407872fbc226931c9275c) 追加 fresh Core53/54 组件，前52组件SQL保持不变。导入保留1239用户绑定、269条原始奖励、472条原始流水，仅将133条 earned/awaiting-first-top-up 契约接入未来受控现金结算；注册预付已包含在 opening 中，不重发。真实冻结旧库补查确认这133用户没有更早的合格现金充值。正式导入命令新增 `referrals` 阶段，要求绑定来源、archive、opening migration 和审核条款，拒绝非空重做及导入前已发生的目标结算。
+
+开发自测覆盖7项真实PG用例、可信旧单RSA结算/LDC排除、真实源导入后尾款及退款、5项Python检查；正式阶段生成的真实源计划与原审核计划逐字节一致。冻结Core54候选已交独立人员做新库复验，尚未取得独立签收。此批不提供52→54已有站点升级；旧支付退款入口、134条历史revoked契约恢复、新注册/绑定、前台历史和Web管理员确认流程仍未完成。无生产或DMIT操作。
+
 ## 本轮：获客现金投影最小授权修复 · 2026-11-04
 
 正式 `enable_community` 授权补齐支付证明只读权限及 `core_migration.import_runs` 的来源哈希、manifest 两列读取；未启用 payments，没有新增支付写权或导入记录全表读取权。独立人员在冻结 Core52、Go 与 Web 上执行正式授权脚本后，成本、报表和无筛选漏斗实际返回 200，核对持久化成本及合成用户 cohort，获客/资金数据前后相同。新启动检查的逐表、逐列撤权回归在隔离 PostgreSQL 上通过。
