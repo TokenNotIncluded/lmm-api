@@ -30,7 +30,7 @@ Linux DO 的支付单位是 LDC，使用 EPay 协议并不使它成为 CNY。恢
 
 原生余额、订阅价格/额度/预览/回执、活动奖励/历史以及归一化累计用量保持明确 credits，不随 USD/CNY 偏好或全局兑换率估值。历史原始统计与归一化 credits 不混淆。余额缺失/不可读、模块不可用或权限不足不能伪装成功。外部充值仍要求真实渠道、明确币种和金额/credit_units 报价、显式确认；不由此开放无报价付款、转账或返佣提现。
 
-旧签到历史提供独立的本人会话只读接口 `/core/v1/checkins/history?month=YYYY-MM`。按原日历日期筛选，保留逐条原始奖励单位；全历史原始奖励总额使用十进制字符串，不换算成当前余额或法币。来源必须绑定原开账快照，空历史与未安装来源分开；API Key、跨用户参数和未映射的已删除用户记录不能取得本人历史。读取不重放奖励，不推断原服务器时区，也不宣称每日签到已可发奖。原生签到仍须单独完成原奖励配置、等级倍率、安全随机数、日期防重复和 Core 预算账本验收。
+旧签到历史提供独立的本人会话只读接口 `/core/v1/checkins/history?month=YYYY-MM`。按原日历日期筛选，保留逐条原始奖励单位；全历史原始奖励总额使用十进制字符串，不换算成当前余额或法币。来源必须绑定原开账快照，空历史与未安装来源分开；API Key、跨用户参数和未映射的已删除用户记录不能取得本人历史。读取不重放奖励，不推断原服务器时区，也不宣称每日签到已可发奖。资料页的奖励标签提供独立历史卡片，不依赖每日签到开关；切换月份、查询失败、零记录与账户切换分别显示，未知或失败不得当成零奖励，原始总额不得经浮点数或 USD/CNY 格式化。原生签到仍须单独完成原奖励配置、等级倍率、安全随机数、日期防重复和 Core 预算账本验收。
 
 独立验收使用正式钱包入口、真实 Core/隔离 PostgreSQL 和固定 Web 产物，覆盖未知法币估值下订阅预览/确认、续期/未用退款、原键恢复和重启读回，兑换/签到/红包实际预算入账，USD/CNY 偏好不改变整数金额，以及不可读余额、模块不可用和越权拒绝。Core 直接负责的内部业务不以空 Go host 健康充作 Go 资金验收；外部充值涉及 Go 的目录、报价、队列和恢复另验。不缩减支付、返佣或商店完整范围。
 
@@ -97,3 +97,21 @@ Pancake 还包括 catalog、pair、save、subscription-product 和 product-optio
 - **S8**：[完整 A05/A06/S11 原始合同](COMPLETION_SCOPE.md)、[生产验收合同](PRODUCTION_ACCEPTANCE.md)。
 - **S9**：[未知 provider 迁移拒绝 fixture](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/scripts/test-credit-balance-rebase.py)及[PostgreSQL 对应 fixture](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/scripts/test-credit-balance-rebase-postgres.py)。
 - **S10**：[Stripe 收款/周期/钱包退款](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/apps/api-go/controller/topup_stripe.go)、[Creem 收款/周期](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/apps/api-go/controller/topup_creem.go)、[Creem 订阅商品核对](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/apps/api-go/controller/subscription_payment_creem.go)、[Waffo Global](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/apps/api-go/controller/topup_waffo.go)、[Waffo Pancake](https://github.com/TokenNotIncluded/lmm-api/blob/3948a0a1ee1cefdd016a7aa45a11851545bb4b85/apps/api-go/controller/topup_waffo_pancake.go)。
+
+### Hero SMS 本人资金历史
+
+- 提供仅限本人个人账户 Session 的分页资金历史；API Key、跨用户参数和显示隐藏订单参数必须拒绝。缺完整同源回执、来源边界不匹配或重复回执必须报不可用，不能返回伪空列表。
+- 保持原 `history_hidden_at = 0` 可见性，隐藏记录不可重新暴露。原报价、预扣、退款、净扣除及逐条流水保持精度；原额度使用十进制字符串并明确未转换单位。
+- 不返回手机号、验证码、消息、供应商快照及密文、上游成本或内部幂等键。历史读取不可重放资金，不可自动调用供应商；解密读取、页面接入及新订单业务分别验收。
+
+- 短信页面单独提供冻结资金历史卡片，不依赖供应商目录加载成功；完整保留原报价字符串与原额度整数精度。加载、失败、成功空列表和分页必须区分，换用户或换会话时重置并清除旧历史，不展示迟到的旧账户响应。
+
+### 旧超时充值与折扣容量
+
+- Waffo Pancake 的 `failed + checkout_timeout` 与 pending 一样保留后续签名到账义务；不得从旧充值导出中遗漏。保留原状态、原支付金额/币种/来源和用户归属，未知结算回执不可变成可用资金或自动成功。
+- 折扣名额计算须包括仍可结算订单对应的 released 预留，以及尚无预留记录的可结算订单；reserved 预留只能凭订单明确关闭释放，TTL 过期或订单缺失都不能释放。
+- 已删除用户的未决订单须完整隔离保留并列为待处理，不改绑新账户。回执迁入、原生折扣使用和旧签名支付回调精确一次入账分别验收。
+
+- 旧订单按冻结的逐单有效额度和原应付金额结算，必须核验其重基母计划及原始校准；不能按当前渠道比例重新报价。原拒绝记录继续阻断，原函数观察值与来源 hash 只保留事实，不代替商户绑定、验签、折扣消费或 Core 原子入账授权。
+
+- 旧报价若不能表示为新订单的整分金额及整数 credits/分，使用独立冻结报价结算依据保留原精度；禁止舍入金额、修改原到账额度或重选当前汇率来迁就新订单约束。算术可表示也不等于已获渠道和结算授权。
