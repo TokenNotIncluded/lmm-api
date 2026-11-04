@@ -2,6 +2,12 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：获客连接方式筛选 · 2026-11-04
+
+源码 [lmm-api-source ee8d1b4](https://github.com/TokenNotIncluded/lmm-api-source/commit/ee8d1b4) 接入 Core 受控 Key/OAuth grant 创建事实，Go 按观察窗口筛选 `oauth/api_key/both/unknown` 并重新统计阶段和付款归因；不以社交登录或活跃 Key 状态推断连接方式。只读角色获得 grant-family 所需五列查询权限，不增加 OAuth 写权。实际非owner查询与逐列撤权启动回归、Go acquisition/community 包自测及宿主构建通过。
+
+新冻结 Core＋Go 候选已交独立人员使用全新合成数据和 Web 复验，尚未取得签收。历史导入未保留的分类与时间仍标记未知，补充历史合同和导入继续实现；不再使用已排除的私有目录及其材料。旧49组件导入器与当前54组件合同的漂移正另行修复，不通过替换哈希或放宽校验伪造通过。此轮未访问 DMIT、生产或真实付费服务。
+
 ## 本轮：待首充返佣契约与受控资金链路 · 2026-11-04
 
 源码 [lmm-api-source 83ba5ab](https://github.com/TokenNotIncluded/lmm-api-source/commit/83ba5ab610a35e097ce407872fbc226931c9275c) 追加 fresh Core53/54 组件，前52组件SQL保持不变。导入保留1239用户绑定、269条原始奖励、472条原始流水，仅将133条 earned/awaiting-first-top-up 契约接入未来受控现金结算；注册预付已包含在 opening 中，不重发。真实冻结旧库补查确认这133用户没有更早的合格现金充值。正式导入命令新增 `referrals` 阶段，要求绑定来源、archive、opening migration 和审核条款，拒绝非空重做及导入前已发生的目标结算。
