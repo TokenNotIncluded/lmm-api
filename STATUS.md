@@ -2,6 +2,12 @@
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
+## 本轮：获客宿主身份与只读连接修复 · 2026-11-04
+
+源码 [lmm-api-source 4826e23](https://github.com/TokenNotIncluded/lmm-api-source/commit/4826e234660e76adc28399c26afad633a0e84aac) 将 Go 的 Core gRPC 身份连接与 HTTP community 只读连接分开；配置 `core.socket` 对应身份 RPC，`core.user_read_socket` 与 `core.user_read_token_file` 成对指定只读服务。旧配置复用单个 socket，导致真实 Session 在 Core 身份接口成功、Go 获客接口统一 503；错误配置和浏览器失败证据保留。
+
+Go app/composition 包自测、独立地址配置回归及宿主构建通过，配置示例已同步。冻结修复后二进制已交独立人员复验真实 Core＋Go＋Web；16 个获客管理方法及用户流程尚未验收通过。返佣待首充合同、结算尾款与退款追回仍在本地实现和验证，未包含在本次提交。此轮未访问任何 DMIT、生产数据或真实付费服务，未部署或切流。
+
 ## 本轮：首页粒子美化与 DmitUbuntu 隔离预发 · 2026-11-03
 
 源码 [lmm-api-source 44386c5](https://github.com/TokenNotIncluded/lmm-api-source/commit/44386c5f9b03403ec0ea8a04d71eeff88cb4f24b) 已推送，主仓库同步gitlink。首页粒子改为无栅格点彩、深度分层与近点高光，背景加柔和光晕和淡点阵，边缘回到原底色；首屏按钮、章节切换和AI网址导航入口改为圆角样式。home/forge 156项测试、Web类型检查、改动文件lint/format和生产构建通过，初始gzip559363/786432 bytes；浏览器检查了明暗主题、桌面/手机和形变过渡。
