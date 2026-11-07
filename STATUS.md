@@ -1,4 +1,19 @@
-# 当前推进状态 · 2026-11-02
+# 当前推进状态 · 2026-11-07
+
+目标：完成新架构的业务等价、真实迁移对账与切换准备。**当前仍不能切换生产。** 本节只记录已发生的代码提交和有明确证据的局部验收；完整完成条件仍以 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) 为准。
+
+## 本轮：广告支付收据恢复提交 · 2026-11-07
+
+源码仓库 [lmm-api-source 787c8cc](https://github.com/TokenNotIncluded/lmm-api-source/commit/787c8cc55da15bde3395f0aa2f0533588318b1c0) 已推送，提交信息为按原 request_id 恢复丢失的广告支付/退款收据；用户报告源码 main 与 origin/main 一致。定向 Go 测试 `go test ./internal/modules/community/ -run 'TestLost|TestOther|TestUnknown|TestDefinite'` 由开发者执行并通过，属于开发自测，不是独立验收。
+
+主仓库 [lmm-api db41a319](https://github.com/TokenNotIncluded/lmm-api/commit/db41a319aabf9b3e9e02880787067afa822a99a6) 已推送，按用户报告 gitlink 指向源码 787c8cc，主仓库 main 与 origin/main 一致。AGENTS.md、recipes/lmm-api/COMPLETION_SCOPE.md、.pi/ 与两份 2026-11-03 交接文件仍为本地未提交内容；不得覆盖或擅自提交。
+
+Drive 上下文包中的广告支付源码与 787c8cc 对应文件 Git blob SHA 一致；恢复测试文件已存在于该提交。connection_method 四种非空 cohort、真实 Web 过滤和权限边界已有独立验收 PASS，但仅限该报告的冻结 Core54/Go/Web 候选与合成数据。该报告同时记录 OAuth 浏览器 consent 因 CSP form-action self 失败，不能声称 OAuth 浏览器流程通过。
+
+Core54 fresh-install 合同证据包含 40 项 financial 单测、37 项 credential 单测、123 项 migration 单测（其中一项 skipped），另有一项真实 PostgreSQL 事务测试；仅证明报告所列冻结脚本和合成输入，不证明 Core56 完整业务、既有站点升级或真实资金迁移。广告恢复独立验收、广告浏览器闭环、OAuth Allow/Deny 浏览器复验、全新旧数据迁移对账、A01–A10/S11 全量验收均未完成。
+
+本轮未部署、未访问生产服务器、未停止旧服务、未执行真实支付/模型调用、未切换 api.lmm.best。资金对账、生产隔离安装和切流量仍为阻断项；生产切换必须等待最终对账报告及用户明确同意。
+
 
 目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
