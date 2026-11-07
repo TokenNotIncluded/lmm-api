@@ -2,6 +2,14 @@
 
 目标：完成新架构的业务等价、真实迁移对账与切换准备。**当前仍不能切换生产。** 本节只记录已发生的代码提交和有明确证据的局部验收；完整完成条件仍以 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) 为准。
 
+## 本轮：广告丢响应故障注入与 OAuth CSP 形状核对 · 2026-11-07
+
+源码 [lmm-api-source 06ca6ac](https://github.com/TokenNotIncluded/lmm-api-source/commit/06ca6ac61e0498fe6e7b6d1dc165e4efb1113722) 已推送。它在 787c8cc 之上增加一条 PostgreSQL 集成测试：支付和退款响应都丢失时，按原 request_id 读回成功收据，页面只发布一次、退款只发生一次。使用本机隔离库 `lmm_ad_recovery_20261107` 与伪造 Core，`TestLostReceiptPublishesAndRefundsOnce` 通过。这是开发自测，不是独立验收，也不是浏览器广告闭环。
+
+Chromium 只核对当前源码会发出的 CSP 形状，没有启动 Core。当前策略 `form-action 'self'` 加精确回调地址时，Allow 到达回调 1 次；旧策略只有 `form-action 'self'` 时，回调 0 次，控制台记录 form-action 阻断。证据在本机 `~/.local/state/lmm-api/oauth-csp-20261107/result.json`。因此旧报告里的 CSP 失败可以在当前策略形状上复现为“仅 self 会被拦”，但不能把这次核对写成 Core OAuth Allow/Deny 验收通过。完整浏览器授权仍未跑。
+
+本机 PostgreSQL 没有旧站迁移源库，只有 `lmm_ad_recovery_20261107`、`lmm_api_token_test`、`lmm_preview_20260806_a1`。真实旧数据迁移、全局资金零和、Core56 全业务验收、生产隔离安装和切流都没有执行。工作区已快进到远端状态文档，AGENTS.md、COMPLETION_SCOPE.md、.pi/ 和两份交接文件仍未提交。
+
 ## 本轮：广告支付收据恢复提交 · 2026-11-07
 
 源码仓库 [lmm-api-source 787c8cc](https://github.com/TokenNotIncluded/lmm-api-source/commit/787c8cc55da15bde3395f0aa2f0533588318b1c0) 已推送，提交信息为按原 request_id 恢复丢失的广告支付/退款收据；用户报告源码 main 与 origin/main 一致。定向 Go 测试 `go test ./internal/modules/community/ -run 'TestLost|TestOther|TestUnknown|TestDefinite'` 由开发者执行并通过，属于开发自测，不是独立验收。
