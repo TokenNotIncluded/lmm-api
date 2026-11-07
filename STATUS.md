@@ -2,6 +2,12 @@
 
 实现版本以本仓库 gitlink 为准。当前源码是 [lmm-api-source 06ca6ac](https://github.com/TokenNotIncluded/lmm-api-source/commit/06ca6ac61e0498fe6e7b6d1dc165e4efb1113722)。生产没有切换。
 
-2026-11-03 交接、同日整合记录、下一位 agent 接手说明，以及 2026-10-31 扩展缺口核对已从工作区移除。这些文件仍把源码停在 `90e2ce1`、广告恢复未推送、广告接口返回 503 写成当前事实。该基线已废弃。更早轮次的正文留在 Git 历史里，不再作为当前任务。
+## 本轮 OAuth / 广告推进
+
+- 自 `06ca6ac` 编译 Core56 调试二进制（SHA-256 `2c50ebf1…b3d480`）。库单测 `consent_csp_allows_only_the_current_validated_callback` 通过。
+- 隔离 PostgreSQL 上对活 Core 做 issuer Host 的 HTTP 表单旅程：consent CSP 为 `form-action 'self'` 加精确回调；Allow 换到 code 并完成 token；Deny 回 `access_denied`。证据在本机 `~/.local/state/lmm-api/oauth-core-20261107/evidence/http-oauth-results.json`。这是开发自测，不是独立浏览器验收。
+- Chromium 完整 Allow/Deny 未跑完：本机可用内存约 300MiB 时启动 Chromium 会挤掉 Core。无 Core 的 CSP 形状核对仍在 `~/.local/state/lmm-api/oauth-csp-20261107/result.json`。
+- 广告丢响应 PostgreSQL 故障注入仍是 `06ca6ac` 上的开发自测；独立签收和浏览器广告闭环未做。
+- 本机仍无旧站迁移源库。真实迁移、资金零和、Core56 全业务验收、生产隔离安装和切流都没有执行。
 
 验收合同仍是 [PRODUCTION_ACCEPTANCE.md](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) 与 [COMPLETION_SCOPE.md](recipes/lmm-api/COMPLETION_SCOPE.md)。
