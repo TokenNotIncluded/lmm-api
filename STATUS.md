@@ -8,7 +8,7 @@
 
 主仓库 [lmm-api db41a319](https://github.com/TokenNotIncluded/lmm-api/commit/db41a319aabf9b3e9e02880787067afa822a99a6) 已推送，按用户报告 gitlink 指向源码 787c8cc，主仓库 main 与 origin/main 一致。AGENTS.md、recipes/lmm-api/COMPLETION_SCOPE.md、.pi/ 与两份 2026-11-03 交接文件仍为本地未提交内容；不得覆盖或擅自提交。
 
-Drive 上下文包中的广告支付源码与 787c8cc 对应文件 Git blob SHA 一致；恢复测试文件已存在于该提交。connection_method 四种非空 cohort、真实 Web 过滤和权限边界已有独立验收 PASS，但仅限该报告的冻结 Core54/Go/Web 候选与合成数据。该报告同时记录 OAuth 浏览器 consent 因 CSP form-action self 失败，不能声称 OAuth 浏览器流程通过。
+Drive 上下文包中的广告支付源码与恢复测试文件均已逐字节核对，与 787c8cc 对应 Git blob SHA 一致。connection_method 四种非空 cohort、真实 Web 过滤和权限边界已有独立验收 PASS，但仅限报告中的冻结 Core54/Go/Web 候选与合成数据。该报告记录 OAuth 浏览器 consent 因 CSP form-action self 失败；但当前源码 main 的 oauth2.rs 已将 issuer 验证过的精确 page.redirect_uri 加入 consent 页 form-action，且该文件在 43d8a061 与 787c8cc 间未变化。报告未提供可证明与当前源码/二进制一致的 OAuth 冻结 SHA，因此不能直接扩大 CSP；必须先在同一冻结候选上复现并比对响应 CSP、表单 action 和实际 redirect URI。
 
 Core54 fresh-install 合同证据包含 40 项 financial 单测、37 项 credential 单测、123 项 migration 单测（其中一项 skipped），另有一项真实 PostgreSQL 事务测试；仅证明报告所列冻结脚本和合成输入，不证明 Core56 完整业务、既有站点升级或真实资金迁移。广告恢复独立验收、广告浏览器闭环、OAuth Allow/Deny 浏览器复验、全新旧数据迁移对账、A01–A10/S11 全量验收均未完成。
 
