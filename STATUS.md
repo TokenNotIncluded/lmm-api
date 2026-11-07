@@ -6,7 +6,7 @@
 
 源码仓库 [lmm-api-source 787c8cc](https://github.com/TokenNotIncluded/lmm-api-source/commit/787c8cc55da15bde3395f0aa2f0533588318b1c0) 已推送，提交信息为按原 request_id 恢复丢失的广告支付/退款收据；用户报告源码 main 与 origin/main 一致。定向 Go 测试 `go test ./internal/modules/community/ -run 'TestLost|TestOther|TestUnknown|TestDefinite'` 由开发者执行并通过，属于开发自测，不是独立验收。
 
-主仓库 [lmm-api db41a319](https://github.com/TokenNotIncluded/lmm-api/commit/db41a319aabf9b3e9e02880787067afa822a99a6) 已推送，按用户报告 gitlink 指向源码 787c8cc，主仓库 main 与 origin/main 一致。AGENTS.md、recipes/lmm-api/COMPLETION_SCOPE.md、.pi/ 与两份 2026-11-03 交接文件仍为本地未提交内容；不得覆盖或擅自提交。
+主仓库 [lmm-api db41a319](https://github.com/TokenNotIncluded/lmm-api/commit/db41a319aabf9b3e9e02880787067afa822a99a6) 已推送；该提交的 Git diff 已独立确认 gitlink 从 90e2ce1 更新为源码 787c8cc。随后本次通过 GitHub 更新 STATUS.md，最新远端 main 已前进到 ded14d6；原工作区需在保留脏文件的前提下快进同步这几个文档提交。AGENTS.md、recipes/lmm-api/COMPLETION_SCOPE.md、.pi/ 与两份 2026-11-03 交接文件仍为本地未提交内容；不得覆盖或擅自提交。
 
 Drive 上下文包中的广告支付源码与恢复测试文件均已逐字节核对，与 787c8cc 对应 Git blob SHA 一致。connection_method 四种非空 cohort、真实 Web 过滤和权限边界已有独立验收 PASS，但仅限报告中的冻结 Core54/Go/Web 候选与合成数据。该报告记录 OAuth 浏览器 consent 因 CSP form-action self 失败；但当前源码 main 的 oauth2.rs 已将 issuer 验证过的精确 page.redirect_uri 加入 consent 页 form-action，且该文件在 43d8a061 与 787c8cc 间未变化。报告未提供可证明与当前源码/二进制一致的 OAuth 冻结 SHA，因此不能直接扩大 CSP；必须先在同一冻结候选上复现并比对响应 CSP、表单 action 和实际 redirect URI。
 
