@@ -15,7 +15,6 @@ Core54 fresh-install 合同证据包含 40 项 financial 单测、37 项 credent
 本轮未部署、未访问生产服务器、未停止旧服务、未执行真实支付/模型调用、未切换 api.lmm.best。资金对账、生产隔离安装和切流量仍为阻断项；生产切换必须等待最终对账报告及用户明确同意。
 
 
-目标：迭代到完整可用，并证明生产环境具备切换到新架构的条件。**整体尚未完成，当前不能证明可切换生产。** 完整分母保留在 [原始完成范围](recipes/lmm-api/COMPLETION_SCOPE.md) 与 [生产验收合同](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)，不按测试数量估计完成百分比。
 
 ## 本轮：获客连接方式筛选 · 2026-11-04
 
