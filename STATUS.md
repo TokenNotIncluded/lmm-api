@@ -1,6 +1,6 @@
 # 当前状态 · 2026-11-07
 
-实现版本以本仓库 gitlink 为准。当前源码是 [lmm-api-source 9250ef0](https://github.com/TokenNotIncluded/lmm-api-source/commit/9250ef01399afc5cedde8413b0e897ed4a0a0503)。生产没有切换。
+实现版本以本仓库 gitlink 为准。当前源码是 [lmm-api-source 7fdd6c3](https://github.com/TokenNotIncluded/lmm-api-source/commit/7fdd6c3)。生产没有切换。
 
 ## 本轮 OAuth / 广告推进
 
