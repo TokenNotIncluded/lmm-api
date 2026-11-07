@@ -1,6 +1,6 @@
 # 当前状态 · 2026-11-07
 
-实现版本以本仓库 gitlink 为准。当前源码是 [lmm-api-source 55ddf89](https://github.com/TokenNotIncluded/lmm-api-source/commit/55ddf89)。生产没有切换。
+实现版本以本仓库 gitlink 为准。当前源码是 [lmm-api-source eabb74e](https://github.com/TokenNotIncluded/lmm-api-source/commit/eabb74e)。生产没有切换。
 
 ## 本轮 OAuth / 广告推进
 
@@ -10,7 +10,11 @@
 - 广告丢响应 PostgreSQL 故障注入仍是开发自测；独立签收和浏览器广告闭环未做。
 - 已退役误导性的 `GET /api/ai-directory/ads/quote`（410 `AI_DIRECTORY_AD_QUOTE_RETIRED`），正式路径仍是 `POST .../prepare`。
 - 商店可选 `store.stock_key_file`（私密原始 32 字节）已从 extensions 配置接入 `WithStockKey`；`PublicConfig.stock_items_supported` 随密封密钥就绪状态广告，前端在未就绪时不提供库存导入。
-- 商店商品点赞已接线：`GET/PUT/DELETE /api/store/products/{id}/likes`，`store_likes_supported=true`；收藏集/Extore/商户主页等仍关闭。Extore 商店绑定仍在独立候选分支，未并入微服务宿主。
+- 商店商品点赞已接线：`GET/PUT/DELETE /api/store/products/{id}/likes`，`store_likes_supported=true`。
+- Extore：任务分支 `a7b9cfd` 已堵 public marketplace 泄露；微服务已接入
+  `internal/extore` 与 `POST /api/store/extore/authorize|catalog`（需
+  `extore_key_file`+`extore_redirect_uri`）。连接列表/同步/只读编辑/绑定 UI 未完；
+  仍不合并 Extore `main`。
 - 本机仍无旧站迁移源库。真实迁移、资金零和、Core56 全业务验收、生产隔离安装和切流都没有执行。
 
 验收合同仍是 [PRODUCTION_ACCEPTANCE.md](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) 与 [COMPLETION_SCOPE.md](recipes/lmm-api/COMPLETION_SCOPE.md)。
