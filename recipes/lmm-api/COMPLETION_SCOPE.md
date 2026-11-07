@@ -351,6 +351,8 @@
 
 先读：Go internal/modules/assistant/、toolmarket/、webcompat/{assistant,toolmarket}*.go、相应coreclient合同；main助手工具、setup guide、平台客服/赞助、conversation管理、tool市场发布/价格/授权/执行/退款、MCP/OAuth/远控入口。现assistant持久历史与预设已测，但 /api/assistant/chat 在缺安全模型桥时明确不可用；toolmarket库不能因存在目录就当宿主挂载。
 
+配置语义：`assistant.agent_required` 是 AgentChat 的唯一显式启用项。省略或 `false` 时不启用 AgentChat 或 agent journal，即使 Core 报告 AgentTurn 可用；若配置 `core.assistant_token_file` 且 PersonalText 能力就绪，仍可走 PersonalChat，并仅选择 delegation journal bundle。设为 `true` 表示必须启用 AgentChat：启动前选择包含 delegation 与 agent journal 的 bundle，并验证独立凭据、AgentTurn 能力、schema 版本及最小权限；任一缺失即启动失败，不回退 PersonalChat。启动只校验现有 schema/ACL，不建表、不迁移、不授权；运行中不自动切换模式。对外能力、chat 实现与 journal 权限必须使用同一启动结果。
+
 独占写范围：上述assistant/、toolmarket/模块与各自tests、pgtest/historypgtest；webcompat/assistant*.go、toolmarket*.go；新增assistant/模型delegation client及toolmarket资金adapter叶文件。Go host/run/composition/config/router、Core公共文件、proto与生成代码留S11。Core模型delegation由A07、账本由A03、Commerce机制由A06、用户权限由A01/A02提供。
 
 执行顺序：
