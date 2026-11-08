@@ -1,239 +1,44 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/TokenNotIncluded/lmm-api-source/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54/.github/assets/lmm-logo.svg" width="520" alt="LMM API · Language Model Mesh">
-  <h1>LMM API</h1>
-  <p><strong>连接模型与工具，让智能自由流动。</strong></p>
-  <p>Rust Core · Go Extensions · React Web · Rust CLI · Recipkg reconstruction contracts</p>
+# LMM API
 
-  [![Recipe](https://img.shields.io/badge/recipe-0.1.11-111111?style=flat-square)](recipes/lmm-api/RECIPE.md)
-  [![Source](https://img.shields.io/badge/source-7520d0bc-111111?style=flat-square)](https://github.com/TokenNotIncluded/lmm-api-source/tree/7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54)
-  [![Status](https://img.shields.io/badge/production%20switch-not%20proven-111111?style=flat-square)](STATUS.md)
-  [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-111111?style=flat-square)](LICENSE)
+LMM API 为个人、团队和运营者提供统一的模型入口、身份权限、资金账本与业务扩展。本仓库维护 Recipkg 产品配方；实现位于 [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source)。
 
-  [English](README_EN.md) · [Rebuild](#从配方开始) · [Source](#固定实现源码) · [Acceptance](recipes/lmm-api/ACCEPTANCE.md) · [Status](STATUS.md)
-</div>
+**查看最新工作与完成证据：[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)。** 本仓库只维护需求和验收合同，不另存一份状态表。
 
-> [!WARNING]
-> 这个仓库现在是 **LMM API 的 Recipkg 配方、接口合同与验收主项目**。可编译实现已经迁到独立的 [`TokenNotIncluded/lmm-api-source`](https://github.com/TokenNotIncluded/lmm-api-source)，并以固定 Git 子模块接入。配方检查通过不等于软件已经完整重建，更不等于新架构已经可以切换生产。
+[English](README_EN.md) · [产品要求](recipes/lmm-api/PRODUCT_REQUIREMENTS.md) · [集成配方](recipes/lmm-api/BUILD_PROMPT.md) · [验收条件](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)
 
-## 一句话理解
+## 架构
 
-LMM 是 Language Model Mesh：用户通过一个统一入口管理身份、团队、权限、余额、预算和模型调用；商店、助手、工具市场、运营与支付适配则放在可插拔扩展中。
+| 组件 | 职责 |
+| --- | --- |
+| Rust `lmm-core` | 身份、权限、账本、预算、模型路由与计费的唯一权威 |
+| Go `lmm-extensions` | 商店、客服、助手、工具、运营与外部支付 IO；独立数据库和窄 RPC |
+| Rust `lmm` | 用户客户端与已授权的软件接入 |
+| 静态 Web | 用户、团队与管理界面，消费真实后端能力 |
 
-```text
-CLI / OpenAI-compatible API / Web console
-                    │
-          ┌─────────┴─────────┐
-          ▼                   ▼
-   lmm-core · Rust     lmm-extensions · Go
-身份 · 权限 · 账本      商店 · 工具 · 助手
-预算 · 订阅 · 路由      运营 · 支付商 I/O
-          │                   │
-          └──── 明确授权合同 ──┘
-```
+Core 可独立运行；扩展不能直接读写 Core 数据库或自行授权扣款。产品仅有上述三个可执行程序，Web 不需要第四个常驻后端。
 
-关键原则很简单：**钱和权限只有 Core 一个主人。** 扩展拥有自己的业务状态，但不能直接改核心余额、账本或核心数据库。
+## 使用配方
 
-## 先分清三个层次
+安装 [Recipkg](https://github.com/recipkg/recipkg) 后检查集成包：
 
-| 层次 | 在哪里 | 它证明什么 |
-| --- | --- | --- |
-| **产品合同** | 本仓库 `recipes/` | 需求、边界、接口、失败行为和验收条件被明确记录 |
-| **固定实现** | `generated/lmm-api-source/` | 当前合同对应一个可追溯的源码提交 |
-| **生产事实** | 独立部署与验收证据 | 真实数据、供应商、支付、浏览器、故障恢复和切换流程实际成立 |
-
-```text
-recipe check passed
-        ≠
-source builds
-        ≠
-integration accepted
-        ≠
-production can switch
-```
-
-当前状态明确停在最后一个等号之前：已有大量开发者自测和隔离实验，但尚不能证明可切换生产。完整证据与未完成项见 [STATUS.md](STATUS.md)。
-
-## 六个配方包
-
-| 配方 | 本质职责 | 对应实现 |
-| --- | --- | --- |
-| [`lmm-api`](recipes/lmm-api/) | 集成入口和完整产品验收 | 整体分发与部署组合 |
-| [`lmm-core`](recipes/lmm-core/) | 身份、团队、权限、账本、预算、订阅、路由与转发 | `services/core`，Rust |
-| [`lmm-extensions`](recipes/lmm-extensions/) | 商店、工具、助手、运营和支付适配 | `services/extensions`，Go |
-| [`lmm-web`](recipes/lmm-web/) | 静态控制台、认证、钱包、使用记录与管理界面 | `apps/web`，React/TypeScript |
-| [`lmm-cli`](recipes/lmm-cli/) | 用户与运维命令行合同 | `apps/cli`，Rust |
-| [`lmm-contracts`](recipes/lmm-contracts/) | 跨进程 RPC、HTTP、事件、配置和兼容性合同 | 共享叶子依赖 |
-
-主配方依赖 Core、Extensions、Web 和 CLI；各组件再依赖 Contracts。运行时只有三个产品程序：`lmm-core`、`lmm-extensions` 和 `lmm` CLI。Web 是静态产物，不是第四个常驻后端。
-
-## 从配方开始
-
-安装 [Recipkg](https://github.com/recipkg/recipkg) 后：
-
-```bash
-# 检查所有引用、依赖和配方结构
+```sh
 recipkg check recipes/lmm-api
-
-# 生成完整中文重建任务
 recipkg build recipes/lmm-api --lang zh-CN
 ```
 
-打包并复核一个可交付的配方归档：
+`build` 生成重建提示词，不编译应用或执行验收。集成包递归依赖 [Core](recipes/lmm-core/)、[Extensions](recipes/lmm-extensions/)、[Web](recipes/lmm-web/)、[CLI](recipes/lmm-cli/)，组件共用 [Contracts](recipes/lmm-contracts/)。详细支付范围见 [支付矩阵](recipes/lmm-api/PAYMENT_PARITY.md)。
 
-```bash
-set -eu
-out="$(mktemp -d)"
-trap 'rm -rf "$out"' EXIT
+## 使用固定源码
 
-recipkg pack recipes/lmm-api \
-  -o "$out/lmm-api.recipe.tar.gz"
-recipkg check "$out/lmm-api.recipe.tar.gz"
+```sh
+git submodule update --init --recursive -- generated/lmm-api-source
+git ls-tree HEAD generated/lmm-api-source
 ```
 
-`recipkg build` 生成的是实现任务，不会调用模型、编译代码、启动 PostgreSQL 或验证生产数据。真正实现必须逐项执行 [`ACCEPTANCE.md`](recipes/lmm-api/ACCEPTANCE.md) 和 [`PRODUCTION_ACCEPTANCE.md`](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)。
+以上 gitlink 是当前配方固定的实现提交；构建、测试和运行命令在 `generated/lmm-api-source/` 中读取并执行。CLI/providers 保持源码仓库内的嵌套子模块。源码、构建、独立验收、发布和生产部署分别报告，配方检查不替代业务证据。
 
-## 固定实现源码
+## 来源与许可
 
-当前主仓库固定：
+[来源说明](recipes/lmm-api/SOURCE.md)与[仓库迁移记录](MIGRATION.md)保留重建依据。旧单体可从固定 [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) 及其提交重现，不依赖历史分支名。
 
-```text
-TokenNotIncluded/lmm-api-source
-7520d0bc1d71c080e6d787bf5f7ad1bfa9434c54
-```
-
-获取完整源码及嵌套子模块：
-
-```bash
-git clone --recurse-submodules \
-  https://github.com/TokenNotIncluded/lmm-api.git
-cd lmm-api
-
-git submodule update \
-  --init \
-  --recursive \
-  -- generated/lmm-api-source
-```
-
-进入实现仓库后，以其固定的 `mise.toml`、`justfile` 和开发文档为准：
-
-```bash
-cd generated/lmm-api-source
-mise install
-mise exec -- just --list
-```
-
-不要把主仓库工作区里未提交的源码、其他分支或本地数据库实验算进这个固定快照。子模块提交是发布边界。
-
-## 实现架构
-
-```text
-                         ┌──────────────────────┐
-                         │ PostgreSQL · Core    │
-                         │ 身份 / 账本 / 路由   │
-                         └──────────▲───────────┘
-                                    │
-client ── HTTP/OpenAI API ──► lmm-core ◄── provider APIs
-   │                                ▲
-   │                                │ 授权内部 RPC
-   ├── static web console ──────────┤
-   │                                │
-   └────────────────────► lmm-extensions
-                                    │
-                         ┌──────────▼───────────┐
-                         │ PostgreSQL · Ext     │
-                         │ 商店 / 支付 / 助手   │
-                         └──────────────────────┘
-```
-
-- Core 与 Extensions 使用独立数据库和独立运行身份。
-- 普通启动不得创建、升级或偷偷修复数据库结构。
-- 初始化、检查和升级是显式命令，安装 owner 与运行凭据分离。
-- Extensions 失败不得破坏模型转发、核心余额或账本一致性。
-- Web 只能通过公开/授权接口工作，不能直接接触数据库。
-- 健康接口有响应不代表模型供应商、账本、支付或浏览器业务已可用。
-
-实现细节从 [固定源码 README](https://github.com/TokenNotIncluded/lmm-api-source/blob/d39f41734d7337ba709126864cb82456ceb8523b/README.md) 开始。
-
-## 当前已验证到哪里
-
-当前主配方为 `0.1.19`，固定源码为 `d39f417`；最新分范围结果与未完成项见 [STATUS.md](STATUS.md)。源码同步不等于已经部署或完成全部业务验收。
-
-截至 `2026-10-30` 的历史验证范围包括：
-
-- 主配方 `0.1.12` 与固定源码 `7520d0bc…`；
-- Rust Core、Go Extensions、React Web 和 RPC 合同的多组定向测试；
-- 隔离 PostgreSQL 升级、账本/支付幂等、部分浏览器财务页面和 nginx 路由夹具；
-- Stripe、EPay、Creem、Waffo Global 和 Waffo Pancake 钱包充值协议的开发者实现与局部验证；
-- FastPay 明确退役，配置与 provider 路径拒绝继续启用；
-- Recipkg 递归检查、临时归档检查和完整提示词渲染。
-
-这些证据证明特定代码路径在特定隔离条件下成立。它们没有证明：
-
-- 所有真实商户账号和真实支付回调；
-- 完整浏览器、Core、Extensions 和供应商联合验收；
-- 历史身份、资金、订阅、API Key、日志和凭据迁移全部对账；
-- 所有 writer 已停写且故障恢复达到生产要求；
-- 生产开放、回滚与灰度切换已完成。
-
-所以项目不发布一个误导性的“总体完成百分比”。分母与依赖关键路径在 [`COMPLETION_SCOPE.md`](recipes/lmm-api/COMPLETION_SCOPE.md) 和 [`PRODUCTION_ACCEPTANCE.md`](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) 中逐项保存。
-
-## 生产切换门槛
-
-生产候选必须同时回答五类问题：
-
-```text
-1. 运行的源码、二进制、SBOM 和 schema 是否属于同一提交？
-2. 旧数据是否完整迁移、对账且能证明来源？
-3. 所有写入者是否停写，旧会话是否排空？
-4. 模型、资金、支付、身份、浏览器和边缘路由是否联合通过？
-5. 灰度、回滚和失败恢复是否在同一候选上验证？
-```
-
-缺一项就只能标记为 `BLOCKED` / `UNKNOWN`，不能靠“测试很多”推导为可上线。
-
-权威入口：
-
-| 目标 | 文档 |
-| --- | --- |
-| 完整产品验收 | [ACCEPTANCE.md](recipes/lmm-api/ACCEPTANCE.md) |
-| 生产切换 | [PRODUCTION_ACCEPTANCE.md](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md) |
-| 全范围分母 | [COMPLETION_SCOPE.md](recipes/lmm-api/COMPLETION_SCOPE.md) |
-| 支付对照 | [PAYMENT_PARITY.md](recipes/lmm-api/PAYMENT_PARITY.md) |
-| 问题与维护合同 | [ISSUE_MAINTENANCE.md](recipes/lmm-api/ISSUE_MAINTENANCE.md) |
-| 当前证据与限制 | [STATUS.md](STATUS.md) |
-
-## 仓库地图
-
-```text
-recipes/                    产品合同与验收
-  lmm-api/                  集成入口
-  lmm-core/                 Rust 核心
-  lmm-extensions/           Go 扩展
-  lmm-web/                  Web 控制台
-  lmm-cli/                  Rust 客户端
-  lmm-contracts/            共享接口合同
-generated/lmm-api-source/   固定实现 Git 子模块
-.agents/skills/             固定上游与项目技能
-STATUS.md                   当前证据、失败和剩余工作
-MIGRATION.md                从旧单体迁移到配方/源码双仓结构
-```
-
-共享第三方库、操作系统、PostgreSQL、模型供应商、支付商、密钥库和外部账号是环境前提，不会被伪装成配方内部依赖。
-
-## 分支与历史
-
-- `main`：当前 Recipkg 主项目与固定源码指针。
-- `traditional` / `传统`：旧 Go 单体历史。
-- 原实现迁出基准：`ff01f8456b978089bce08175cbd357c3d22c3983`。
-
-迁移仓库结构不会自动迁移生产数据库，也不会让旧服务切换到新程序。线上 [`api.lmm.best`](https://api.lmm.best) 的运行状态与本仓库开发进度必须分别核验。
-
-## 贡献与安全
-
-修改行为前先更新相应配方、合同和验收条件，再修改固定实现。合并、打包、发布和部署是四个独立决定。
-
-不要把 API Key、支付密钥、用户数据、生产数据库、私有日志或真实商户回调上传到 Issue、PR、配方归档或模型提示词。
-
-## License and attribution
-
-LMM API 使用 [AGPL-3.0-or-later](LICENSE)。保留 [NOTICE](NOTICE)、[第三方许可证](THIRD-PARTY-LICENSES.md)、QuantumNous/new-api 与所有贡献者归属。
+保留 [AGPL-3.0-or-later](LICENSE)、[NOTICE](NOTICE)、[第三方归属](THIRD-PARTY-LICENSES.md)、QuantumNous/new-api 及全部贡献者署名。

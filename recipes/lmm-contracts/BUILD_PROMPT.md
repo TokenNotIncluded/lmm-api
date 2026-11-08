@@ -22,13 +22,13 @@ Core 提供 /v1/models，POST /v1/chat/completions、/v1/responses、/v1/message
 
 流失败码：正常 HTTP EOF 但缺上游协议终态或残留半帧为 `upstream_truncated`；HTTP 传输中断/损坏为 `upstream_connection_error`；非法 UTF-8、JSON 或协议为 `invalid_upstream_response`；客户端主动取消为 `request_cancelled`。前三者在响应尚未开始时为 HTTP 502；已开始 SSE 时使用流内错误表达，不能声称改写已经发送的 HTTP 状态。主动取消保持现有 499 语义，取消后客户端可能已无法接收错误。日志和原操作恢复保留失败类型；这些分类不授权重发已经输出的请求、不把未知用量改成零、不释放未经确认的预留。
 
-原生只读接口 GET /v1/balance、/v1/usage：单一 Bearer opaque Key，验证有效性、允许 IP、scope/同意与读限制；不接受 OAuth token 或别名头冒充该 Key。账号级共享读限制和 /v1/pricing Key 定价读取属于原开发目录的未提交目标，本次不规定其实现已接线。
+原生只读接口 GET /v1/balance、/v1/usage：单一 Bearer opaque Key，验证有效性、允许 IP、scope/同意与读限制；不接受 OAuth token 或别名头冒充该 Key。账号级共享读限制和 /v1/pricing Key 定价读取按各自身份与价格合同交付，真实接线单独验收。
 
 /core/v1/identity、/core/v1/keys、/core/v1/credentials/{id}、/core/v1/teams 与 invite 操作用于核心身份及团队管理。公开 /core/v1/pricing/public、会话 /core/v1/pricing/session、POST /core/v1/pricing/runtime 按各自身份与授权区分结果，不能把私密价格从公开接口泄露。
 
 /health/ready 表达当前已启用能力就绪；/health/model-ready 在模型关闭时为 503；/api/status 保留 capability 信息、版本与请求 ID。公共头不得泄露内部部署/归档/schema 身份。匿名访问受保护资源应拒绝；状态码、结构与具体客户端消费场景一起验收。
 
-内部领域包含 control/commands、ledger、payments、commerce、events 和 assistant；RPC 应分别表达 operation/event/idempotency、actor/payer/scope、金额单位、版本、成功/拒绝/未知结果。固定源码的 contracts/proto/lmm/core/v1/*.proto 只是观察来源；本包 PROTOCOL.md 内含完整固定接口声明，保留服务名、方法、消息字段号、enum 值、metadata 身份边界和错误语义，不要自由改动既有 wire 合同。用黄金字节向量与固定旧 provider/consumer 验证直接互通；本次仅保全声明，没有执行二进制互通验收。
+内部领域包含 control/commands、ledger、payments、commerce、events 和 assistant；RPC 应分别表达 operation/event/idempotency、actor/payer/scope、金额单位、版本、成功/拒绝/未知结果。固定源码的 contracts/proto/lmm/core/v1/*.proto 只是观察来源；本包 PROTOCOL.md 内含完整固定接口声明，保留服务名、方法、消息字段号、enum 值、metadata 身份边界和错误语义，不要自由改动既有 wire 合同。用黄金字节向量与固定旧 provider/consumer 验证直接互通；接口声明与实际二进制互通分别验收。
 
 TOML 配置显式引用绝对秘密文件路径，不展开环境变量或 shell；runtime 不能用 owner 权限。安装、启动、升级、迁移分开。跨进程请求不得持有整个上游流期间的数据库长事务。
 

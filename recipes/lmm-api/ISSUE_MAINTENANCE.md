@@ -1,6 +1,6 @@
 # Issue 修复与旧 PR 迁移合同
 
-本文件把问题单和旧候选中仍需实现的行为纳入可重建需求，补充 COMPLETION_SCOPE.md 的 A04、A05、A07、A09、A10 与 S11。生产、权限、资金和证据门槛继续以 PRODUCTION_ACCEPTANCE.md 及 contracts 配方为准。总跟踪入口为 [#895](https://github.com/TokenNotIncluded/lmm-api/issues/895)；下列合同编号可直接用于其待办与后续源码 PR。
+本文件把 issue 和旧候选中有效的行为要求纳入可重建合同，补充 [产品要求](PRODUCT_REQUIREMENTS.md)、[最终验收合同](PRODUCTION_ACCEPTANCE.md) 及 contracts 配方。下列编号用于追溯需求来源，不是进度列表。**唯一动态进度入口为源码仓库的 [docs/progress.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)**；旧 [#895](https://github.com/TokenNotIncluded/lmm-api/issues/895) 保留为历史讨论来源。
 
 配方在 `TokenNotIncluded/lmm-api/main`，实现位于 `TokenNotIncluded/lmm-api-source/main`，由 `generated/lmm-api-source/` 固定提交接入。旧 PR 的 `services/`、`apps/` 路径属于当时的源码布局；后续实现进入源码仓库，再更新配方和 gitlink。
 
@@ -10,18 +10,18 @@
 2. 以最小完整行为修复问题，同时在对应配方保留输入、输出、权限、单位、失败和恢复条件。复用当前实现，保留其他任务的改动；历史候选按功能提取，不能整文件覆盖后来加入的授权、选路或资金保护。
 3. 在冻结输入上执行能证明该问题已解决的定向检查，记录命令、退出码、实际源码版本及真实限制。已经通过且输入未变的检查可以复用；只对剩余具体风险补验。代码、工具链、依赖或目标合同变化时重新判断证据适用范围。
 4. 修复完成的 issue 必须链接实际源码提交和对应验收。配方更新、文档修订、专项单测和完整产品验收分别登记；遇到缺失环境或未执行的业务链路，保留 BLOCKED/NOT RUN。
-5. 旧 PR 可以在完整承接残留需求后以 `superseded / migrated` 关闭：保留原正文、候选 SHA、失败证据及已抽取范围，指向本文件的合同编号和 #895。这种关闭代表工作位置迁移；只有相关行为在当前输入上通过验收，才把对应合同标为完成。不得因关闭 PR 顺带关闭它关联的尚未完成 issue。
+5. 旧 PR 可以在完整承接残留需求后以 `superseded / migrated` 关闭：保留原正文、候选 SHA、失败证据及已抽取范围，指向本文件的行为合同与新进度入口。这种关闭代表工作位置迁移；只有相关行为在当前输入上通过验收，才把对应合同标为完成。不得因关闭 PR 顺带关闭它关联的尚未完成 issue。
 6. 每次完成当前源码 PR 后，核实远端提交，显式更新父项目 gitlink，再核对最终配方引用。构建、合并、发布、部署与真实外部服务验收各自记录。
 
 ## 旧 PR 的承接范围
 
-| 原候选 | 保留的既有成果 | 仍需完成的合同 |
+| 原候选 | 行为来源 | 对应合同 |
 | --- | --- | --- |
-| [#879](https://github.com/TokenNotIncluded/lmm-api/pull/879)，`cb3276d423bf2d81d4451180dd1e3ff18c1dd6df` | 已接纳的 inbox、渠道、收据和结算恢复；当前源码已有宿主接线，实际 Core/Go 重启的两项恢复历史验收及真实 Core 授权的订单状态读取验收 | PR879-R1 至 R3：支付 readiness、已验证恢复行为的持续保留、其余退款/供应商/资源验收 |
-| [#875](https://github.com/TokenNotIncluded/lmm-api/pull/875)，`0d44fb95c1bb7d11f9e8bc74e963b936f7a0542e` | 当前按归属校验的历史用量读取、有限 JSON/CSV 导出、未知金额与 CSV 防注入保护 | PR875-R1 至 R3：全来源合同、同快照完整财务 ZIP 与真实 HTTP/权限/单位验收 |
-| [#942](https://github.com/TokenNotIncluded/lmm-api/pull/942)，`a7c122ffbade62d7cba38569eca3cf273f0b3a8f` | 已抽取的 12 小时缓存用量、精确价格、结算恢复和展示基础；当前主线的 selected-route、资金预留与来源约束 | PR942-R1 至 R7：搜索与原生供应商、导出/看板、通知、价格管理、schema 升级及未完成候选 |
+| [#879](https://github.com/TokenNotIncluded/lmm-api/pull/879)，`cb3276d423bf2d81d4451180dd1e3ff18c1dd6df` | inbox、渠道、收据、结算恢复及宿主生命周期 | PR879-R1 至 R3：支付就绪、真实进程恢复、退款/供应商/资源 |
+| [#875](https://github.com/TokenNotIncluded/lmm-api/pull/875)，`0d44fb95c1bb7d11f9e8bc74e963b936f7a0542e` | 按归属读取历史用量、JSON/CSV 导出、未知金额与 CSV 防注入 | PR875-R1 至 R3：全来源、同快照财务 ZIP、真实 HTTP/权限/单位 |
+| [#942](https://github.com/TokenNotIncluded/lmm-api/pull/942)，`a7c122ffbade62d7cba38569eca3cf273f0b3a8f` | 12 小时缓存用量、精确价格、结算恢复、selected-route、资金预留与来源约束 | PR942-R1 至 R7：搜索/原生供应商、导出/看板、通知、价格管理、schema 升级及图像任务 |
 
-这是需求映射，不能从“保留的既有成果”推断相应领域已整体验收。原 #875 的专项运行曾修正临时锁文件和格式；原 #942 的测试编译、源码边界以及 schema 证据阻断仍属于原输入，历史专项结果不能覆盖当前组合验证。
+这是来源映射，不能据此推断当前完成状态。原候选、失败记录与逐轮结果见 [固定历史原文](https://github.com/TokenNotIncluded/lmm-api/blob/8f11ef82ac3a20e33406f2cc7478b419e74bfbe6/recipes/lmm-api/ISSUE_MAINTENANCE.md)；历史专项结果不能覆盖当前组合验证。
 
 ## PR879：支付恢复与宿主生命周期
 
@@ -35,7 +35,7 @@
 
 ### PR879-R2：真实 Rust/Go 双进程故障恢复
 
-保留已经通过的真实进程回归。[当前固定源码的支付验收说明](https://github.com/TokenNotIncluded/lmm-api-source/blob/86e51b0708086fb78605ef9f519275149ac47873/tests/payments/README.md) 和 [质量指南](https://github.com/TokenNotIncluded/lmm-api-source/blob/86e51b0708086fb78605ef9f519275149ac47873/docs/quality.md) 已记录两项独立通过：Core 入账 COMMIT 后、Go 本地收据持久化前双产品重启恢复；accepted-proof 实际等待至少 302 秒过期后双产品重启，由真实 Go worker 使用 Core 持久证明完成首次入账。真实 Core 授权的 PREPARED 订单状态读取也有独立验收。上述历史证据按原冻结输入和模拟供应商边界保留，不重新描述成“从未验证 Rust/Go 恢复”，也不转作本轮新运行结果。
+保留历史真实进程回归。[固定源码的支付验收说明](https://github.com/TokenNotIncluded/lmm-api-source/blob/86e51b0708086fb78605ef9f519275149ac47873/tests/payments/README.md) 和 [质量指南](https://github.com/TokenNotIncluded/lmm-api-source/blob/86e51b0708086fb78605ef9f519275149ac47873/docs/quality.md) 记录了以下历史证据：Core 入账 COMMIT 后、Go 本地收据持久化前双产品重启恢复；accepted-proof 实际等待至少 302 秒过期后双产品重启，由真实 Go worker 使用 Core 持久证明完成首次入账。真实 Core 授权的 PREPARED 订单状态读取也有独立验收。这些证据只适用于原冻结输入与模拟供应商边界，不转作当前候选的新运行结果。
 
 重建时在隔离 PostgreSQL 中运行实际 Core 与 Go 宿主，分别冻结二进制、配置、数据库角色和进程身份；供应商可以先使用明确的合成端点。保留已通过场景，补齐尚未覆盖的 inbox/job 交接、精确 RPC 网络回执丢失、退款 hold、provider dispatch 或终态记录结果不明等故障点。原快速用例证明的是 COMMIT 到 Go 本地记录之间中断，不能扩写为已证明精确丢失 Core 网络回包或完整 checkout/refund。
 
@@ -45,7 +45,7 @@
 
 ### PR879-R3：供应商与历史退款完整性
 
-延续 A05 的 provider/支付/订阅矩阵，逐项标明合成、sandbox、真实、未实现及所需验收。新支付退款引用原 Core intent 与 accepted proof；历史退款引用 A03 的不可变 `LegacyPaymentBasis`，绑定原 provider namespace、transaction、商户、环境、币种、归属及累计整数额度。Opening balance 不能充当原充值，新的 native intent 不能替代历史支付依据。
+按 [支付对齐合同](PAYMENT_PARITY.md) 的 provider/支付/订阅矩阵，逐项标明合成、sandbox、真实、未实现及所需验收。新支付退款引用原 Core intent 与 accepted proof；历史退款引用离线迁移的不可变 `LegacyPaymentBasis`，绑定原 provider namespace、transaction、商户、环境、币种、归属及累计整数额度。Opening balance 不能充当原充值，新的 native intent 不能替代历史支付依据。
 
 覆盖部分退款累计、重复/乱序事件、扣款与退款竞争、签名错误、金额/币种冲突及渠道删除。只有可靠绑定的 dispatch/结果证据才允许释放退款 hold。缺少历史来源或尚未实现的供应商验签保持明确不可用，相关金额继续可追踪。
 
@@ -53,7 +53,7 @@
 
 ### PR875-R1：来源、身份与金额合同
 
-完整导出需要 A03 提供真实只读来源、稳定身份/账户/Key 映射、历史/native 去重及退款/作废依据。旧候选使用 `core_history.source_contract_v1`、`log_records_v1`、`quota_data_v1`、`finance_records_v1`、`finance_options_v1` 五个视图；重建时可用当前已审核的等价接口，但必须明确字段、类型、版本、归属和每类来源的唯一完整回执，不能把合成 fixture 当生产 DDL 或迁移证明。
+完整导出需要历史迁移提供真实只读来源、稳定身份/账户/Key 映射、历史/native 去重及退款/作废依据。旧候选使用 `core_history.source_contract_v1`、`log_records_v1`、`quota_data_v1`、`finance_records_v1`、`finance_options_v1` 五个视图；重建时可用当前已审核的等价接口，但必须明确字段、类型、版本、归属和每类来源的唯一完整回执，不能把合成 fixture 当生产 DDL 或迁移证明。
 
 未证明映射与权威证明为空是两种结果。缺失、重复、矛盾或不可验证的来源回执应拒绝完整导出；运行角色对来源整表、单列以及回执有写权限时也拒绝。保留原始 quota，历史美元金额只采用来源冻结的单位与计价基准；未知金额、截断结果、退款和多基准不能由当前汇率或当前价格倒算，也不能把部分小计说成完整总计。
 
@@ -79,13 +79,13 @@
 | `effective-model-pricing.json` | 单独来源证明的有效模型价格 |
 | `manifest.json` | 版本、快照时间、筛选范围、各文档行数、脱敏与截断说明 |
 
-所有记录采用字段白名单，秘密、原始请求、任意嵌套 provider payload、opaque log metadata 和未经授权个人信息不进入归档。敏感 URL 仅允许已审核的来源标识，不暴露 userinfo、路径、query 或 fragment。来源缺失不可生成假空数组。当前较窄导出继续准确报告 `complete_financial_export=false` 和实际 `included_families`；完整合同全部满足后才可声明完整。
+所有记录采用字段白名单，秘密、原始请求、任意嵌套 provider payload、opaque log metadata 和未经授权个人信息不进入归档。敏感 URL 仅允许已审核的来源标识，不暴露 userinfo、路径、query 或 fragment。来源缺失不可生成假空数组。只满足部分来源的导出必须准确报告 `complete_financial_export=false` 和实际 `included_families`；完整合同全部满足后才可声明完整。
 
 ### PR875-R3：有界资源、错误与集成验收
 
 行数、时间范围、每条 metadata/anchor、总输出字节、并发与执行期限均有上限；ZIP 目录和尾部字节也计算在总上限内。分页、统计和每份文档读取同一快照及相同过滤条件。中途序列化、IO 或 ZIP 尾部失败不能返回貌似完整的成功归档；资源限额错误保留限额类别，与来源不可用、格式错误区分。
 
-验收包括真实 PG 的来源缺失/冲突、列级写权限拒绝、并发修改时快照一致、跨账户/团队/Key 越权、native/history 去重、金额单位对账、空/未知/混合基准、只差一个尾部字节的限额和中途 IO 失败。保留 JSON 对 NUL 的合法转义与 CSV 对不安全内容的拒绝；CSV 需处理 BOM、Unicode 空白/控制前缀、公式、编码和换行。实际 HTTP 路由与 Web 下载在固定后端版本下验证，不能由格式函数通过替代。A03 真实来源未交付时，完整历史导出保留依赖阻断。
+验收包括真实 PG 的来源缺失/冲突、列级写权限拒绝、并发修改时快照一致、跨账户/团队/Key 越权、native/history 去重、金额单位对账、空/未知/混合基准、只差一个尾部字节的限额和中途 IO 失败。保留 JSON 对 NUL 的合法转义与 CSV 对不安全内容的拒绝；CSV 需处理 BOM、Unicode 空白/控制前缀、公式、编码和换行。实际 HTTP 路由与 Web 下载在固定后端版本下验证，不能由格式函数通过替代。真实历史来源未交付时，完整历史导出保留依赖阻断。
 
 ## PR942：上游计费与管理能力拆分
 
@@ -125,28 +125,24 @@ DeepSeek search/fetch 及 reasoning/request 参数按其原生合同接入，保
 
 ### PR942-R6：显式 schema 升级
 
-旧候选 component 27 的 26→27 升级尚有 `ROUTING_ADMIN_26_TO_27_PIN_PENDING` 硬阻断。后续迁移必须从当前已审核的真实 schema 建立 predecessor/target/source fingerprint、组件版本、目录证据、owner-only DDL/ACL 和已安装数据库升级路径；旧编号、旧 pin 及全新安装成功不能代替当前既有库升级证明。
+旧候选 component 27 的 26→27 升级曾有 `ROUTING_ADMIN_26_TO_27_PIN_PENDING` 硬阻断，其历史记录不能当作当前 schema 状态。后续迁移必须从当前已审核的真实 schema 建立 predecessor/target/source fingerprint、组件版本、目录证据、owner-only DDL/ACL 和已安装数据库升级路径；旧编号、旧 pin 及全新安装成功不能代替当前既有库升级证明。
 
 在隔离 PostgreSQL 上验证正确前置升级、错误前置拒绝、重复执行、权限和 catalog 全状态读回、失败回滚及 COMMIT 结果不明恢复。运行角色不能 DDL 或自授权限，普通启动仅校验；已存在业务记录与钱不被覆盖。保留原失败到真实证据收齐并纳入新 regression，不能单删 pending 断言、修改受保护 hash 或扩大 runtime 权限让 CI 变绿。
 
-### PR942-R7：候选中未交付的剩余项
+### PR942-R7：图像任务与旧价格桥接
 
-旧 PR 明确未交付的 bounded JS image-task host 与 legacy scalar-price import bridge 继续由 #895 的 A07/A09/A10 承接。图像任务需要受限执行、原始 actor/payer/selected route/credential 固定、任务终态/轮询/取消、可信 usage 与同操作恢复；不能把通用聊天转发等同图像任务宿主。价格桥接必须按冻结来源/单位/模型映射进行精确转换、逐项隔离非法报价、可审阅预览及显式发布；缺失或不支持的旧价格表达式明确阻断，不能以当前默认价替代。
+旧 PR 提出的 bounded JS image-task host 与 legacy scalar-price import bridge 继续作为模型、升级与 Web 的产品要求。图像任务需要受限执行、原始 actor/payer/selected route/credential 固定、任务终态/轮询/取消、可信 usage 与同操作恢复；不能把通用聊天转发等同图像任务宿主。价格桥接必须按冻结来源/单位/模型映射进行精确转换、逐项隔离非法报价、可审阅预览及显式发布；缺失或不支持的旧价格表达式明确阻断，不能以当前默认价替代。
 
-这些目标需先核对当前已实现接口与 A07 原完整要求，复用既有模块。关联的采购成本与销售定价隔离继续按 [#845](https://github.com/TokenNotIncluded/lmm-api/issues/845)、[#850](https://github.com/TokenNotIncluded/lmm-api/issues/850) 跟踪；本文件不将其折叠为“价格管理已完成”。
+这些目标需先核对当前接口与完整模型要求，复用既有模块。关联的采购成本与销售定价隔离继续按 [#845](https://github.com/TokenNotIncluded/lmm-api/issues/845)、[#850](https://github.com/TokenNotIncluded/lmm-api/issues/850) 跟踪；本文件不将其折叠为“价格管理已完成”。
 
-## 状态与追踪要求
+## 证据与进度维护
 
-旧 PR 迁移后，#895 保留 PR879-R1～R3、PR875-R1～R3、PR942-R1～R7 的独立待办及原关联 issue。每条记录采用“固定输入 → 实际行为证据 → 剩余条件 → 源码/配方提交”的顺序。适用的旧证据可引用原版本，不为整理状态反复运行未变化的重型验收。
+在唯一进度入口关联本文件的行为合同与原 issue，采用“固定输入 → 实际行为证据 → 剩余条件 → 源码/配方提交”的顺序。适用的旧证据可引用原版本，不为整理文档反复运行未变化的重型验收；本文件不复制进度勾选或通过计数。
 
-源码和配方中已有的安全拒绝属于有效产品行为；缺失能力仍是待完成目标。任何未运行的真实 PG、实际进程、浏览器、供应商或生产验证继续分别标明。维护 issue 的完成条件是其自身范围得到证明；项目完成条件仍是完整 A01–A10/S11 和生产切换合同。
-
+安全拒绝属于有效产品行为，不能替代缺失能力。真实 PG、实际进程、浏览器、供应商与生产验证分别记录。issue 完成要求证明其自身范围；项目完成要求满足完整产品要求和生产切换合同。
 
 ## ISSUE971-R1：被封禁用户可用的申诉与公开说明
 
-[问题原文 #971](https://github.com/TokenNotIncluded/lmm-api/issues/971) 的重建要求包括 OAuth-only 用户验证绑定身份后提交申诉、明确区分公开说明与内部操作原因、管理员按版本审核、重新登录恢复及闭户/特权/资金边界。具体接口和负例见 ACCEPTANCE.md、lmm-core 与 lmm-web 配方，源码说明为 docs/account-appeals.md。
+[问题原文 #971](https://github.com/TokenNotIncluded/lmm-api/issues/971) 的重建要求包括 OAuth-only 用户验证绑定身份后提交申诉、明确区分公开说明与内部操作原因、管理员按版本审核、重新登录恢复及闭户/特权/资金边界。具体接口和负例见 [验收合同](ACCEPTANCE.md)、lmm-core 与 lmm-web 配方，源码说明见 [account-appeals.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/account-appeals.md)。
 
 代码和隔离数据库/API验收不得替代实际账号的封禁依据查询、人工复核、浏览器验收或生产部署。未取得相应授权并完成这些步骤前保留该 issue，不因提交代码自动关闭。历史升级单测或其他领域未完成项也不从本合同中删去。
-
-
-本轮实现固定源码：[c27eef11d3ba](https://github.com/TokenNotIncluded/lmm-api-source/commit/c27eef11d3ba874fa7b24b0d0d892a3193042110)。隔离 PG/HTTP 申诉、管理员审核、通行密钥和身份回归，以及41→42、32→42实库升级已通过；独立 API 业务验收通过。浏览器与实际账号复核未运行。额外历史升级单测5项在此前41组件版本也已失配，仍待用真实冻结输入修复，不能算本轮通过。

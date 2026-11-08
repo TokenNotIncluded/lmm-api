@@ -18,7 +18,7 @@ Core 保持支付订单资金权威。原始回调先由 Core 验证签名、商
 
 Web 用户入口先取得服务端渠道和精确报价，明确确认后才创建外部 checkout，再按原订单读取结果。固定商品金额不可由客户端修改；金额和 credits 使用精确十进制整数及明确单位。401、响应丢失、刷新页面不能自动重放金融写请求；支付商已收款和 Core 已入账分别展示，只有后者表示钱包到账。capability 与实际装配一致，通过三者联合验收核实。
 
-完整产品矩阵与固定源码证据由集成配方 `lmm-api/PAYMENT_PARITY.md` 维护；本包自身保留上述全部目标，不以该集成文档作为隐藏依赖。当前多 provider 钱包充值候选不代表订阅、商店外部付款、退款闭环或真实支付商验收已完成。
+完整产品矩阵与固定源码证据由集成配方 `lmm-api/PAYMENT_PARITY.md` 维护；本包自身保留上述全部目标，不以该集成文档作为隐藏依赖。钱包充值通过不抵扣订阅、商店外部付款、退款闭环或真实支付商验收。
 
 ## Coinbase Business Checkout
 
@@ -36,4 +36,4 @@ Core 事件经持久投递，consumer 按事件 ID 去重；重启或 Go 停机�
 
 默认配置 /etc/lmm.conf.d/extensions.toml，秘密 /etc/lmm.conf.d/secrets/extensions/，状态 /var/lib/lmm/extensions/，临时 /run/lmm/extensions/。installer/owner 和 runtime 分离；普通启动不改结构，不创建数据库角色。公开法律文档只读快照不带服务凭证、不调用 Core。Web compat 仅显式装配，不能成为绕过 Core 的身份或资金捷径。
 
-Extore 同步保留为待验收集成，不自动推送其 main 或触发部署。未启用模块、超限、失败和依赖不可用要反馈准确错误，不返回空操作成功。
+Extore 同步须独立验证真实两端，不自动推送其 main 或触发部署。未启用模块、超限、失败和依赖不可用要反馈准确错误，不返回空操作成功。

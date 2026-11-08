@@ -2,7 +2,7 @@
 
 历史声明基线：LMM API 固定提交 d468affecfd76a5123358732fb9a4e0cc1f63566，AGPL-3.0-or-later。以下为声明式服务/消息接口，不包含实现或执行钩子。保留原字段号与注释；声明存在不代表对应 RPC 已启用。
 
-`payments.proto` 节同步本轮支付候选的完整声明，包含 `PreparePersonalTopup`、`GetEPayCheckout` 和显式提交方式；新增内容不重编号既有字段。最终固定源码及执行状态由 SOURCE.md 和主项目 STATUS.md 记录，不把候选声明归为旧提交的既有能力。
+`payments.proto` 节包含 `PreparePersonalTopup`、`GetEPayCheckout` 和显式提交方式，既有字段号保持。固定来源见 SOURCE.md，当前执行证据见[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)；声明存在不等于互通或业务验收通过。
 
 ## lmm/core/v1/assistant.proto
 

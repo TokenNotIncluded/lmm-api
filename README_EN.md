@@ -1,19 +1,44 @@
 # LMM API
 
-![Software and dependencies become a recipe for rebuilding software](https://raw.githubusercontent.com/recipkg/recipkg/main/assets/recipkg-cover.png)
+LMM API provides a shared model gateway, identity and permissions, a financial ledger, and business extensions for individuals, teams, and operators. This repository maintains the Recipkg product recipes. Implementation lives in [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source).
 
-This repository is now the Recipkg recipe project. [The integrated recipe](recipes/lmm-api/BUILD_PROMPT.md), its recursive component dependencies and [acceptance criteria](recipes/lmm-api/ACCEPTANCE.md) are the primary inputs.
+**Current work and completion evidence: [source progress tracker](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md).** This repository maintains requirements and acceptance contracts without a second status list.
 
-Implementation lives in [TokenNotIncluded/lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source), pinned as the `generated/lmm-api-source/` Git submodule. Run implementation build/test commands from that directory. The CLI and provider submodules remain nested in the implementation repository.
+[中文](README.md) · [Product requirements](recipes/lmm-api/PRODUCT_REQUIREMENTS.md) · [Integrated recipe](recipes/lmm-api/BUILD_PROMPT.md) · [Acceptance criteria](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)
+
+## Architecture
+
+| Component | Responsibility |
+| --- | --- |
+| Rust `lmm-core` | Sole authority for identity, permissions, ledger, budgets, model routing, and charging |
+| Go `lmm-extensions` | Store, support, assistant, tools, operations, and external payment IO through separate databases and scoped RPC |
+| Rust `lmm` | User client and authorized application integration |
+| Static Web | User, team, and administrator interfaces using actual backend capabilities |
+
+Core can run independently. Extensions cannot directly access the Core database or authorize charges. There are three product executables; Web does not require another resident backend.
+
+## Use the recipes
+
+Install [Recipkg](https://github.com/recipkg/recipkg), then check the integrated package:
 
 ```sh
 recipkg check recipes/lmm-api
 recipkg build recipes/lmm-api --lang en
-git submodule update --init --recursive -- generated/lmm-api-source
 ```
 
-The six recipes preserve Rust Core, Go extensions, the React/TypeScript static Web client, Rust CLI, and shared contracts. Shared project skills remain pinned under `.agents/skills/`; custom skills are preserved. Historical monolith branches are `传统` and `traditional`; `main` is the recipe project's default branch.
+`build` generates reconstruction instructions; it does not compile or accept the application. The integrated recipe depends on [Core](recipes/lmm-core/), [Extensions](recipes/lmm-extensions/), [Web](recipes/lmm-web/), and [CLI](recipes/lmm-cli/), with shared [Contracts](recipes/lmm-contracts/). See the [payment matrix](recipes/lmm-api/PAYMENT_PARITY.md) for provider and business scope.
 
-Repository migration and structural recipe checks do not prove successful reconstruction, business acceptance or production deployment. Uncommitted implementation work remains local to the implementation submodule. See [migration notes](MIGRATION.md), [source evidence](recipes/lmm-api/SOURCE.md) and [中文说明](README.md).
+## Use the pinned implementation
 
-Retain AGPL-3.0-or-later, LICENSE, NOTICE, third-party licenses, QuantumNous/new-api and all contributor attribution.
+```sh
+git submodule update --init --recursive -- generated/lmm-api-source
+git ls-tree HEAD generated/lmm-api-source
+```
+
+The gitlink identifies the implementation pinned by this recipe project. Read and run implementation build, test, and runtime commands inside `generated/lmm-api-source/`. CLI/provider submodules remain nested there. Source changes, builds, independent acceptance, releases, and production deployment require separate evidence.
+
+## Provenance and license
+
+[Source provenance](recipes/lmm-api/SOURCE.md) and the [repository migration record](MIGRATION.md) preserve the reconstruction basis. The historical monolith is reproducible from [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) and its commit; no historical branch name is required.
+
+Retain [AGPL-3.0-or-later](LICENSE), [NOTICE](NOTICE), [third-party attribution](THIRD-PARTY-LICENSES.md), QuantumNous/new-api, and all contributor credits.

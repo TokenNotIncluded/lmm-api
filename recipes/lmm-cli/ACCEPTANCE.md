@@ -5,7 +5,7 @@
 - setup --dry-run 不写配置、不装应用、不读秘密；阻塞原因可定位，不把空动作显示成功。
 - 合成 issuer/测试凭据库验证 PKCE、错误 state、取消、token 撤销与 issuer 隔离；失败不得删除仍需恢复的本地凭据。
 - models/balance 对 401/403、网络错误、未知币种与单位、服务不可用准确失败；模型查询不触发付费模型调用，余额失败不显示 0。
-- Linux/Pi 1.2.0 的 add-only 必须针对显式实例和 Node，预览后只修改授权 Provider 范围，不安装 Pi、不复制 CLI token。真实 Pi 测试本轮未执行。
+- Linux/Pi 1.2.0 的 add-only 必须针对显式实例和 Node，预览后只修改授权 Provider 范围，不安装 Pi、不复制 CLI token。真实 Pi 接入单独记录证据。
 - 各平台分别记录构建/凭据库/OAuth 与行为结果，不从支持表推断已验收。
 
-所有执行项本轮 NOT RUN。未测启动延迟、包体积和系统库性能。
+实际执行、平台差异及启动延迟/包体积/系统库测量由[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)关联固定证据，未执行项明确保留。

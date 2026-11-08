@@ -22,4 +22,4 @@
 
 认证页采用暖白表单与炭黑交互面板，移动端保留可折叠游戏。价格页突出实际模型、价格、币种和单位，指南页采用宽松阅读区；保留现有语言、登录方式、权限、会话、支付确认及错误恢复行为。HTML-in-Canvas 不改变这些业务接口。
 
-官方接口依据：[Chrome HTML-in-Canvas，2026-10-26](https://developer.chrome.com/blog/html-in-canvas)。当次构建、普通 DOM、原生 Canvas、桌面与窄屏截图分别记录于主项目 STATUS.md；无法执行的路径如实保留。
+官方接口依据：[Chrome HTML-in-Canvas，2026-10-26](https://developer.chrome.com/blog/html-in-canvas)。构建、普通 DOM、原生 Canvas、桌面与窄屏分别记录证据，由[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)索引；无法执行的路径如实保留。
