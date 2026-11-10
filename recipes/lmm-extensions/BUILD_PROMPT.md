@@ -4,6 +4,8 @@
 
 模块按显式配置启用：商店商品/订单/购物车与完整购买退款，客服消息与归属，助手预设/会话/脱敏历史/归档、工具市场和 MCP 接入、运营和支付适配、公开法律文档快照。模块存在不代表启用。未装配模型执行的助手返回不可用，不伪造对话。扩展不得根据模型输出、浏览器角色或 host token 自行授权付款、管理动作或 sponsored payer。
 
+助手 `POST /api/assistant/chat` 在显式 `Accept: text/event-stream` 时输出已绑定原 turn 的有界 SSE；当前模型前缀只作可替换的暂态观察，只有 Core 持久 settled 回执可完成历史或宣称成功。按 conversation/turn 的只读 output 重连不启动模型或工具，提供当前前缀而非假装支持事件游标；显式 cancel 使用原操作，未知取消结果保留资金义务。断开观察不得自动取消、重发或创造新 turn。只有实际 Core 执行与流能力均可用时宣告 stream_enabled；未接通真实上游时保持不可用，不能用一次性 JSON 包装冒充流。
+
 ## 支付网关与业务范围
 
 支付适配负责向支付商下单、查询和接收回调，Core 决定这笔钱属于谁、能否入账以及能退多少。恢复旧单体 `3948a0a1ee1cefdd016a7aa45a11851545bb4b85` 的五类 provider：EPay、Stripe、Creem、Waffo Global、Waffo Pancake。EPay 包含支付宝、微信、LINUX DO Credit 和管理员明确配置的自定义 type；这些是同一协议下的支付方式。保留各网关独立的配置、凭据、环境和启用条件，不能以一个 Stripe 用例或一个 provider 枚举代替全部接入。
@@ -31,6 +33,10 @@ Web 用户入口先取得服务端渠道和精确报价，明确确认后才创�
 协议依据：[创建 Checkout](https://docs.cdp.coinbase.com/api-reference/business-api/rest-api/checkouts/create-checkout)、[JWT 认证](https://docs.cdp.coinbase.com/coinbase-business/authentication-authorization/api-key-authentication)、[签名验证](https://docs.cdp.coinbase.com/webhooks/verify-signatures)、[Checkout 事件](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/webhooks)与 [Sandbox](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/sandbox)。
 
 ## 宿主与运行边界
+
+脚本仓库提供 `GET/PUT /api/scripts/repository` 和 `POST /api/scripts/repository/pull`，每次管理请求重新向 Core 验证管理员权限。配置读回只含仓库 URL、分支、版本和快照来源，不泄露秘密；保存携带读取时的 `revision`，冲突拒绝。公开 GitHub 仓库可先形成独立切片：仅从固定 GitHub archive 服务读取有界 ZIP，不运行 git、解压到文件系统或执行脚本；复用公共网络地址校验与超时，检查文件名、重复项、文件类型、数量及解压后总大小。私有仓库凭据接入须另行完成；未支持时明确拒绝非空密钥，不能静默丢弃后宣称保存成功。
+
+拉取期间不持有数据库事务；全部内容检查通过后按原配置版本原子替换完整快照，并推进版本。配置改变、并发旧拉取、无效/空归档或网络失败不能覆盖最近成功内容。快照记录自己的来源、分支和拉取时间，不能把改后的配置冒充已发布来源；公共列表与 raw 路由读取同一持久快照，重启后可读。配置与快照只写运营独立数据库，runtime 仅有精确 SELECT/UPDATE；新表由离线 owner 安装或升级，普通启动不执行 DDL。已有安装时审阅的文件系统快照保持自身合同。
 
 Core 事件经持久投递，consumer 按事件 ID 去重；重启或 Go 停机后恢复，不阻塞 Core 的模型链路。支持明确准入/排空与停止，已接纳记录保持可恢复；不声称模块内内存限制具有进程隔离能力。
 
