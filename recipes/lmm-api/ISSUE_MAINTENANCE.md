@@ -143,6 +143,6 @@ DeepSeek search/fetch 及 reasoning/request 参数按其原生合同接入，保
 
 ## ISSUE971-R1：被封禁用户可用的申诉与公开说明
 
-[问题原文 #971](https://github.com/TokenNotIncluded/lmm-api/issues/971) 的重建要求包括 OAuth-only 用户验证绑定身份后提交申诉、明确区分公开说明与内部操作原因、管理员按版本审核、重新登录恢复及闭户/特权/资金边界。具体接口和负例见 [验收合同](ACCEPTANCE.md)、lmm-core 与 lmm-web 配方，源码说明见 [account-appeals.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/account-appeals.md)。
+[问题原文 #971](https://github.com/TokenNotIncluded/lmm-api/issues/971) 的重建要求包括 OAuth-only 用户验证绑定身份后提交申诉、明确区分公开说明与内部操作原因、管理员按版本审核、重新登录恢复及闭户/特权/资金边界。具体接口和负例见 [验收合同](ACCEPTANCE.md)、lmm-core 与 lmm-web 配方，源码说明见 [账号停用与申诉](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/core-identity.md#账号停用与申诉)。
 
 代码和隔离数据库/API验收不得替代实际账号的封禁依据查询、人工复核、浏览器验收或生产部署。未取得相应授权并完成这些步骤前保留该 issue，不因提交代码自动关闭。历史升级单测或其他领域未完成项也不从本合同中删去。
