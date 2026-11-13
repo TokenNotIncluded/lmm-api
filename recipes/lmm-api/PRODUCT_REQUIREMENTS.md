@@ -4,6 +4,8 @@
 
 ## 范围与来源
 
+本次迁移允许重新创建旧商店商品、库存及工具市场内容，不以这些旧内容及其凭据的完整恢复作为上线门槛；这不取消商店和工具市场功能要求，也不豁免已有订单、付款、退款、账本及持续权益的核对与恢复责任。
+
 旧架构的可重现参考是 [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) 及其源码提交 `cc52aa195c6f2a01d703a1a407be73c31b89867d`；支付使用 [PAYMENT_PARITY.md](PAYMENT_PARITY.md) 单独固定的来源。按实际路由、页面、权限和资金行为对齐；路径迁移、能力暂时关闭或新目录缺失，都不能删除原需求。新增 CLI 目标与旧服务端兼容范围分别验收。
 
 当前实现位于 `TokenNotIncluded/lmm-api-source`，精确版本读取父仓库 `git ls-tree HEAD generated/lmm-api-source`，嵌套 CLI/providers 再按该源码提交的 gitlink 固定。历史来源、当前实现、可安装制品和生产运行是不同证据。
