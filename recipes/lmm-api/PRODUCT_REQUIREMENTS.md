@@ -40,6 +40,8 @@ Core 使用 [zconv](https://crates.io/crates/zconv) 完成模型协议转换，�
 
 MFA 在密码通过阶段只下发短期 challenge，并绑定 purpose、user、auth_version、期限和尝试次数。须分别验证：TOTP 窗口、一次性 backup code、恢复、启停时的代际撤销，以及并发消费。Passkey 须核对 RP ID、origin、challenge、签名计数、用户验证与会话绑定；过期、重放和错误用途一律拒绝。
 
+注册、修改和重置密码按 Unicode 码点执行相同的 8–20 字符规则，原密码登录不套用新密码长度限制。关闭密码登录不应移除 Passkey 的可选用户名输入，不支持账号发现的安全密钥仍须能完成登录；Passkey 不可借表单提交触发已关闭的密码登录。登录、注册和找回密码须在验证过期时清除人机验证令牌，每次提交后获取新令牌以支持失败重试。第三方注册开关只限制新账号，不影响已有账号登录；原生联合认证取代的旧入口不得继续被计为可用注册方式。
+
 OAuth 登录、OAuth2 授权服务器、OIDC 与远控客户端授权须分别覆盖。须保留：provider 的登录与绑定/解绑；catalog、authorize、token、revoke；discovery、JWKS、userinfo；consent 与 scope；state、nonce、PKCE；精确的 redirect 白名单；授权码单次使用；以及 refresh family 的轮换与撤销。须检查 issuer 与 audience、密钥轮换、账号链接的冲突与接管、内网 discovery 与 SSRF；公开 client 不得冒充 confidential client。单个 provider 通过，不代表其他 provider 已完成。
 
 Cookie 按 SameSite、Secure、HttpOnly、CSRF、origin 与受信代理的合同相互隔离，并有实际的限流与审计。Key secret 只存 hash 或经批准的可恢复密文；主密钥轮换与重加密须保留版本，且不泄露、不清库。邮件的出箱接纳、SMTP 接受与收件箱送达须分别记录；邮件配置缺失、身份代际变化和过期验证码，都不得放行。
