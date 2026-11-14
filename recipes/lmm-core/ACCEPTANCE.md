@@ -50,3 +50,5 @@ Native 先存再首次导入旧站的共存路线另核对完整身份、开账�
 ## 独立桌面应用授权验收
 
 执行 contracts 的[完整 managed application 验收](../lmm-contracts/MANAGED_APPLICATIONS.md)：真实隔离 PostgreSQL、受限 runtime 与 Core HTTP 分别核对同意、严格交换、实时状态、安装/client 隔离、共享有限预算、撤销、旧只读/Pi 兼容和精确轮换恢复。真实提交丢响应、并发、599/600 秒、后继消费、权限变更、重启及专用密钥轮换/缺失/损坏均需回读。新装、精确 69→70 升级、ACL 及提交丢回执独立验证；不调用付费供应商，不能用假 token、发现字段或客户端 mock 替代完整接线。
+
+对 [Magpie](../lmm-contracts/MAGPIE.md)另验独立配置上限、生命周期 consumed/reserved/remaining 投影、耗尽拒绝和跨 CC Switch/Pi/安装隔离。近段时间 usage 列表不替代预算核算；第 70 组件扩展后重新执行新装、升级和受限角色验收，旧候选通过不自动转移。

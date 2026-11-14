@@ -43,3 +43,5 @@ Web/Go 的 `/api/user/payments/` 渠道、quote、checkout 及订单读取固定
 ## 独立桌面应用
 
 实现[独立应用授权与轮换恢复](MANAGED_APPLICATIONS.md)的完整共享合同，由 Core 与 CLI 共同消费。只读 CLI、Pi 和独立安装家族隔离，有限预算与既有账务边界保持；字段、实时状态、精确轮换恢复及显式数据库升级均不可只在单端实现。
+
+实现 [Magpie 原生 provider 合同](MAGPIE.md)：独立客户端与预算、真实家族额度读取、官方 OAuth/refresh/usage 插件生命周期和本机持久恢复。共享协议不等于共享凭据或额度，近段时间用量不能冒充生命周期预算；所有声明绑定真实客户端与 Core 的固定候选验收。

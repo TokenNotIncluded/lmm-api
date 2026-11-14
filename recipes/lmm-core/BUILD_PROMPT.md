@@ -112,4 +112,4 @@ Core 在 Go 停止时仍提供 `GET /core/v1/affiliate/claim` 预览；可选 `a
 
 ## 独立应用授权
 
-Core 实现 contracts 依赖中的[独立应用授权与轮换恢复](../lmm-contracts/MANAGED_APPLICATIONS.md)，复用既有 OAuth 发行器、Session/MFA、PKCE、有限模型预算与账本。首个客户端为 lmm-cc-switch；安装绑定、浏览器同意、实时状态、加密轮换回执、模型授权及撤销必须完整接线后再发布 discovery。新数据库状态使用追加组件和精确 69→70 owner 升级；旧 69 组件 SQL、封印与验收保留，不因新代码存在自动沿用到新候选。
+Core 实现 contracts 依赖中的[独立应用授权与轮换恢复](../lmm-contracts/MANAGED_APPLICATIONS.md)及 [Magpie 原生客户端](../lmm-contracts/MAGPIE.md)，复用既有 OAuth 发行器、Session/MFA、PKCE、有限模型预算与账本。lmm-cc-switch 与 lmm-magpie 分别配置有限上限、安装绑定、浏览器同意及家族预算；实时状态、同准入口径的生命周期预算投影、加密轮换回执、模型授权及撤销必须完整接线后再发布对应 discovery。新数据库状态使用追加组件和精确 69→70 owner 升级；旧 69 组件 SQL、封印与验收保留，不因新代码存在自动沿用到新候选。

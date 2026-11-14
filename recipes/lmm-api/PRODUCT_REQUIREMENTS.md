@@ -188,6 +188,8 @@ CLI 为独立 Rust 子项目，保持 `lmm` 名称，XDG config/state/cache、TO
 
 与 [Magpie](https://usemagpie.ai/) 对齐属于独立新增目标：先核产品、真实来源和 LICENSE，再按目标软件/版本验证可恢复接入、配置预览/确认、失败/更新/撤销。只复用明确许可的源码并保留 attribution，无公开源码不能声称复用；客户端不能自行裁定扣款或复制其他应用凭据。CLI 子仓库提交须可达，父 gitlink、测试与制品绑定同一提交。
 
+同时提供 [Magpie 原生 provider](../lmm-contracts/MAGPIE.md)：独立 `lmm-magpie` 客户端与安装、浏览器 PKCE、用户明确同意的有限预算、真实家族额度读取、模型目录与调用、刷新恢复和单设备撤销。它使用 Core 既有身份与账务权威，不复用 CC Switch/Pi/Web 凭据或共享应用额度；通用 API Key 导入不算原生支持完成。服务端独立配置该客户端上限，默认关闭，完整真实 Magpie 验收后才声明支持。
+
 ## 最终验证与资源门槛
 
 各领域共享固定源码、依赖/工具链、接口版本、schema、配置、来源/目标和制品清单；孤立 PASS 不能拼成最终组合 PASS。Core 全 all-targets/真实 PG、clippy/fmt；Go readonly modules/race/vet/fmt/build 与模块 pgtest；完整 Web suite/typecheck/相关 lint/format/build/bundle；CLI 固定提交 fmt/clippy/test；协议、边界、工作流、分发、路径、文档及法律配置门槛按实际仓库命令执行。保留唯一测试数、失败、skip 与真实子进程版本，工具与依赖遵守锁定配置。
