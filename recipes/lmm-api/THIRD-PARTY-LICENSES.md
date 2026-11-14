@@ -1,12 +1,10 @@
 # Third-Party Licenses
 
-This file summarizes direct third-party dependencies used by distributed builds of this project.
-It is an engineering compliance artifact and should be kept with Docker images, standalone binaries, frontend bundles, and Electron installers.
+This recipe-side inventory preserves attribution from earlier distributions and the initial Rust TOML adoption. Its versions are historical; it is not the dependency inventory of the current implementation.
 
-Scope: direct dependencies from `services/extensions/go.mod` and `apps/web/package.json`.
-The new Rust TOML parser from `services/core/Cargo.toml` is also recorded below;
-this addition is not a complete audit of all Rust or transitive dependencies.
-Transitive dependencies should be audited before a final external release.
+The current implementation maintains its distribution inventory in [lmm-api-source/THIRD-PARTY-LICENSES.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/THIRD-PARTY-LICENSES.md). Use the inventory and license texts from the exact source revision being packaged, together with its manifests and lockfiles. The historical notices below remain intact for earlier distributions.
+
+Neither inventory alone constitutes a complete audit of transitive dependencies before an external release.
 
 ## Dependency Inventory
 

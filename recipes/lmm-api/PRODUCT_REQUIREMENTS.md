@@ -1,68 +1,70 @@
 # 产品要求
 
-本文件定义 LMM API 必须保留的行为、拒绝与恢复条件。具体接口和验收向量由各组件配方补充，完成证据按 [PRODUCTION_ACCEPTANCE.md](PRODUCTION_ACCEPTANCE.md) 核对。**唯一动态进度入口是源码仓库的 [docs/progress.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)**；这里不保存任务状态、负责人分工或逐轮测试计数。
+本文件规定 LMM API 必须保留的行为，以及拒绝与恢复的条件。具体接口和验收向量由各组件配方补充，完成证据按 [PRODUCTION_ACCEPTANCE.md](PRODUCTION_ACCEPTANCE.md) 核对。**动态进度的唯一入口是源码仓库的 [docs/progress.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)**；本文件不保存任务状态、负责人分工或逐轮测试计数。
 
 ## 范围与来源
 
 本次迁移允许重新创建旧商店商品、库存及工具市场内容，不以这些旧内容及其凭据的完整恢复作为上线门槛；这不取消商店和工具市场功能要求，也不豁免已有订单、付款、退款、账本及持续权益的核对与恢复责任。
 
-旧架构的可重现参考是 [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) 及其源码提交 `cc52aa195c6f2a01d703a1a407be73c31b89867d`；支付使用 [PAYMENT_PARITY.md](PAYMENT_PARITY.md) 单独固定的来源。按实际路由、页面、权限和资金行为对齐；路径迁移、能力暂时关闭或新目录缺失，都不能删除原需求。新增 CLI 目标与旧服务端兼容范围分别验收。
+旧架构的可重现参考是 [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) 及其源码提交 `cc52aa195c6f2a01d703a1a407be73c31b89867d`；支付以 [PAYMENT_PARITY.md](PAYMENT_PARITY.md) 单独固定的来源为准。须按实际的路由、页面、权限和资金行为对齐；路径迁移、能力暂时关闭或新目录缺失，都不能成为删除原需求的理由。新增的 CLI 目标与旧服务端兼容范围分别验收。
 
-当前实现位于 `TokenNotIncluded/lmm-api-source`，精确版本读取父仓库 `git ls-tree HEAD generated/lmm-api-source`，嵌套 CLI/providers 再按该源码提交的 gitlink 固定。历史来源、当前实现、可安装制品和生产运行是不同证据。
+当前实现位于 `TokenNotIncluded/lmm-api-source`，确切版本用父仓库的 `git ls-tree HEAD generated/lmm-api-source` 读取；嵌套的 CLI/providers 再按该源码提交中的 gitlink 固定。历史来源、当前实现、可安装制品和生产运行，是各自独立的证据。
 
 ## 架构与数据权威
 
-- 仅有三个产品程序：Rust `lmm-core`、Go `lmm-extensions`、Rust 客户端 `lmm`。Web 是 React/TypeScript 静态产物；Core 保持单 Cargo 项目，扩展模块属于同一 Go 宿主，不新增部署守护进程或通用调度平台。
-- Core 独占身份、权限、渠道模型秘密、价格、付款方、预算、账本和模型请求权威。Go 拥有独立模块数据库、必要外部 IO 凭据和窄 RPC 权限；不取得 Core DSN，不通过 root Key 代用户调用模型，不依据浏览器、模型输出或 host token 自行授予资金权限。
-- 用户、操作人、Key owner、账户、团队、付款方和资源所有者分别建模。合同固定字段类型、单位、版本、scope、幂等键、UNKNOWN 与错误语义；provider/consumer 不用任意 JSON 透传绕过合同。Protobuf 既有字段号、enum 值及 wire 兼容由 contracts 配方保护。
-- 运行配置为 TOML，默认 `/etc/lmm.conf.d/core.toml`、`/etc/lmm.conf.d/extensions.toml`；秘密为独立私有文件。HTTP/合同/证据 JSON 不属于运行配置。配置不执行 shell 或隐式环境展开；秘密、原始用户数据和敏感付款材料不进入参数、日志、Git、截图或公开输出。
-- Core 在 Go 完全停止时仍能提供已授权身份与模型服务；已接纳流不依赖 Go 存活。事件持久投递，消费者按事件 ID 去重；能力、readiness、worker、准入和排空必须反映同一实际装配结果。
+- 产品只有三个程序：Rust `lmm-core`、Go `lmm-extensions` 和 Rust 客户端 `lmm`。Web 是 React/TypeScript 静态产物；Core 保持为单个 Cargo 项目，扩展模块同属一个 Go 宿主；不新增部署守护进程，也不引入通用调度平台。
+- Core 独占身份、权限、渠道模型秘密、价格、付款方、预算、账本和模型请求的权威。Go 拥有独立的模块数据库、必要的外部 IO 凭据和窄 RPC 权限；它不取得 Core DSN，不通过 root Key 代用户调用模型，也不依据浏览器、模型输出或 host token 自行授予资金权限。
+- 用户、操作人、Key owner、账户、团队、付款方和资源所有者须分别建模。合同固定字段类型、单位、版本、scope、幂等键，以及 UNKNOWN 与错误语义；provider 与 consumer 不得用任意 JSON 透传来绕过合同。Protobuf 既有的字段号、enum 值和 wire 兼容性，由 contracts 配方保护。
+- 运行配置使用 TOML，默认路径为 `/etc/lmm.conf.d/core.toml` 和 `/etc/lmm.conf.d/extensions.toml`；秘密放在独立的私有文件中。HTTP、合同与证据 JSON 不属于运行配置。配置不执行 shell，也不做隐式的环境变量展开；秘密、原始用户数据和敏感的付款材料，不得进入参数、日志、Git、截图或公开输出。
+- Go 完全停止时，Core 仍能提供已授权的身份与模型服务；已接纳的流不依赖 Go 存活。事件须持久投递，消费者按事件 ID 去重；能力、readiness、worker、准入与排空必须反映同一份实际装配结果。
 
 ## 模型协议转换依赖
 
-Core 使用 [zconv](https://crates.io/crates/zconv) 承担模型协议转换，依赖版本由源码 Cargo.lock 固定。小步接入须实际生成目标协议请求，并核对现有文本、图片、工具调用及提供商专属字段的行为；不接受仅增加依赖或调用身份转换作为完成。协议转换不取得凭据、价格或资金权限；准入、传输、用量证据及结算仍由 Core 负责。请求、完整响应和流式事件的接入范围及未完成部分分别记录并验收。 路由目标可显式限定客户端协议；未配置限制时保留既有行为。限制在选路及上游发送前生效，不能仅隐藏目录；同一渠道的其他目标不受牵连。首发暂缓的协议组合须明确列出，不能静默改模型或丢弃字段。
+Core 使用 [zconv](https://crates.io/crates/zconv) 完成模型协议转换，依赖版本由源码的 Cargo.lock 固定。接入须小步推进，并实际生成目标协议的请求，核对现有文本、图片、工具调用和提供商专属字段的行为；只增加依赖或只调用恒等转换，不算完成。协议转换不取得凭据、价格或资金权限；准入、传输、用量证据与结算仍由 Core 负责。请求、完整响应和流式事件的接入范围，以及尚未完成的部分，须分别记录并验收。
+
+路由目标可以显式限定客户端协议；未配置限制时，保留既有行为。限制须在选路和向上游发送之前生效，不能只是隐藏目录；同一渠道的其他目标不受牵连。首发暂缓的协议组合须明确列出，不得静默更换模型或丢弃字段。
 
 ## 身份与权限
 
 ### 动作授权与特权激活
 
-完整动作矩阵覆盖 root/admin/普通用户、显式 allow/deny、团队 owner/admin/member、developer 手动审批/付费激活、信任等级与折扣，以及渠道、采购、用户、团队、密钥、账本、订单、工具和财务读取。显式 deny 优先；每个真实操作检查 action/resource/tenant，拒绝未知动作、空资源、跨账户/团队、自报角色或付款方。菜单和 DTO 不授予权限。
+完整的动作矩阵覆盖：root、admin 与普通用户；显式 allow/deny；团队的 owner、admin 与 member；developer 的手动审批与付费激活；信任等级与折扣；以及渠道、采购、用户、团队、密钥、账本、订单、工具和财务读取。显式 deny 优先；每个真实操作都检查 action、resource 与 tenant，并拒绝未知动作、空资源、跨账户或跨团队访问，以及自报的角色或付款方。菜单和 DTO 不授予权限。
 
-旧特权账号逐个离线批准。材料绑定同一 source archive、原用户与身份事实、权限合同版本、策略摘要和目标实例；策略或来源不完整时保持停用。完整核验后在同一事务内最后激活，写审计、提升 auth_version、执行 CAS 并撤销原凭据。运行角色不能批准或导入；不能通过置 active、另建 root、关闭 MFA 或伪造 setup 成功绕开审批。
+旧的特权账号须逐个离线批准。批准材料绑定同一份 source archive、原用户与身份事实、权限合同版本、策略摘要和目标实例；策略或来源不完整时，账号保持停用。完整核验之后，在同一事务内最后激活，并写入审计、提升 auth_version、执行 CAS、撤销原凭据。运行角色不能批准或导入；不得通过置 active、另建 root、关闭 MFA 或伪造 setup 成功来绕开审批。
 
-验证所有角色、资源和撤权组合；两个批准竞争只能发生一次；COMMIT 回执丢失按原批准 ID 恢复。冲突/拒绝后无关表和序列不变，旧会话与 Key 按冻结合同失效，管理入口不能扩大财务或目录可见性。
+须验证所有角色、资源和撤权的组合；两个批准并发竞争时只能成功一次；COMMIT 回执丢失时，按原批准 ID 恢复。冲突或拒绝之后，无关的表和序列保持不变，旧会话与 Key 按冻结的合同失效，管理入口也不能扩大财务或目录的可见范围。
 
 ### 认证、会话与客户端
 
-保留注册、bcrypt/Argon2 密码、邮箱绑定/验证/重置、验证码/Turnstile/邀请码/条款、登录/刷新/注销、会话列表与定向撤销、旧个人 token 轮换、个人/团队 API Key 创建/完整更新/显示/撤销，以及 Key 的组、IP、别名、预算限制。高权限动作要求真实当前 Session；API Key 和 host token 不能替代。密码重置撤销旧会话，旧 token 轮换要求 Session。
+须保留：注册；bcrypt/Argon2 密码；邮箱的绑定、验证与重置；验证码、Turnstile、邀请码与条款；登录、刷新与注销；会话列表与定向撤销；旧个人 token 的轮换；个人与团队 API Key 的创建、完整更新、显示与撤销；以及 Key 的组、IP、别名和预算限制。高权限动作要求真实的当前 Session，API Key 和 host token 不能代替。密码重置会撤销旧会话，旧 token 的轮换要求 Session。
 
-MFA 的密码通过阶段只发短期 challenge；绑定 purpose/user/auth_version/期限/尝试次数。TOTP 窗口、一次性 backup code、恢复、启停代际撤销及并发消费分别验证。Passkey 核对 RP ID、origin、challenge、签名计数、用户验证与会话绑定；过期、重放及错误用途拒绝。
+MFA 在密码通过阶段只下发短期 challenge，并绑定 purpose、user、auth_version、期限和尝试次数。须分别验证：TOTP 窗口、一次性 backup code、恢复、启停时的代际撤销，以及并发消费。Passkey 须核对 RP ID、origin、challenge、签名计数、用户验证与会话绑定；过期、重放和错误用途一律拒绝。
 
-OAuth 登录、OAuth2 授权服务器、OIDC 和远控客户端授权分别覆盖。保留 provider 登录与绑定/解绑、catalog/authorize/token/revoke、discovery/JWKS/userinfo、consent/scope、state/nonce/PKCE、精确 redirect 白名单、授权码单用及 refresh family 轮换/撤销。检查 issuer/audience、密钥轮换、账号链接冲突与接管、内网 discovery/SSRF；公开 client 不冒充 confidential client。单个 provider 通过不代表其他 provider 完成。
+OAuth 登录、OAuth2 授权服务器、OIDC 与远控客户端授权须分别覆盖。须保留：provider 的登录与绑定/解绑；catalog、authorize、token、revoke；discovery、JWKS、userinfo；consent 与 scope；state、nonce、PKCE；精确的 redirect 白名单；授权码单次使用；以及 refresh family 的轮换与撤销。须检查 issuer 与 audience、密钥轮换、账号链接的冲突与接管、内网 discovery 与 SSRF；公开 client 不得冒充 confidential client。单个 provider 通过，不代表其他 provider 已完成。
 
-Cookie 按 SameSite/Secure/HttpOnly、CSRF、origin 和受信代理合同隔离，并有实际限流/审计。Key secret 仅存 hash 或已批准的可恢复密文，主密钥轮换/重加密保留版本且不泄露、不清库。邮箱出箱接纳、SMTP 接受与收件箱送达分别记录；邮件配置缺失、身份代际变化、过期验证码均不得放行。
+Cookie 按 SameSite、Secure、HttpOnly、CSRF、origin 与受信代理的合同相互隔离，并有实际的限流与审计。Key secret 只存 hash 或经批准的可恢复密文；主密钥轮换与重加密须保留版本，且不泄露、不清库。邮件的出箱接纳、SMTP 接受与收件箱送达须分别记录；邮件配置缺失、身份代际变化和过期验证码，都不得放行。
 
 ### HumanGrant
 
-HumanGrant 保留明确人工 consent、Ed25519 请求签名与 nonce、原 AI 单次 claim、持久授权/撤销、策略 revision 和原人类 Session 代际绑定。`account.profile.read` 仅允许读取批准者本人的数字 account ID；不得交换成人类 Session/API Key，也不授权模型、余额、团队资金或管理动作。
+HumanGrant 须保留：明确的人工 consent、Ed25519 请求签名与 nonce、原 AI 的单次 claim、持久授权与撤销、策略 revision，以及与原人类 Session 代际的绑定。`account.profile.read` 只允许读取批准者本人的数字 account ID；不得换取人类 Session 或 API Key，也不授权模型、余额、团队资金或管理动作。
 
-Web 保留 “Continue with human beings”、enabled/ready 显示规则、root 真实 Cookie 设置、独立审批页和本人撤销。purpose 作为不可信文本展示，权限默认不勾选，开关恢复不能复活旧 grant。真实 Cookie 登录至 consent/claim/profile/revoke、PG 并发/进程重启/撤销均须验证，测试登录 seam 不代替真实主机流程。
+Web 须保留“Continue with human beings”、enabled/ready 的显示规则、root 的真实 Cookie 设置、独立的审批页和本人撤销。purpose 作为不可信文本展示，权限默认不勾选，开关恢复后不得复活旧 grant。须验证从真实 Cookie 登录到 consent、claim、profile、revoke 的完整流程，以及 PG 并发、进程重启和撤销；测试登录 seam 不能代替真实的主机流程。
 
 ## 资金、订阅与历史迁移
 
-账本使用受界整数，`credit_500k_usd` 的 500000 单位对应 1 USD；历史单位必须由冻结来源及转换证明确定。wallet、debt、affiliate、预留、收入和持续托管权利分别保留。金额未知不按零、当前汇率、当前目录或时间猜测；原始整数、unknown 原因与来源一并保留。
+账本使用有界整数，`credit_500k_usd` 以 500000 单位对应 1 USD；历史单位须由冻结的来源及转换证明确定。wallet、debt、affiliate、预留、收入和持续托管权利分别保留。金额未知时，不得按零、当前汇率、当前目录或时间去猜；原始整数、unknown 原因与来源一并保留。
 
-来源合同包括余额/欠款/返佣、已用计数、Key 剩余额度与历史使用、订阅额度/周期/无限/never、充值退款、bounty escrow、净付费/激活、原价格基准和 rebase。离线材料按只读 plan → mapping → 原 SQL → 完整 manifest 形成，绑定归档/观测点、完整 ID map、逐行摘要、目标 system-id/OID/boot/nonce、NOLOGIN owner、全部 schema/catalog 和空库/预置种子合同。
+来源合同包括：余额、欠款与返佣；已用计数；Key 的剩余额度与历史使用；订阅的额度、周期、无限与 never；充值与退款；bounty escrow；净付费与激活；原价格基准及 rebase。离线材料按“只读 plan → mapping → 原 SQL → 完整 manifest”的顺序形成，并绑定归档与观测点、完整的 ID map、逐行摘要、目标的 system-id/OID/boot/nonce、NOLOGIN owner、全部 schema 与 catalog，以及空库或预置种子的合同。
 
-导入由独立 owner 在有明确授权的隔离目标内原子执行；运行服务和 worker 停止，无并发 client，runtime/Go 不能导入或重写来源。同 ID 同材料可精确重放，同 ID 异 mapping 或异 ID 冲突拒绝；目标事实 CAS、无关表/序列和账本守恒。COMMIT 结果未知先结束原连接、取得 advisory fence，再查原 ID；不得换 ID 或盲重试。后续导入阶段或应用写入开始后，不能重跑早期严格回放。
+导入由独立的 owner，在获得明确授权的隔离目标内原子执行；运行服务和 worker 须已停止，不得有并发 client，runtime 与 Go 也不能导入或重写来源。同 ID、同材料可精确重放；同 ID 异 mapping 或异 ID 冲突则拒绝；须保证目标事实的 CAS、无关表与序列不变，以及账本守恒。COMMIT 结果未知时，先结束原连接并取得 advisory fence，再查原 ID，不得换 ID 或盲目重试。后续导入阶段或应用开始写入之后，不能重跑早期的严格回放。
 
-同一账本为模型、商店、支付及工具提供有来源、受权和幂等的预留/结算/退款、订阅消费、转账、兑换/礼品、affiliate 收益/追偿、bounty escrow/释放。Go 不选择任意账户执行通用 post-json；历史开账不伪造成模型请求、新充值或旧回调重放。Key hash 不能推导明文，无法等价恢复时执行明确轮换/撤销策略。
+同一份账本，为模型、商店、支付与工具提供有来源、受授权且幂等的各类操作：预留、结算与退款，订阅消费，转账，兑换与礼品，affiliate 的收益与追偿，以及 bounty escrow 与释放。Go 不得选择任意账户执行通用的 post-json；历史开账不得伪造成模型请求、新充值或旧回调的重放。Key hash 无法推导出明文，无法等价恢复时，执行明确的轮换或撤销策略。
 
-旧站普通钱包模型预扣须按固定来源保留可用性：估计预扣与完整授权费用上界分别冻结，不因整段上下文最坏额把原本可支付短请求的账号一概拒绝。估计不成为供应商 token 上界或实际用量；最终仅依权威用量、原价和原付款方结算。兼容路径在单一事务内补足预留并结算；现金不足时，只能按经来源核对的普通模型消费规则建立该请求的受限欠款，不绕过 Key/共享预算、订阅权益或技术上界，不开放通用任意欠费。重复、并发、撤权后的已发生消费、提交未知及退款现金/欠款拆分须保留原操作绑定；未知用量保持待对账，不按估计或零结算。原生默认预留规则不因启用特定旧站兼容策略而全局改变。
+旧站普通钱包的模型预扣，须按固定来源保留可用性：估计预扣与完整授权的费用上界分别冻结，不能因整段上下文的最坏额，就把原本付得起短请求的账号一概拒绝。估计值不是供应商的 token 上界，也不是实际用量；最终只依据权威用量、原价和原付款方结算。兼容路径在单一事务内补足预留并结算；现金不足时，只能按经来源核对的普通模型消费规则，为该请求建立受限欠款，不得绕过 Key 或共享预算、订阅权益或技术上界，也不开放通用的任意欠费。重复、并发、撤权后已发生的消费、提交未知，以及退款时的现金与欠款拆分，须保留与原操作的绑定；用量未知时保持待对账，不按估计值或零结算。启用特定的旧站兼容策略，不得全局改变原生的默认预留规则。
 
-原生余额订阅、兑换、签到和红包按已确认整数 credits 工作；未知历史法币估值不禁用这些已有明确价格和授权的业务。订阅购买/续期/取消/未用退款及管理绑定、失效、删除、重置券/批量重置保留各自规则。价格、额度、回执不随 USD/CNY 展示偏好改写；外部支付仍须真实渠道与明确报价。
+原生的余额订阅、兑换、签到和红包，按已确认的整数 credits 运作；未知的历史法币估值，不会使这些价格与授权明确的既有业务失效。订阅的购买、续期、取消和未用退款，以及管理端的绑定、失效、删除、重置券与批量重置，各自保留原有规则。价格、额度和回执不随 USD/CNY 的展示偏好改写；外部支付仍须使用真实渠道和明确报价。
 
-验证负余额和先偿债、affiliate 分离、整数溢出/舍入、订阅时区/DST/月末/never/无限、共用预算、历史 Key 与新预留、撤权期间合法退款、并发/重复导入、错误来源/映射/归属/角色/实例/catalog、部分 SQL 回滚及 ACK 丢失。实际应用余额、逐账户/币种/周期与总账对账同时成立；纯 RecordingLedger 或 plan 比较不能证明已迁移。
+须验证：负余额与先偿债；affiliate 分离；整数溢出与舍入；订阅的时区、DST、月末、never 与无限；共用预算；历史 Key 与新预留；撤权期间的合法退款；并发与重复导入；错误的来源、映射、归属、角色、实例与 catalog；部分 SQL 回滚；以及 ACK 丢失。应用的实际余额，与逐账户、逐币种、逐周期及总账的对账须同时成立；单纯的 RecordingLedger 或 plan 比较，不能证明已完成迁移。
 
 ## 历史读取与财务导出
 
