@@ -9,3 +9,7 @@
 - 各平台分别记录构建/凭据库/OAuth 与行为结果，不从支持表推断已验收。
 
 实际执行、平台差异及启动延迟/包体积/系统库测量由[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)关联固定证据，未执行项明确保留。
+
+## 独立应用端到端验收
+
+按[共享应用合同](../lmm-contracts/MANAGED_APPLICATIONS.md)，使用真实受信任 QA HTTPS、独立测试身份、Core、系统凭据库和明确原生 cc-switch 实例，完成安装绑定同意、实时授权证明、add-only 接入、sync、响应丢失与凭据保存失败后的同操作恢复，以及配置回执恢复。验证预算、安装/issuer/client 隔离、撤销及用户选择保持，不发付费模型请求。合成 Store/Exchange 与安装通过均不能抵扣实际授权、sync 或会话恢复；各平台及生产状态分别记录。

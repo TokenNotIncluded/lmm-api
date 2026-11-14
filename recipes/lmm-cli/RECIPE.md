@@ -5,9 +5,9 @@ format = "recipkg/1"
 
 [package]
 name = "lmm-cli"
-version = "0.1.0"
+version = "0.1.1"
 kind = "software"
-description = "Rust 桌面 OAuth、只读发现与显式应用接入预览客户端"
+description = "Rust 桌面 OAuth、只读发现与独立授权应用接入客户端"
 entry = "BUILD_PROMPT.md"
 
 [dependencies.contracts]

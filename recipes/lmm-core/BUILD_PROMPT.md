@@ -109,3 +109,7 @@ Core 在 Go 停止时仍提供 `GET /core/v1/affiliate/claim` 预览；可选 `a
 领取仅将既有 affiliate 权益通过受控账本转入本人钱包，先偿还钱包欠款，不新增返佣、不擦除负 affiliate。预览和 posted/rejected 账本收据同事务完成，重复确认返回原结果；已拒绝的预览不因后续补款重新执行。未消费预览十分钟过期；终态收据可由原有效会话及原证明继续恢复。HTTP 错误、非 JSON 或响应丢失均保持结果未知，界面允许原确认重试，不引导另建转账。
 
 新预览和未消费确认均要求旧支付策略 `payment_setting.compliance_confirmed=true` 与 `payment_setting.compliance_terms_version=v1`；离线导入原样保留这些事实，缺失、false 或旧版本不补造授权。新装以第 52 组件 `affiliate-claims` 保存预览和终态，runtime 只有所需列和序列权限；本能力不提供 51→52 既有库升级，也不代替历史返佣尾款结算。
+
+## 独立应用授权
+
+Core 实现 contracts 依赖中的[独立应用授权与轮换恢复](../lmm-contracts/MANAGED_APPLICATIONS.md)，复用既有 OAuth 发行器、Session/MFA、PKCE、有限模型预算与账本。首个客户端为 lmm-cc-switch；安装绑定、浏览器同意、实时状态、加密轮换回执、模型授权及撤销必须完整接线后再发布 discovery。新数据库状态使用追加组件和精确 69→70 owner 升级；旧 69 组件 SQL、封印与验收保留，不因新代码存在自动沿用到新候选。

@@ -39,3 +39,7 @@ TOML 配置显式引用绝对秘密文件路径，不展开环境变量或 shell
 `CorePayments.GetEPayCheckout` 只对既有 Core intent 的固定字段签名，调用受宿主 prepare 权限约束，不能提供任意 URL、金额、订单或参数让 Core 代签。EPay 的下单和回调共用密钥只保留在 Core，RPC 输出 `EPayCheckout` 的 intent、订单、HTTPS `checkout_url` 及明确 `method`。`method` 的合同值为 `GET` 或 `POST`：GET 打开完整 URL，POST 将原 URL query 的所有字段作为表单体提交到去掉 query 的端点，不能按域名猜方法。Linux DO LDC 使用 POST `https://credit.linux.do/epay/pay/submit.php`。完整消息声明以 [PROTOCOL.md](PROTOCOL.md#lmmcorev1paymentsproto) 为准，既有字段号、服务名和 enum 数值保持；新增 `method` 使用字段号 4。
 
 Web/Go 的 `/api/user/payments/` 渠道、quote、checkout 及订单读取固定同一原请求，JSON 金额和 credit units 使用十进制整数字符串，分别保留 USD/CNY/EUR/LDC 和 `credit_500k_usd`。checkout 状态显式返回 `checkout_method`，支付商收款 `provider_paid` 与 Core 入账 `core_credit_confirmed` 分开。Core 接受可信证明、账本入账和退款各有独立持久回执；UNKNOWN 不换 key，回调不能凭 Go 的 verified 标记获得资金权威。FastPay 不进入 provider 注册或可启用合同，历史标记及拒绝 fixtures 保留。
+
+## 独立桌面应用
+
+实现[独立应用授权与轮换恢复](MANAGED_APPLICATIONS.md)的完整共享合同，由 Core 与 CLI 共同消费。只读 CLI、Pi 和独立安装家族隔离，有限预算与既有账务边界保持；字段、实时状态、精确轮换恢复及显式数据库升级均不可只在单端实现。

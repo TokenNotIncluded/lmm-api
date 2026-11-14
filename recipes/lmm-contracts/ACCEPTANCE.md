@@ -13,3 +13,7 @@
 - Rust provider 与 Go consumer 对新增方法、消息及 `EPayCheckout.method = 4` 编解码一致，原字段号和 enum 值没有改动；API 整数大于 JavaScript 安全整数仍无精度损失，LDC 不被解释为现金或隐式换汇。接收证明、支付商收款、Core 入账、退款各状态不能混为成功；GET/POST handoff、UNKNOWN 恢复与未启用 FastPay 由实际消费方分别验证。
 
 本文件定义验收条件；当前执行结果和未运行项由[源码进度列表](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)关联固定证据。保留既有二进制 wire 互通与完整资金验收的独立门槛。
+
+## 独立应用合同
+
+逐项执行[独立应用授权与轮换恢复](MANAGED_APPLICATIONS.md)中的跨客户端、跨安装、预算、六百秒恢复及升级验收；共享向量须覆盖九字段 token、实时状态、599/600 秒边界和真实提交丢响应。接口形状与合成向量通过不代表 Core/CLI 端到端通过。
