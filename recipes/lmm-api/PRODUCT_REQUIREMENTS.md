@@ -207,3 +207,7 @@ CLI 为独立 Rust 子项目，保持 `lmm` 名称，XDG config/state/cache、TO
 ## 历史保全
 
 旧任务提示词、当时的工作区/分工与逐轮结果保留在 [固定原文快照](https://github.com/TokenNotIncluded/lmm-api/blob/8f11ef82ac3a20e33406f2cc7478b419e74bfbe6/recipes/lmm-api/COMPLETION_SCOPE.md)。本文件按领域重组其有效要求，并继续纳入 [PAYMENT_PARITY.md](PAYMENT_PARITY.md)、[ISSUE_MAINTENANCE.md](ISSUE_MAINTENANCE.md) 和组件配方的细化合同；历史提示词不提供当前操作授权。
+
+## L0 页面预览与充值引导
+
+超级管理员可随时切换到完整 L0 只读视图并退出恢复原页面，覆盖真实 L0 的导航、页面及路由限制。账号、凭据与服务端权限保持不变；预览状态与真实身份隔离，账号变化时清除。全站保留退出入口，预览不得把管理员私有数据当成 L0 数据，不得执行支付、凭据创建及其他业务写入。钱包提供清晰的模型浏览、充值入口与资格说明；书签小工具与 Logo 保持一致，支持手机与桌面。七语言与真实浏览器检查按 Web 验收合同执行，转化提升以实际数据衡量。
