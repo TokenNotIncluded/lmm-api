@@ -1,0 +1,116 @@
+name: Qualified recipe release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/recipe-release-request.json]
+
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: recipe-release
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: github.repository == 'TokenNotIncluded/lmm-api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      revision: ${{ steps.package.outputs.revision }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: recipkg/cli-source
+          ref: 7b7f11ce4aaa7d63f922c57a82b227c8aa6b1f3f
+          path: .release-tools/recipkg
+          persist-credentials: false
+      - name: Verify published implementation and package recipes
+        id: package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B scripts/test-recipe-release.py
+          python3 -B scripts/recipe-release.py --cli .release-tools/recipkg --output "$RUNNER_TEMP/recipe-release"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: qualified-recipes-${{ github.sha }}
+          path: ${{ runner.temp }}/recipe-release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: qualify
+    if: github.repository == 'TokenNotIncluded/lmm-api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.qualify.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: qualified-recipes-${{ github.sha }}
+          path: ${{ runner.temp }}/recipe-release
+      - name: Publish the qualified recipe snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.qualify.outputs.version }}
+          RECIPE_REVISION: ${{ needs.qualify.outputs.revision }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/recipe-release"
+          sha256sum --check SHA256SUMS
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          repository = os.environ["GITHUB_REPOSITORY"]
+          revision = os.environ["RECIPE_REVISION"]
+          version = os.environ["RELEASE_VERSION"]
+          tag = "recipes-v" + version
+          record = json.loads(Path("source.json").read_text())
+          if record["repository"] != repository or record["revision"] != revision or record["version"] != version:
+              raise SystemExit("qualified artifacts differ from the release request")
+          def api(path, *arguments):
+              return json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/{path}", *arguments], text=True))
+          if api("git/ref/heads/main")["object"]["sha"] != revision:
+              raise SystemExit("main advanced after qualification; qualify the new revision")
+          refs = [ref for ref in api("git/matching-refs/tags/" + tag) if ref["ref"] == "refs/tags/" + tag]
+          if refs:
+              target = refs[0]["object"]
+              for _ in range(8):
+                  if target["type"] != "tag":
+                      break
+                  target = api("git/tags/" + target["sha"])["object"]
+              if target["type"] != "commit" or target["sha"] != revision:
+                  raise SystemExit("existing recipe tag identifies a different commit")
+          else:
+              api("git/refs", "--method", "POST", "-f", "ref=refs/tags/" + tag, "-f", "sha=" + revision)
+          releases = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"], text=True))
+          if any(release["tag_name"] == tag for page in releases for release in page):
+              raise SystemExit("release already exists; inspect it instead of overwriting assets")
+          Path("notes.md").write_text(
+              f'LMM API recipe {version}, Core recipe {record["core"]}, parent revision {revision}.\n\n'
+              f'Implementation: {record["source_release"]} at {record["source_revision"]}.\n\n'
+              "The recipe archives include their recursive Markdown dependencies. "
+              "The parent source archive contains recipe repository files. source.json identifies the implementation gitlink; "
+              "the archive does not embed the implementation or skill submodules.\n\n"
+              "Recipe checks, archive checks and recursive prompt generation passed. "
+              "Application acceptance, installation and production deployment are separate outcomes.\n"
+          )
+          files = [str(path) for path in sorted(Path('.').iterdir()) if path.name != "notes.md"]
+          subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--verify-tag", "--prerelease",
+                          "--title", "LMM API recipes " + version, "--notes-file", "notes.md", *files], check=True)
+          PY
