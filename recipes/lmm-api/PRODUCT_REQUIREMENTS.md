@@ -8,6 +8,8 @@
 
 旧架构的可重现参考是 [go-v0.2.118](https://github.com/TokenNotIncluded/lmm-api/releases/tag/go-v0.2.118) 及其源码提交 `cc52aa195c6f2a01d703a1a407be73c31b89867d`；支付以 [PAYMENT_PARITY.md](PAYMENT_PARITY.md) 单独固定的来源为准。须按实际的路由、页面、权限和资金行为对齐；路径迁移、能力暂时关闭或新目录缺失，都不能成为删除原需求的理由。新增的 CLI 目标与旧服务端兼容范围分别验收。
 
+本轮架构明确退役开发者资格审批与付费激活、平台信任等级和 LMM/Pi 内置远程控制；旧版对齐及历史任务快照不要求恢复这些功能。普通有效账户登录后即可使用已配置且启用的用户功能，实际管理权限、资源归属、账号安全和资金边界继续生效。远程控制属于独立的 ssmcp 项目，不计入 LMM 的部署程序或自动桥接范围；已发生的资金、权限和审计记录仍须保全。
+
 当前实现位于 `TokenNotIncluded/lmm-api-source`，确切版本用父仓库的 `git ls-tree HEAD generated/lmm-api-source` 读取；嵌套的 CLI/providers 再按该源码提交中的 gitlink 固定。历史来源、当前实现、可安装制品和生产运行，是各自独立的证据。
 
 ## 架构与数据权威
@@ -26,13 +28,15 @@ Core 使用 [zconv](https://crates.io/crates/zconv) 完成模型协议转换，�
 
 ## 身份与权限
 
-### 动作授权与特权激活
+### 动作授权与历史管理特权恢复
 
-完整的动作矩阵覆盖：root、admin 与普通用户；显式 allow/deny；团队的 owner、admin 与 member；developer 的手动审批与付费激活；信任等级与折扣；以及渠道、采购、用户、团队、密钥、账本、订单、工具和财务读取。显式 deny 优先；每个真实操作都检查 action、resource 与 tenant，并拒绝未知动作、空资源、跨账户或跨团队访问，以及自报的角色或付款方。菜单和 DTO 不授予权限。
+完整的动作矩阵覆盖 root、admin 与普通用户，显式 allow/deny，团队的 owner、admin 与 member，以及渠道、采购、用户、团队、密钥、账本、订单、工具和财务读取。普通用户不经过开发者资格审批、付费激活或平台等级判断；root/admin 仅用于实际管理权限，团队角色仍限制对应资源。显式 deny 优先；每个真实操作都检查 action、resource 与 tenant，并拒绝未知动作、空资源、跨账户或跨团队访问，以及自报的角色或付款方。菜单和 DTO 不授予权限。
 
-旧的特权账号须逐个离线批准。批准材料绑定同一份 source archive、原用户与身份事实、权限合同版本、策略摘要和目标实例；策略或来源不完整时，账号保持停用。完整核验之后，在同一事务内最后激活，并写入审计、提升 auth_version、执行 CAS、撤销原凭据。运行角色不能批准或导入；不得通过置 active、另建 root、关闭 MFA 或伪造 setup 成功来绕开审批。
+旧 root/admin 等实际管理特权账号的恢复须逐个离线批准。批准材料绑定同一份 source archive、原用户与身份事实、权限合同版本、策略摘要和目标实例；策略或来源不完整时，账号保持停用。完整核验之后，在同一事务内最后激活，并写入审计、提升 auth_version、执行 CAS、撤销原凭据。运行角色不能批准或导入；不得通过置 active、另建 root、关闭 MFA 或伪造 setup 成功来绕开审批。
 
 须验证所有角色、资源和撤权的组合；两个批准并发竞争时只能成功一次；COMMIT 回执丢失时，按原批准 ID 恢复。冲突或拒绝之后，无关的表和序列保持不变，旧会话与 Key 按冻结的合同失效，管理入口也不能扩大财务或目录的可见范围。
+
+用户能力按当前会话、有效账号、资源与团队权限、abuse 状态、预算/余额和服务 readiness 判定。没有显式模型组分配时可使用可用的 default 组，目录仅展示已发布且启用的模型；存在显式分配时仅使用获准且启用的组，显式禁用不能通过默认回退绕过。旧 developer 标记、等级值或客户端缓存不能改变该规则。新价格按配置的分组/渠道和用量规则计算，签到采用统一基础奖励与独立日上限；历史冻结报价、折扣、等级字段和结算回执按原操作保留，不重写历史账务。
 
 ### 认证、会话与客户端
 
@@ -42,7 +46,7 @@ MFA 在密码通过阶段只下发短期 challenge，并绑定 purpose、user、
 
 注册、修改和重置密码按 Unicode 码点执行相同的 8–20 字符规则，原密码登录不套用新密码长度限制。关闭密码登录不应移除 Passkey 的可选用户名输入，不支持账号发现的安全密钥仍须能完成登录；Passkey 不可借表单提交触发已关闭的密码登录。登录、注册和找回密码须在验证过期时清除人机验证令牌，每次提交后获取新令牌以支持失败重试。第三方注册开关只限制新账号，不影响已有账号登录；原生联合认证取代的旧入口不得继续被计为可用注册方式。
 
-OAuth 登录、OAuth2 授权服务器、OIDC 与远控客户端授权须分别覆盖。须保留：provider 的登录与绑定/解绑；catalog、authorize、token、revoke；discovery、JWKS、userinfo；consent 与 scope；state、nonce、PKCE；精确的 redirect 白名单；授权码单次使用；以及 refresh family 的轮换与撤销。须检查 issuer 与 audience、密钥轮换、账号链接的冲突与接管、内网 discovery 与 SSRF；公开 client 不得冒充 confidential client。单个 provider 通过，不代表其他 provider 已完成。
+OAuth 登录、OAuth2 授权服务器与 OIDC 须分别覆盖；CLI 和 Pi provider 的有效客户端授权继续按自身模型与账户 scope 验证。须保留：provider 的登录与绑定/解绑；catalog、authorize、token、revoke；discovery、JWKS、userinfo；consent 与 scope；state、nonce、PKCE；精确的 redirect 白名单；授权码单次使用；以及 refresh family 的轮换与撤销。须检查 issuer 与 audience、密钥轮换、账号链接的冲突与接管、内网 discovery 与 SSRF；公开 client 不得冒充 confidential client。单个 provider 通过，不代表其他 provider 已完成。
 
 Cookie 按 SameSite、Secure、HttpOnly、CSRF、origin 与受信代理的合同相互隔离，并有实际的限流与审计。Key secret 只存 hash 或经批准的可恢复密文；主密钥轮换与重加密须保留版本，且不泄露、不清库。邮件的出箱接纳、SMTP 接受与收件箱送达须分别记录；邮件配置缺失、身份代际变化和过期验证码，都不得放行。
 
@@ -56,7 +60,7 @@ Web 须保留“Continue with human beings”、enabled/ready 的显示规则、
 
 账本使用有界整数，`credit_500k_usd` 以 500000 单位对应 1 USD；历史单位须由冻结的来源及转换证明确定。wallet、debt、affiliate、预留、收入和持续托管权利分别保留。金额未知时，不得按零、当前汇率、当前目录或时间去猜；原始整数、unknown 原因与来源一并保留。
 
-来源合同包括：余额、欠款与返佣；已用计数；Key 的剩余额度与历史使用；订阅的额度、周期、无限与 never；充值与退款；bounty escrow；净付费与激活；原价格基准及 rebase。离线材料按“只读 plan → mapping → 原 SQL → 完整 manifest”的顺序形成，并绑定归档与观测点、完整的 ID map、逐行摘要、目标的 system-id/OID/boot/nonce、NOLOGIN owner、全部 schema 与 catalog，以及空库或预置种子的合同。
+来源合同包括：余额、欠款与返佣；已用计数；Key 的剩余额度与历史使用；订阅的额度、周期、无限与 never；充值与退款；bounty escrow；历史净付费与原激活记录；原价格基准及 rebase。离线材料按“只读 plan → mapping → 原 SQL → 完整 manifest”的顺序形成，并绑定归档与观测点、完整的 ID map、逐行摘要、目标的 system-id/OID/boot/nonce、NOLOGIN owner、全部 schema 与 catalog，以及空库或预置种子的合同。
 
 导入由独立的 owner，在获得明确授权的隔离目标内原子执行；运行服务和 worker 须已停止，不得有并发 client，runtime 与 Go 也不能导入或重写来源。同 ID、同材料可精确重放；同 ID 异 mapping 或异 ID 冲突则拒绝；须保证目标事实的 CAS、无关表与序列不变，以及账本守恒。COMMIT 结果未知时，先结束原连接并取得 advisory fence，再查原 ID，不得换 ID 或盲目重试。后续导入阶段或应用开始写入之后，不能重跑早期的严格回放。
 
@@ -146,7 +150,7 @@ OpenAiChatV1 仍要求显式 text/audio，旧收据按原冻结版本恢复。�
 
 真实 Core OS 故障覆盖 dispatch 前后、partial 输出、终态持久后 finalize 前及 COMMIT ACK 丢失；逐 attempt 记录外发次数，恢复不得再调用不确定操作、重复结算或丢 checkpoint。验证各格式 golden/差分、真实 PG 预算、取消/重连、group/IP/alias、同 key 异请求、个人/团队/平台资金隔离；停止 Go 后已接纳模型流继续按原合同处理。
 
-## 助手、工具市场与远控
+## 助手与工具市场
 
 普通对话、平台客服/赞助、预设复制、历史/归档、系统 prompt、工具范围、附件、setup guide；市场发布版本、发现/价格、用户授权、预算/次数/期限、OAuth 绑定、MCP 连接、执行/退款及持久 call-status 均须有真实入口。价格/版本变化不能沿用不相容的旧同意。
 
@@ -160,7 +164,7 @@ OpenAiChatV1 仍要求显式 text/audio，旧收据按原冻结版本恢复。�
 
 调用绑定 conversation owner/tenant、actor、payer/sponsor 政策、tool/price version、预算、expiry、nonce、operation key。metadata 发现与有副作用 invoke 分离；先持久 operation 再请求外部，超时/ACK 丢失按原 call-id 查证，不盲重试购买、发信、转账。退款有原 call/失败证据且只能一次。
 
-MCP HTTP/SSE/Streamable、OAuth 及远控保持固定协议。限制 redirect/DNS/内网、响应大小/期限、工具 schema 与结果秘密；网页/仓库/工具输出是不可信数据，不升级为服务指令。保留来源归属和许可。Pi/远控持久记录设备、会话、所有者、授权、恢复与断线撤销，不形成无 scope 任意命令执行器。
+MCP HTTP/SSE/Streamable 与 OAuth 保持各自固定协议。限制 redirect/DNS/内网、响应大小/期限、工具 schema 与结果秘密；网页/仓库/工具输出是不可信数据，不升级为服务指令。保留来源归属和许可。Pi provider 继续提供其明确的认证和模型能力，移除内置远控客户端、设备/会话控制、远控命令、工具和 scope；遗留远控配置不能重新注册这些能力。ssmcp 的独立远控能力不构成 LMM 已实现自动接入或桥接的证据。
 
 验证真实 GoPG 历史 + CorePG 委托模型 + 计数 MCP 的联合对话，真实 Go OS 重启后状态恢复；跨用户/会话/租户、伪造 payer/sponsor、撤权、版本/价格篡改、重复 execute、UNKNOWN、并发预算耗尽、退款重复和恶意输出。缺桥接/权限/账本时明确拒绝且无扣款；MemoryStore 或 controlledFunds 不能代替最终证据。
 
@@ -208,6 +212,6 @@ CLI 为独立 Rust 子项目，保持 `lmm` 名称，XDG config/state/cache、TO
 
 旧任务提示词、当时的工作区/分工与逐轮结果保留在 [固定原文快照](https://github.com/TokenNotIncluded/lmm-api/blob/8f11ef82ac3a20e33406f2cc7478b419e74bfbe6/recipes/lmm-api/COMPLETION_SCOPE.md)。本文件按领域重组其有效要求，并继续纳入 [PAYMENT_PARITY.md](PAYMENT_PARITY.md)、[ISSUE_MAINTENANCE.md](ISSUE_MAINTENANCE.md) 和组件配方的细化合同；历史提示词不提供当前操作授权。
 
-## L0 页面预览与充值引导
+## 普通用户页面预览与充值引导
 
-超级管理员可随时切换到完整 L0 只读视图并退出恢复原页面，覆盖真实 L0 的导航、页面及路由限制。账号、凭据与服务端权限保持不变；预览状态与真实身份隔离，账号变化时清除。全站保留退出入口，预览不得把管理员私有数据当成 L0 数据，不得执行支付、凭据创建及其他业务写入。钱包提供清晰的模型浏览、充值入口与资格说明；书签小工具与 Logo 保持一致，支持手机与桌面。七语言与真实浏览器检查按 Web 验收合同执行，转化提升以实际数据衡量。
+超级管理员可随时切换到普通用户只读预览并退出恢复原页面，覆盖普通用户的导航、页面及路由规则。账号、凭据与服务端权限保持不变；预览状态与真实身份隔离，账号变化时清除。全站保留退出入口，预览不得把管理员私有数据当成普通用户数据，不得执行支付、凭据创建及其他业务写入；普通用户的真实会话仍按服务端授权使用功能。钱包提供清晰的模型浏览、当前价格、可用充值渠道和确认步骤，不展示开发者资格或等级解锁要求；书签小工具与 Logo 保持一致，支持手机与桌面。七语言与真实浏览器检查按 Web 验收合同执行，转化提升以实际数据衡量。

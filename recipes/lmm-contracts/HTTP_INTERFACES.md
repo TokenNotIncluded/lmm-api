@@ -2,6 +2,8 @@
 
 固定提交的静态路由声明，不等于真实主入口已装配或已鉴权验收。排除测试目录/文件和常规 cfg(test) 后的代码。方法列为首个构建器，链式附加方法须随接口实现核对；不包含变量路由、宏或动态生成项，因此不是完整 OpenAPI 替代品。本表供观察定位，不能以声明存在判定功能可用。明确公开行为见 BUILD_PROMPT.md，原生只读 JSON 见 READ_API.md。
 
+内置远控已退出 LMM 的 HTTP 合同，本表移除其旧路由观察项。远程控制属于独立的 ssmcp 项目，不表示 LMM 自动代理或桥接该项目；其余历史观察行号仍须对照相应固定源码核实。
+
 | 路径 | 首个构建器 | 观察来源 |
 | --- | --- | --- |
 | `/core/v2/admin/abuse/users` | `get` | `services/core/src/abuse/admin/v2.rs:478` |
@@ -203,7 +205,6 @@
 | `/core/v1/pricing/public` | `get` | `services/core/src/pricing_http.rs:177` |
 | `/core/v1/pricing/session` | `get` | `services/core/src/pricing_http.rs:178` |
 | `/core/v1/pricing/runtime` | `post` | `services/core/src/pricing_http.rs:179` |
-| `/api/remote-control/v1/pi/{*path}` | `any` | `services/core/src/remote_control.rs:268` |
 | `/internal/support/v1/customers` | `post` | `services/core/src/support_projection/http.rs:84` |
 | `/internal/support/v1/capabilities` | `post` | `services/core/src/support_projection/http.rs:85` |
 | `/internal/tool-market/v2/meta/oauth-clients` | `post` | `services/core/src/tool_market/credit_http.rs:299` |
