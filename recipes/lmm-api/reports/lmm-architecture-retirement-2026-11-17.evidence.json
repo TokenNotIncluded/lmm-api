@@ -1,0 +1,670 @@
+{
+  "schema_version": 1,
+  "document_state": "final_verified_scope",
+  "generated_at_utc": "2026-11-17T20:42:56.246687+00:00",
+  "language": "zh-CN",
+  "task_requirements": [
+    {
+      "id": "ordinary_user_access",
+      "requested": "取消开发者资格区分，普通有效账号登录后即可使用已启用功能",
+      "implementation_reported": "developer approval/paid activation gates removed; real session/account/resource/team/admin/MFA/abuse/funding controls retained",
+      "completion_verdict": "implemented_and_verified_in_reported_scope"
+    },
+    {
+      "id": "remove_builtin_remote_control",
+      "requested": "移除 LMM 和 Pi 内置远程控制",
+      "implementation_reported": "Core/Go/Web/protobuf/scopes and Pi remote client/commands/autostart removed; DSH Pi pin updated",
+      "completion_verdict": "implemented_and_verified_in_reported_scope",
+      "ssmcp_boundary": "Independent project; automatic bridge/proxy/integration is not claimed"
+    },
+    {
+      "id": "remove_platform_trust_levels",
+      "requested": "移除平台信任等级",
+      "implementation_reported": "Active level gates, pricing multipliers, policy editor and reward multipliers retired; historical records/schema retained",
+      "completion_verdict": "implemented_and_verified_in_reported_scope"
+    }
+  ],
+  "repositories": {
+    "source": {
+      "repository": "TokenNotIncluded/lmm-api-source",
+      "branch": "main",
+      "last_github_verified_commit": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "last_github_verified_tree": "9adae55fdd9bc580d2325369295b698c13318b9b",
+      "current_candidate_commit": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "current_candidate_tree": "9adae55fdd9bc580d2325369295b698c13318b9b",
+      "current_candidate_core_tree": "dcbff1c77b7750cc502b57a205739ce6f83455a8",
+      "candidate_change": "One test password fixture shortened to satisfy existing 8–20 character rule; production authorization unchanged",
+      "candidate_push_verification": "main_and_checkpoint_pushed_and_github_verified",
+      "final_commit": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "provenance": "Root GitHub readback report; candidate metadata from root",
+      "previous_web_validated_commit": "7c0af204303efdba618345dc4b4f890e3f403c1b",
+      "final_tree": "9adae55fdd9bc580d2325369295b698c13318b9b",
+      "final_core_tree": "dcbff1c77b7750cc502b57a205739ce6f83455a8"
+    },
+    "parent": {
+      "repository": "TokenNotIncluded/lmm-api",
+      "branch": "main",
+      "docs_commit": "ebf61ae74e8ab0234f62fc374a66bcd4808a4f04",
+      "docs_commit_pushed_and_github_verified": true,
+      "recipe_files_changed": 6,
+      "final_source_gitlink_commit": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "final_parent_commit": "82c06110ef97b990bfd72382b5d8af067a364c1b",
+      "provenance": "Root commit and GitHub readback report",
+      "current_tracked_source_gitlink": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "current_gitlink_is_final": true,
+      "parent_commit_scope": "source pin; this report is committed subsequently without changing the pin"
+    },
+    "pi": {
+      "repository": "TokenNotIncluded/pi-lmm-provider",
+      "version": "0.1.0-alpha.7",
+      "commit": "472b57f694c557aeebfb80074bf81905b3502537",
+      "pushed_and_github_verified": true,
+      "provenance": "Previously completed root/provider work and GitHub verification"
+    },
+    "dsh": {
+      "repository": "TokenNotIncluded/dsh-lmm-provider",
+      "version": "0.1.0-alpha.9",
+      "commit": "301bea41f302a3707d517a792c0322dc28b3f057",
+      "pushed_and_github_verified": true,
+      "embedded_pi_commit": "472b57f694c557aeebfb80074bf81905b3502537",
+      "provenance": "Previously completed root/provider work and GitHub verification"
+    }
+  },
+  "validation": {
+    "web": {
+      "status": "passed_in_batches",
+      "distinct_test_files": 96,
+      "distinct_file_count_provenance": "Root aggregate review; not independently recounted by this drafting agent",
+      "latest_test_file_count": 5,
+      "latest_typecheck_exit_code": 0,
+      "latest_tests_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "latest_verified_commit": "7c0af204303efdba618345dc4b4f890e3f403c1b",
+      "latest_status": {
+        "path": "/tmp/lmm-retirement-upstream-web-01/status.json",
+        "status_sha256": "5d1f6383db23297ae9044ab243f0872550a666ed4c68049147c16ff178f8a22c",
+        "phase": "complete",
+        "passed": true,
+        "commit": "7c0af204303efdba618345dc4b4f890e3f403c1b",
+        "tree": "e2e63edbdf92efbea2654e3b28b9fc000cf340a5",
+        "started_at": 1794946989.8893228,
+        "finished_at": 1794947018.9018426,
+        "results": [
+          {
+            "name": "typecheck",
+            "exit_code": 0
+          },
+          {
+            "name": "test-0",
+            "exit_code": 0
+          },
+          {
+            "name": "test-1",
+            "exit_code": 0
+          },
+          {
+            "name": "test-2",
+            "exit_code": 0
+          },
+          {
+            "name": "test-3",
+            "exit_code": 0
+          },
+          {
+            "name": "test-4",
+            "exit_code": 0
+          }
+        ]
+      },
+      "production_build": {
+        "exit_code": 0,
+        "basis": "Verified build of 07d82c1 including policy serializer fix; all later apps/web changes are the five listed test files",
+        "not_rebuilt_for_every_test_only_commit": true,
+        "commit": "07d82c11b19c8d6ec627cdeb467062959fef3d7c",
+        "tree": "fb7daa25dc12c3698c9f1a3e5f0537835f024a80",
+        "web_tree": "1bd8b61c02cca3abd931e5ec75c7ace2008b6b0a",
+        "log": "/tmp/lmm-retirement-final-quick-01/web-build.log",
+        "seconds": 13.9,
+        "changes_since_build": [
+          "apps/web/src/components/auth-bootstrap-pending.test.tsx",
+          "apps/web/src/features/auth/sign-in/mobile-auth-presentation.test.ts",
+          "apps/web/src/features/keys/components/__tests__/auto-group-order-editor.test.tsx",
+          "apps/web/src/features/usage-logs/components/__tests__/group-filter.test.tsx",
+          "apps/web/src/features/wallet/index.test.tsx"
+        ],
+        "production_changes_since_build": []
+      },
+      "candidate_94b_web_subtree_unchanged": true,
+      "limitation": "Not a single complete-suite run on the final published commit",
+      "current_web_tree": "d2f8008d8ae818f6d3465b5b45eac60ccc19d6d5"
+    },
+    "go": {
+      "status": "affected_scope_passed_across_batches_with_skips",
+      "initial_run_status": "/tmp/lmm-retirement-go-merged-02/status.json",
+      "initial_validated_tree": "77278170bd598add6ae35592f4ed0b820c12b2f7",
+      "initial_extensions_tree": "7c764a286f561bbcc65ac4d30a8ff504e60a8123",
+      "initial_affected_packages_exit_code": 1,
+      "initial_passed_test_events": 1092,
+      "initial_skipped_test_events": 43,
+      "initial_failed_test": "TestAssistantWebRequiresSessionForReadsAndKeepsPresetsPublic",
+      "failed_test_reason": "Legacy preset assertion no longer matched backend-seed-v3; corrected test fixture/assertion",
+      "followup_package": "./internal/webcompat",
+      "followup_exit_code": 0,
+      "followup_status": {
+        "path": "/tmp/lmm-retirement-merged-regressions-01/status.json",
+        "status_sha256": "33b1d7acc5d20575a0218ab9c35a9f61eac23c4a07d776d0f00aee27e5a8c70e",
+        "phase": "complete",
+        "passed": false,
+        "commit": "286837bb6dbd22e796909abc737b8035894f5f18",
+        "tree": "076202dc8ec7302cd6ff96638738c4464135bb80",
+        "started_at": 1794945892.0170133,
+        "finished_at": 1794945927.0696406,
+        "results": [
+          {
+            "name": "web-capability-test",
+            "exit_code": 1
+          },
+          {
+            "name": "web-typecheck",
+            "exit_code": 0
+          },
+          {
+            "name": "go-webcompat",
+            "exit_code": 0
+          }
+        ]
+      },
+      "followup_log": {
+        "path": "/tmp/lmm-retirement-merged-regressions-01/go-webcompat.log",
+        "sha256": "0eaaaabc4f39699dfbea7a7d95b80dc5ee3e6c342a818a98172cc54bd05f0c15",
+        "safe_summary_lines": []
+      },
+      "do_not_treat_mixed_followup_status_as_all_passed": true,
+      "packages": [
+        "./cmd/extensions",
+        "./internal/app",
+        "./internal/freshinstall",
+        "./internal/composition",
+        "./internal/coreclient",
+        "./internal/modules/assistant/...",
+        "./internal/modules/assistant_services",
+        "./internal/modules/assistant_market",
+        "./internal/modules/community",
+        "./internal/modules/checkins",
+        "./internal/modules/herosms",
+        "./internal/webcompat"
+      ],
+      "counting_rule": "Preserve original pass/skip/failure events; do not add duplicate retest events into a unique total",
+      "limitation": "Some PG/external-fixture cases skipped in general package run; dedicated checkin PG test separately executed",
+      "final_extensions_tree": "dd2b9e5cfab62e782d74a4f0b9084a46e49d9590"
+    },
+    "checkin_postgresql": {
+      "status": "passed",
+      "test_name": "TestSettingsPostgresUpgradePersistenceAndConflicts",
+      "exit_code": 0,
+      "test_seconds": 0.16,
+      "package_seconds": 0.172,
+      "log": {
+        "path": "/tmp/lmm-retirement-go-merged-02/settings-persistence.log",
+        "sha256": "40741d3d87bbfcc4526c1b2fc7eaa5591e5b88e8fab5f32c1a34d64d5831e806",
+        "safe_summary_lines": [
+          "--- PASS: TestSettingsPostgresUpgradePersistenceAndConflicts (0.16s)",
+          "PASS",
+          "ok  \tgithub.com/TokenNotIncluded/lmm-api/extensions/internal/modules/checkins\t0.172s"
+        ]
+      },
+      "fixture_cleaned": true,
+      "coverage": [
+        "restricted owner/runtime roles",
+        "durable settings and restart readback",
+        "revision conflict",
+        "same-operation replay",
+        "Core daily cap",
+        "funding service outage preserves settings",
+        "new policy omits level_multipliers",
+        "legacy policy row remains unchanged",
+        "runtime cannot directly alter policy/history tables"
+      ],
+      "scope_note": "Actual settings PostgreSQL coverage; not relabeled as a fresh owner-CLI acceptance run"
+    },
+    "boundary": {
+      "status": "passed",
+      "test_count": 47,
+      "seconds": 24.887,
+      "log": {
+        "path": "/tmp/lmm-retirement-boundaries-02/test.log",
+        "sha256": "1c5b6582a23a16768ae2d6927f5df1bfa524c06e9fc557dadd2c23c4086357d6",
+        "safe_summary_lines": [
+          "Ran 47 tests in 24.887s",
+          "OK"
+        ]
+      },
+      "status_file": {
+        "path": "/tmp/lmm-retirement-boundaries-02/status.json",
+        "status_sha256": "70f9c4d51214097c04cec899e3cc5082f4861c6336f39170bbd05ae2474d68be",
+        "phase": "complete",
+        "started_at": 1794946712.3515084,
+        "results": []
+      },
+      "coverage": [
+        "owner/runtime separation",
+        "ACL and function restrictions",
+        "CAS and replay predicates",
+        "exact reviewed body seals",
+        "forbidden retired multiplier reintroduction",
+        "historical policy update/delete rejection"
+      ]
+    },
+    "core": {
+      "status": "passed_final_candidate",
+      "final_status_path": "/tmp/lmm-retirement-core-validation-merged-07/status.json",
+      "expected_commit": "94b5cf32b26ee8daa11d8453882f95a38dc959bc",
+      "expected_tree": "9adae55fdd9bc580d2325369295b698c13318b9b",
+      "expected_core_tree": "dcbff1c77b7750cc502b57a205739ce6f83455a8",
+      "planned_test_groups": 25,
+      "final_passed": true,
+      "final_unique_passed_tests": 156,
+      "final_failed_tests": 0,
+      "final_finished_at_utc": "2026-11-17T20:39:06.955426+00:00",
+      "prior_core06": {
+        "source_tree": "77278170bd598add6ae35592f4ed0b820c12b2f7",
+        "compile_selected_exit_code": 0,
+        "recorded_passed_test_events": 154,
+        "failed_group_count": 1,
+        "failed_group": "identity-compat-fresh_browser_signup_can_use_default_models_and_respects_explicit_group_policy",
+        "failed_group_exit_code": 101,
+        "failed_test_count_not_parsed": true,
+        "do_not_report_zero_failed_tests_from_null_parser_fields": true,
+        "diagnosis": "Test used a 30-character password although existing production signup rule permits 8–20; only fixture changed",
+        "status_path": "/tmp/lmm-retirement-core-validation-merged-06/status.json",
+        "status_sha256": "9d45895d6f013040d86aea682746cfdd14283340b9612748b3101237416e5f68"
+      },
+      "separate_model_policy_check": {
+        "status": "passed",
+        "test_name": "model_ip_group_and_operator_revocation_are_enforced",
+        "passed_tests": 1,
+        "seconds": 2.92,
+        "log_path": "/tmp/lmm-retirement-identity-compat-fix-01/model-policy-live.log",
+        "provenance": "Root observed compiled-executable rerun on active private PG; no authorization logic modification"
+      },
+      "integration_targets": [
+        "identity_http",
+        "identity_native",
+        "first_owner",
+        "console_compat",
+        "identity_compat",
+        "network_access_options",
+        "user_network_access",
+        "hero_sms_settings"
+      ],
+      "scope_note": "Selected unit/bin/integration groups, not all-targets/full repository test claim",
+      "final_passed_test_events": 156,
+      "final_results": [
+        {
+          "name": "compile-selected-tests",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 417.22,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/compile-selected-tests.log"
+        },
+        {
+          "name": "checkin-config",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.23,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/checkin-config.log",
+          "passed": 5,
+          "failed": 0,
+          "log_sha256": "c9e226f255791a05cad66b74ac6b25029e7210f81f1c228b9f808bc4e23a4eb4"
+        },
+        {
+          "name": "checkin-challenge",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 8.13,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/checkin-challenge.log",
+          "passed": 4,
+          "failed": 0,
+          "log_sha256": "11c1436ddf6e12f93fb7d6beeaeb359c5791540690c30f0317df7bb0aa701e6d"
+        },
+        {
+          "name": "historical-pricing",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.02,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/historical-pricing.log",
+          "passed": 3,
+          "failed": 0,
+          "log_sha256": "909328ae75a80a3a497bc3d06af8ee44ca8b2b81df5eb95af2edd60dd8a818ee"
+        },
+        {
+          "name": "identity-grants",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 9.18,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-grants.log",
+          "passed": 17,
+          "failed": 0,
+          "log_sha256": "7807db87024cd135fc3aa589376b4dfe3681af3cb25cea8a842ea36e0276509a"
+        },
+        {
+          "name": "permissions",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.02,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/permissions.log",
+          "passed": 7,
+          "failed": 0,
+          "log_sha256": "ecec08fd1a1d59d3677d32a6c5794918572786b56db1f7ef81078689af727d89"
+        },
+        {
+          "name": "identity-routing",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 1.07,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-routing.log",
+          "passed": 3,
+          "failed": 0,
+          "log_sha256": "54a75f8303977d8fada9b96cc98a1a2b688335ebba916f83fe11e983f340d51b"
+        },
+        {
+          "name": "admin-users",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 16.96,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/admin-users.log",
+          "passed": 24,
+          "failed": 0,
+          "log_sha256": "a6bd528e349c1b05f27532030e554346d2ebc7cef25b71f3b90e2f83ed50431b"
+        },
+        {
+          "name": "identity-compat",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.02,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-compat.log",
+          "passed": 3,
+          "failed": 0,
+          "log_sha256": "684e930685e1ea84ee3534868f3fb1dec29147c6caec3277db3c24fbbf3630ee"
+        },
+        {
+          "name": "checkin-rewards",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 4.42,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/checkin-rewards.log",
+          "passed": 11,
+          "failed": 0,
+          "log_sha256": "e1e1108204a1b1eba9b99cd1d7669945ef480fec35dce36900c3994ab3a0cfd3"
+        },
+        {
+          "name": "removed-options-routes",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 1.02,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/removed-options-routes.log",
+          "passed": 3,
+          "failed": 0,
+          "log_sha256": "ab1a48713a8e3a652618b8ac3839914f6de74b3de690bbde1c710766c1c1f7ca"
+        },
+        {
+          "name": "write-io",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 7.03,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/write-io.log",
+          "passed": 6,
+          "failed": 0,
+          "log_sha256": "6041184ee3b940297e23b689c46737579f61785aa305e8158cd98c9a0dc56b50"
+        },
+        {
+          "name": "network-access",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 4.83,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/network-access.log",
+          "passed": 7,
+          "failed": 0,
+          "log_sha256": "3931dba3ffbd1fcfe522b933720cab9b2ee0dd9dcba1c16d3829eb27eb3af2b7"
+        },
+        {
+          "name": "edge-access",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.21,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/edge-access.log",
+          "passed": 10,
+          "failed": 0,
+          "log_sha256": "96561a831e7b963b9cb0d7052917977cb6be763d1b575577277344ba1e0bd6c1"
+        },
+        {
+          "name": "hero-sms",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.17,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/hero-sms.log",
+          "passed": 5,
+          "failed": 0,
+          "log_sha256": "d0909446ad63b8f9732a63af98ab2ca1b93da43f8d774eb3f7eb5c0027561c74"
+        },
+        {
+          "name": "retired-owner-commands",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.34,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/retired-owner-commands.log",
+          "passed": 1,
+          "failed": 0,
+          "log_sha256": "5a85d0190587ad7df2dad23e1e4b360a1140f6f8742d56e896a033be98d1a6aa"
+        },
+        {
+          "name": "identity_http",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 0.77,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity_http.log",
+          "passed": 2,
+          "failed": 0,
+          "log_sha256": "77ad061b6b763d4be0b9c3a696c8264b7124969f9f3c5167b3a2fc6083aaeb15"
+        },
+        {
+          "name": "identity_native",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 11.9,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity_native.log",
+          "passed": 13,
+          "failed": 0,
+          "log_sha256": "521e252e8e1548872c7f82060e528d2d56819640d82702bac9239be1d1e8d0fe"
+        },
+        {
+          "name": "first_owner",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 27.74,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/first_owner.log",
+          "passed": 7,
+          "failed": 0,
+          "log_sha256": "437f7b2a2b935ea5e8fee24a5ac7da07c3764c48d4a883d26aaf190666a14c2c"
+        },
+        {
+          "name": "console_compat",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 8.46,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/console_compat.log",
+          "passed": 16,
+          "failed": 0,
+          "log_sha256": "770388d27b2be635712706018b04b30ce97b5ac5b520405007365db7bd4e62c5"
+        },
+        {
+          "name": "network_access_options",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 2.81,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/network_access_options.log",
+          "passed": 2,
+          "failed": 0,
+          "log_sha256": "17278a456cf7c6976aadbab5bc61b03362a656fedaa4c18ad433f59dc5c413b4"
+        },
+        {
+          "name": "user_network_access",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 7.07,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/user_network_access.log",
+          "passed": 3,
+          "failed": 0,
+          "log_sha256": "f98e5ec0d822d35442c776a7d25c69c70a54cc3cd2f4d5fb29f16b82ab48ebf8"
+        },
+        {
+          "name": "hero_sms_settings",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 2.3,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/hero_sms_settings.log",
+          "passed": 1,
+          "failed": 0,
+          "log_sha256": "6c1d5461c5a89d517f7bb7d7f17825b280a69f6cbde17f1f0512863d2de177da"
+        },
+        {
+          "name": "identity-compat-key_access_does_not_require_service_level_or_client_activation",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 6.68,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-compat-key_access_does_not_require_service_level_or_client_activation.log",
+          "passed": 1,
+          "failed": 0,
+          "log_sha256": "2c082c90e8fe8abc4a937bf2751956761887f37ce92f7c5bb3a6dea85c1f364e"
+        },
+        {
+          "name": "identity-compat-fresh_browser_signup_can_use_default_models_and_respects_explicit_group_policy",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 2.17,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-compat-fresh_browser_signup_can_use_default_models_and_respects_explicit_group_policy.log",
+          "passed": 1,
+          "failed": 0,
+          "log_sha256": "25a1019c0f3a4fc54fcc72d1e5e62e0aac4455e893232372f19f99e63e95b971"
+        },
+        {
+          "name": "identity-compat-model_ip_group_and_operator_revocation_are_enforced",
+          "exit_code": 0,
+          "timed_out": false,
+          "seconds": 1.17,
+          "log": "/tmp/lmm-retirement-core-validation-merged-07/identity-compat-model_ip_group_and_operator_revocation_are_enforced.log",
+          "passed": 1,
+          "failed": 0,
+          "log_sha256": "bcbe1717e67ddb9b20d9763cc5e9797573b82f0a2c3922ca6c290f499dcac6a4"
+        }
+      ],
+      "final_status_sha256": "506a74c362fc8fd377163b1cb2be155e2b0e76c7a334c103ed2161429b90cfc8"
+    },
+    "pi": {
+      "status": "passed_in_recorded_scope",
+      "full_suite_before_loader_followup": 167,
+      "related_tests_after_loader_followup": 11,
+      "typecheck": "passed",
+      "package_check": "passed",
+      "actual_host_loading": "passed",
+      "host_version": "Pi 1.5.2",
+      "counting_rule": "Do not add 167 and 11 or call the latter a fresh full-suite run",
+      "provenance": "Root/provider completion record"
+    },
+    "dsh": {
+      "status": "passed_in_recorded_scope",
+      "test_count": 17,
+      "typecheck": "passed",
+      "build": "passed",
+      "package_check": "passed",
+      "provenance": "Root/provider completion record"
+    }
+  },
+  "preservation": {
+    "original_source_head": "0c28d059377d0e6bf032137e0d3f2e628122797d",
+    "original_source_index_sha256": "c83e088b53eea3907b805414f86fa3b4c38e675f31756093db5cd1526b12e89e",
+    "original_source_staged_tree": "949f94b2988a5f9350c1e73cd3b988cdf4971109",
+    "staged_path_count": 15,
+    "head_and_index_preserved_after_parent_docs_commit": true,
+    "other_uncommitted_work_retained": true,
+    "method": "Isolated merge/validation worktree; no forced reset, no force push, no overwrite of original drafts",
+    "dirty_original_checkout_not_equated_with_published_merge": "Original HEAD deliberately remains unchanged",
+    "provenance": "Root checks plus original preservation evidence",
+    "final_pin_preserved_original_head": "0c28d059377d0e6bf032137e0d3f2e628122797d",
+    "final_pin_preserved_original_index_sha256": "c83e088b53eea3907b805414f86fa3b4c38e675f31756093db5cd1526b12e89e",
+    "validated_worktree": "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/merge-source"
+  },
+  "retained_boundaries": [
+    "root/admin management roles",
+    "team and resource ownership",
+    "current sessions, account status and revocation",
+    "MFA and Passkey",
+    "abuse controls",
+    "network access policies",
+    "funding, balances and budgets",
+    "historical prices, receipts, audit data and frozen migrations",
+    "external LinuxDO identity-provider verification"
+  ],
+  "not_claimed": [
+    "automatic LMM/ssmcp bridge",
+    "new npm publication",
+    "production deployment by this task",
+    "full repository test-suite pass",
+    "complete browser/business/provider/production acceptance",
+    "fresh owner-CLI qualification inferred from settings PG test"
+  ],
+  "report_delivery": {
+    "report_filename": "lmm-architecture-retirement-2026-11-17.md",
+    "evidence_filename": "lmm-architecture-retirement-2026-11-17.evidence.json",
+    "github_report_path": "recipes/lmm-api/reports/lmm-architecture-retirement-2026-11-17.md",
+    "github_evidence_path": "recipes/lmm-api/reports/lmm-architecture-retirement-2026-11-17.evidence.json",
+    "google_drive_project_folder_id": "1He18ETftlN2MJjz9M4bkl92axKoSoluH",
+    "google_drive_folder_url": "https://drive.google.com/drive/folders/1He18ETftlN2MJjz9M4bkl92axKoSoluH"
+  },
+  "writing_review": {
+    "skill": "Research-Paper-Writing-Skills",
+    "outline": [
+      "three requested changes",
+      "preserved authorization/history boundaries",
+      "commits and recipe synchronization",
+      "validation scope with failures/skips",
+      "original-draft protection and finalization"
+    ],
+    "clarity": "ordinary user access is separate from administrator preview and actual management rights",
+    "claim_evidence_alignment": "Final Core candidate bound to exact commit and subtree; Web build bound to actual commit plus test-only diff; Go results retain batch failures and skips",
+    "unsupported_claims_removed": "No whole-suite, deployment, automatic integration or owner-CLI rerun claim",
+    "review_state": "finalized against successful Core verification and parent pin evidence"
+  },
+  "report_sha256": "490657592036c36520e0d0bc4f5ce6d903b4ec462a1beda0dc8991c45c3070fc",
+  "base_metadata_file": {
+    "path": "/workspace/scratch/7c57eb671578/final_delivery/base-metadata.json",
+    "sha256": "fddf28cf2d0883c2868bc3383f97c86e949f12ae7a2a8e8d2eb843eb4d82ef1f",
+    "provenance": "Root fresh native repository/provider inspection"
+  },
+  "cleanup": {
+    "phase": "complete",
+    "started_at": 1794948016.9478593,
+    "removed": [
+      "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/cargo-target",
+      "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/source",
+      "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/export-before-correction-01",
+      "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/final-validation.index"
+    ],
+    "kept_review_worktree": "/home/lightjunction/Documents/GITHUB/lmm-api/.lmm-retirement-validation-20261117-a4f633e1/merge-source",
+    "disk_free_before": 190666993664,
+    "private_database_stopped": true,
+    "disk_free_after": 198382538752,
+    "original_index_preserved": "c83e088b53eea3907b805414f86fa3b4c38e675f31756093db5cd1526b12e89e",
+    "finished_at": 1794948156.1278343
+  },
+  "subtree_validation_proof": {
+    "extensions_diff_after_retest": [],
+    "extensions_tree_at_retest": "dd2b9e5cfab62e782d74a4f0b9084a46e49d9590",
+    "boundary_diff_after_pass": []
+  }
+}
