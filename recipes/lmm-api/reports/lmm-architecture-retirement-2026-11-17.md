@@ -62,5 +62,5 @@ Go 的 43 个跳过事件涉及需要额外数据库或外部服务夹具的用�
 本轮临时编译缓存和过期验证副本已清理，独立测试数据库已停止，验收源码和结果摘要保留。已更新的是代码、包内版本与文档；本任务没有执行 npm 发布或生产部署。
 
 - GitHub 报告：[`lmm-architecture-retirement-2026-11-17.md`](https://github.com/TokenNotIncluded/lmm-api/blob/main/recipes/lmm-api/reports/lmm-architecture-retirement-2026-11-17.md)。
-- GitHub 验证摘要：[`lmm-architecture-retirement-2026-11-17.evidence.json`](https://github.com/TokenNotIncluded/lmm-api/blob/main/recipes/lmm-api/reports/lmm-architecture-retirement-2026-11-17.evidence.json)。
+- GitHub 验证摘要：[`lmm-architecture-retirement-2026-11-17.evidence.json`](https://github.com/TokenNotIncluded/lmm-api/blob/main/docs/evidence/lmm-architecture-retirement-2026-11-17.evidence.json)。
 - Google 云盘归档目录：[lmm-api](https://drive.google.com/drive/folders/1He18ETftlN2MJjz9M4bkl92axKoSoluH)。

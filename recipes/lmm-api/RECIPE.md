@@ -25,4 +25,6 @@ source = "../lmm-cli"
 
 此包只包含行为、契约和验收要求。第三方库、操作系统与外部服务不属于隐藏的配方依赖。
 
-本包源自 AGPL-3.0-or-later 许可的 LMM API，详见 SOURCE.md。
+本包源自 AGPL-3.0-or-later 许可的 LMM API，详见[来源记录](SOURCE.md)。
+
+[产品要求](PRODUCT_REQUIREMENTS.md) · [组件装配](BUILD_PROMPT.md) · [集成场景](ACCEPTANCE.md) · [最终验收条件](PRODUCTION_ACCEPTANCE.md)
