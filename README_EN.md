@@ -2,7 +2,9 @@
 
 [中文](README.md)
 
-LMM API provides a model gateway, access controls and usage billing for individuals and teams. This repository contains the Recipkg recipes. Application development takes place in [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source).
+**LMM API brings a tool marketplace, AI assistants, and team workspaces together.** Discover MCP tools, grant an assistant access, and set a budget for its calls. Team members share identity, permissions, and usage records.
+
+This repository contains the Recipkg recipes. Application development takes place in [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source).
 
 | Question | Where to look |
 | --- | --- |

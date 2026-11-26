@@ -2,7 +2,9 @@
 
 [English](README_EN.md)
 
-LMM API 为个人和团队提供统一的模型网关、权限管理和用量计费。本仓库维护 Recipkg 配方。应用开发在 [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source) 进行。
+**LMM API 把工具市场、AI 助手和团队工作区连接在一起。** 你可以在市场发现 MCP 工具，为助手授权，并设置调用预算。团队成员共用一套身份、权限和用量记录。
+
+本仓库维护 Recipkg 配方。应用开发在 [lmm-api-source](https://github.com/TokenNotIncluded/lmm-api-source) 进行。
 
 | 想查什么 | 入口 |
 | --- | --- |
