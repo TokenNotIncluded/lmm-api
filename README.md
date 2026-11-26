@@ -30,4 +30,6 @@ git submodule update --init --recursive -- generated/lmm-api-source
 cd generated/lmm-api-source
 ```
 
+OpenCode / Magpie 的 LMM OAuth 插件以 Git 子模块固定在 `generated/lmm-api-source/packages/opencode-lmm-auth`。该插件在 TokenNotIncluded 独立开源。 [插件源码与使用说明](https://github.com/TokenNotIncluded/opencode-lmm-auth)
+
 [来源](recipes/lmm-api/SOURCE.md) · [迁移记录](MIGRATION.md) · [AGPL-3.0-or-later](LICENSE) · [NOTICE](NOTICE) · [第三方归属](THIRD-PARTY-LICENSES.md)。保留 QuantumNous/new-api 及各贡献者署名。

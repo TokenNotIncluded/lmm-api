@@ -30,4 +30,6 @@ git submodule update --init --recursive -- generated/lmm-api-source
 cd generated/lmm-api-source
 ```
 
+The LMM OAuth plugin for OpenCode and Magpie is pinned as a Git submodule at `generated/lmm-api-source/packages/opencode-lmm-auth`. TokenNotIncluded maintains it in a public repository. [Plugin source and setup](https://github.com/TokenNotIncluded/opencode-lmm-auth)
+
 [Provenance](recipes/lmm-api/SOURCE.md) · [Migration history](MIGRATION.md) · [AGPL-3.0-or-later](LICENSE) · [NOTICE](NOTICE) · [Third-party attribution](THIRD-PARTY-LICENSES.md). Retain the credits for QuantumNous/new-api and all contributors.
