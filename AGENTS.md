@@ -8,10 +8,12 @@
 - 产品范围读 [PRODUCT_REQUIREMENTS.md](recipes/lmm-api/PRODUCT_REQUIREMENTS.md)，完成证据读 [PRODUCTION_ACCEPTANCE.md](recipes/lmm-api/PRODUCTION_ACCEPTANCE.md)。动态进度只维护源码仓库 [docs/progress.md](https://github.com/TokenNotIncluded/lmm-api-source/blob/main/docs/progress.md)，本仓库不复制状态列表或逐轮通过数。
 - 实现任务进入 `generated/lmm-api-source/`，先读其 `AGENTS.md` 和适用技能，再执行源码内命令。Core 身份、权限、资金和数据库边界不得因文档整理改变。
 - 源码自测并正常提交/推送后，再显式更新父 gitlink；用 `git ls-tree HEAD generated/lmm-api-source` 读取固定版本。CLI/providers 保持嵌套子模块归属，不提交不可达指针。
-- 保留并行改动；不 reset/clean/强推覆盖他人工作。`generated/` 只作源码子模块容器，不恢复平铺旧单体。
+- 所有已获授权的开发者在现有项目的同一个 `main` 上直接读写、提交和快进推送。协调者组织分工和验收。文件重叠时先约定修改顺序，保留他人改动，不新建分支、工作树或项目外的开发副本。
+- 在项目内约定的共享目录按任务记录目标、认领文件、基准 SHA、状态和交付 SHA。每位开发者单独回复或原子更新自己的记录。跨机器时先验证文件可见性。运行态记录须被 Git 忽略，且与安全规则、凭据及 `.git` 分开。`generated/` 只作源码子模块容器，不恢复平铺旧单体。
 
 ## 检查与证据
 
+编译、测试、类型检查和浏览器验收在云虚拟机或 GitHub 托管 runner 执行。用户开发机用于源码协作，保留用户桌面、直播和服务现场。
 配方文档修改运行 `recipkg check recipes/lmm-api`。依赖或归档结构改变时，再定向检查临时归档和生成提示词；记录工具缺失或失败，不把结构检查当应用构建。纯文档整理不启动数据库、浏览器、全量应用构建或生产流程。
 
 共享技能由 `.agents/skills/` 的 gitlink 固定；自定义技能的实现路径在源码仓库内读取。运行结果区分开发自测、独立业务验收、提交推送、发布与部署，保留失败、UNKNOWN 和未运行范围。生产读取按用户授权范围；写入、重启、部署、生产账号或真实付费调用须有相应明确授权，资金动作保留预览确认。
